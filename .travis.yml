@@ -1,0 +1,20 @@
+dist: trusty
+language: python
+python:
+  - "3.6-dev"
+  - "3.7-dev"
+  - "nightly"
+# command to install dependencies
+install:
+  - pip install -e .
+#  - pip install pytest-asyncio
+  - pip install pytest-cov
+  - pip install coveralls
+  - pip install pycodestyle
+#  - pip install Sphinx
+# command to run tests
+script:
+  - pytest --cov=bitcoinx
+  - pycodestyle bitcoinx/*.py
+#  - sh -c "cd docs && make html"
+after_success: coveralls
