@@ -1,4 +1,5 @@
 import pytest
+
 from bitcoinx.hashes import *
 
 cases = [
