@@ -24,11 +24,11 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Chain', 'Headers', 'MissingHeader', 'HeaderStorage',
+    'Chain', 'CheckPoint', 'Headers', 'MissingHeader', 'HeaderStorage',
 )
 
 import array
-import itertools
+from collections import namedtuple
 
 from bitcoinx.hashes import hash_to_hex_str
 from bitcoinx.packing import pack_le_uint32, unpack_le_uint32
@@ -38,13 +38,72 @@ from bitcoinx.util import map_file
 empty_header = bytes(80)
 
 
+# The prev_work of a checkpoint is the cumulative work prior to the checkpoint and does
+# not including the work of the checkpoint itself
+CheckPoint = namedtuple('CheckPoint', 'raw_header height prev_work')
+
+
 class MissingHeader(Exception):
     pass
 
 
+class Chain(object):
+    '''A dumb object representing a chain of headers back to the genesis block (implemented
+    through parent chains).
+
+    Public attributes:
+        height  the height of the chain
+        tip     the Header object of the chain tip
+        work    cumulative chain work to the tip
+    '''
+
+    def __init__(self, parent, common_height, work):
+        '''common_height is the greatest height common to the chain and its parent.'''
+        self._parent = parent
+        self._common_height = common_height
+        self._header_idxs = array.array('I')
+        self.work = work
+        self.tip = None
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint, coin):
+        chain = cls(None, -1, checkpoint.prev_work)
+        chain._header_idxs = array.array('I', range(checkpoint.height))
+        chain._add_header(coin.deserialized_header(checkpoint.raw_header, checkpoint.height),
+                          checkpoint.height)
+        return chain
+
+    def _header_idx(self, height):
+        if height >= 0:
+            index = height - self._common_height - 1
+            if index < 0:
+                return self._parent._header_idx(height)
+            try:
+                return self._header_idxs[index]
+            except IndexError:
+                pass
+        raise MissingHeader(f'no header at height {height}') from None
+
+    def _add_header(self, header, header_idx):
+        self.tip = header
+        self._header_idxs.append(header_idx)
+        self.work += header.work()
+
+    @property
+    def height(self):
+        return self._common_height + len(self._header_idxs)
+
+
 class HeaderStorage(object):
-    '''Implementation of a block header storage abstraction for flat
-    files.'''
+    '''Implementation a dumb raw header storage abstraction for flat files.
+
+    Headers are looked up by index.  Note that a header's index need not equal its height,
+    and usually will not.
+
+    If a header is read that has not been set, MissingHeader is raised.
+
+    There are no requirements on headers other than being 80 bytes and not zeroed out.
+    '''
 
     def __init__(self, file_name):
         '''Open header storage file file_name.  It must exist and have been initialised.'''
@@ -119,15 +178,32 @@ class HeaderStorage(object):
 
 
 class Headers(object):
-    '''A collection of block headers arranged into chains.  A header
-    belongs to a unique chain.
+    '''A collection of block headers, including a checkpoint header, arranged into chains.
+    Each header header belongs to precisely one chain.  Each chain has a parent chain
+    which it forked from, except one chain whose parent is None.
 
-    Adding a header appendeds it to the tip of an existing chain or
-    creates a new chain if it forms a branch.
+    Headers before the checkpoint can be set and no validation is performed; the caller is
+    presumed to have done any necessary validation.  Headers after the checkpoint must be
+    added; this looks up the previous header and raises MissingHeader if it cannot be
+    found.  If the previous header is the tip of a chain the new header extends that chain
+    and replaces its tip, otherwise a new chain is created with the header as its tip.
+
+    Chains can only fork after the checkpoint header.  Headers before the checkpoint may
+    be missing (i.e., the chain may have holes) and attempts to retrieve them raise a
+    MissingHeader exception.  After the checkpoint all headers in a chain exist by
+    construction.
+
+    Headers can be looked up by height on a given chain.  They can be looked up by hash in
+    which case the header and its chain are returned as a pair.
+
+    Deserialized "Header" objects that are returnd always have their hash and height set
+    in addition to the standard header attributes such as nonce and timestamp.
     '''
 
-    def __init__(self, coin, storage):
+    def __init__(self, coin, storage, checkpoint):
+        '''The storage must have been initialized and have the checkpoint header saved.'''
         self.coin = coin
+        self._checkpoint = checkpoint
         self._storage = storage
         self._chains = []
         self._short_hashes = bytearray()
@@ -135,19 +211,20 @@ class Headers(object):
         self._chain_indices = array.array('H')
         self._cache = {}
 
-        # Add the genesis header
-        chain = Chain(None, -1, 0)
+        assert storage[checkpoint.height] == checkpoint.raw_header
+        # Create the base chain out to the checkpoint
+        self._add_chain(Chain.from_checkpoint(coin, checkpoint))
+
+    def _add_chain(self, chain):
+        chain.index = len(self._chains)
         self._chains.append(chain)
-        header = coin.deserialized_header(coin.genesis_header)
-        header.height = 0
-        self._add_header(chain, header)
 
     def _add_header(self, chain, header):
         header_idx = self._storage.add_header(header.raw)
         chain._add_header(header, header_idx)
         self._short_hashes.extend(header.hash[:4])
         self._heights.append(header.height)
-        self._chain_indices.append(chain._index)
+        self._chain_indices.append(chain.index)
         # Add to cache; prevent it getting too big
         cache = self._cache
         cache[header.hash] = header, chain
@@ -169,9 +246,16 @@ class Headers(object):
                 if self.coin.header_hash(raw_header) == header_hash:
                     return raw_header, header_idx
             if index == -1:
-                raise MissingHeader(f'no header with hash '
-                                    f'{hash_to_hex_str(header_hash)}')
+                raise MissingHeader(f'no header with hash {hash_to_hex_str(header_hash)}')
             start += 1
+
+    def set_header(self, height, raw_header):
+        '''Set the raw header for a height before the checkpoint.
+
+        The caller is responsible for the validity of the raw header.'''
+        if not 0 <= height <= self._checkpoint.height:
+            raise ValueError(f'cannot set header at height {height:,d}')
+        self._storage[height] = raw_header
 
     def add_raw_headers(self, raw_headers):
         '''Add an iterable of raw headers to the chains.'''
@@ -180,7 +264,8 @@ class Headers(object):
         add_header = self._add_header
 
         for raw_header in raw_headers:
-            header = deserialized_header(raw_header)
+            # Height is set below
+            header = deserialized_header(raw_header, -1)
             prev_header, chain = lookup_header_and_chain(header.prev_hash)
             if chain.tip.hash != prev_header.hash:
                 # Ignore headers we already have
@@ -189,14 +274,14 @@ class Headers(object):
                     continue
                 except MissingHeader:
                     pass
-                prev_work = self.chainwork_to_height(chain,
-                                                     prev_header.height)
+                prev_work = self.chainwork_to_height(chain, prev_header.height)
                 chain = Chain(chain, prev_header.height, prev_work)
-                self._chains.append(chain)
+                self._add_chain(chain)
             header.height = prev_header.height + 1
             add_header(chain, header)
 
     def chainwork_to_height(self, chain, height):
+        '''Returns the chainwork to and including height on a chain.'''
         raw_header = self._storage.raw_header
         get_header_idx = chain._header_idx
         header_work = self.coin.header_work
@@ -213,50 +298,9 @@ class Headers(object):
         if result:
             return result
         raw_header, header_idx = self._header_idx_slow(header_hash)
-        header = self.coin.deserialized_header(raw_header)
-        header.height = self._heights[header_idx]
+        header = self.coin.deserialized_header(raw_header, self._heights[header_idx])
         chain_index = self._chain_indices[header_idx]
         return header, self._chains[chain_index]
 
     def chains(self):
         return self._chains
-
-
-class Chain(object):
-    '''Represents a header chain back to the genesis block.
-
-    Public attributes:
-        height  the height of the chain
-        tip     the Header object of the chain tip
-        work    cumulative chain work
-    '''
-
-    counter = itertools.count()
-
-    def __init__(self, parent, max_common_height, work):
-        self._parent = parent
-        self._max_common_height = max_common_height
-        self._header_idxs = array.array('I')
-        self._index = next(Chain.counter)
-        self.work = work
-        self.tip = None
-
-    def _header_idx(self, height):
-        if height >= 0:
-            index = height - self._max_common_height - 1
-            if index < 0:
-                return self._parent._header_idx(height)
-            try:
-                return self._header_idxs[index]
-            except IndexError:
-                pass
-        raise MissingHeader(f'no header at height {height}') from None
-
-    def _add_header(self, header, header_idx):
-        self.tip = header
-        self._header_idxs.append(header_idx)
-        self.work += header.work()
-
-    @property
-    def height(self):
-        return self._max_common_height + len(self._header_idxs)
