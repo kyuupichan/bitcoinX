@@ -1,4 +1,4 @@
-from os import urandom
+from os import urandom, path
 import random
 
 import pytest
@@ -8,6 +8,7 @@ from bitcoinx.chain import *
 
 
 good_bits = [486604799, 472518933, 453281356, 436956491]
+empty_header = bytes(80)
 
 
 def test_Chain():
@@ -61,3 +62,103 @@ def test_Chain():
     for n in -1, 2 * N:
         with pytest.raises(MissingHeader):
             base._header_idx(n)
+
+
+class TestHeaderStorage(object):
+
+    def create_new(self, tmpdir):
+        return HeaderStorage.create_new(path.join(tmpdir, 'hs'))
+
+    def test_nonexistent_file(self, tmpdir):
+        with pytest.raises(FileNotFoundError):
+            HeaderStorage(path.join(tmpdir, 'no_such_file'))
+
+    def test_create_new(self, tmpdir):
+        hs = self.create_new(tmpdir)
+        assert len(hs) == 0
+        with pytest.raises(MissingHeader):
+            hs[0]
+
+    def test_open_or_create(self, tmpdir):
+        file_name = path.join(tmpdir, 'hs')
+        hs = HeaderStorage.open_or_create(file_name)
+        assert len(hs) == 0
+        raw_header = urandom(80)
+        hs[1] = raw_header
+        assert len(hs) == 2
+        hs.close()
+        hs = HeaderStorage.open_or_create(file_name)
+        assert len(hs) == 2
+        assert hs[1] == raw_header
+        with pytest.raises(MissingHeader):
+            hs[0]
+
+    def test_bad_indices(self, tmpdir):
+        hs = self.create_new(tmpdir)
+        with pytest.raises(TypeError):
+            hs['a']
+        with pytest.raises(TypeError):
+            hs[1:2]
+        with pytest.raises(TypeError):
+            hs['a'] = empty_header
+        with pytest.raises(TypeError):
+            hs[1:2] = empty_header
+
+    def test_bad_header(self, tmpdir):
+        hs = self.create_new(tmpdir)
+        with pytest.raises(ValueError):
+            hs[1] = bytes(85)
+        with pytest.raises(TypeError):
+            hs[1] = 'f' * 80
+
+    def test_append(self, tmpdir):
+        hs = self.create_new(tmpdir)
+        raw_header = urandom(80)
+        hs.append(raw_header)
+        assert len(hs) == 1
+        assert hs[0] == raw_header
+        assert hs.raw_header(0) == raw_header
+        with pytest.raises(MissingHeader):
+            hs[1]
+
+    def test_create_hole(self, tmpdir):
+        N = random.randrange(20, 40)
+        hs = self.create_new(tmpdir)
+        raw_header = urandom(80)
+        hs[N] = raw_header
+        assert len(hs) == N + 1
+        assert hs[N] == raw_header
+        for idx in range(N):
+            with pytest.raises(MissingHeader):
+                hs[idx]
+        with pytest.raises(MissingHeader):
+            hs[N + 1]
+        M = random.randrange(0, N)
+        hs[M] = raw_header2 = urandom(80)
+        for idx in range(N):
+            if idx == M:
+                assert hs[idx] == raw_header2
+            else:
+                with pytest.raises(MissingHeader):
+                    hs[idx]
+
+    def test_flush(self, tmpdir):
+        # flush is likely needed on some OSes and not others.  It doesn't appear to be
+        # needed on a Mac.
+        hs = self.create_new(tmpdir)
+        raw_header = urandom(80)
+        hs[1] = raw_header
+        hs.flush()
+        with open(hs.file_name, 'rb') as f:
+            assert f.read(4) == bytes([2, 0, 0, 0])
+
+
+    def test_close(self, tmpdir):
+        hs = self.create_new(tmpdir)
+        raw_header = urandom(80)
+        hs[1] = raw_header
+        hs.close()
+        with pytest.raises(ValueError):
+            hs[1]
+        with open(hs.file_name, 'rb') as f:
+            assert f.read(4) == bytes([2, 0, 0, 0])

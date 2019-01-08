@@ -35,6 +35,9 @@ from bitcoinx.packing import pack_le_uint32, unpack_le_uint32
 from bitcoinx.util import map_file
 
 
+empty_header = bytes(80)
+
+
 class MissingHeader(Exception):
     pass
 
@@ -44,23 +47,68 @@ class HeaderStorage(object):
     files.'''
 
     def __init__(self, file_name):
+        '''Open header storage file file_name.  It must exist and have been initialised.'''
         self.file_name = file_name
         self.mmap = map_file(file_name)
 
+    def _grow(self, size):
+        mmap = self.mmap
+        start = 4 + size * 80
+        if start >= len(mmap):
+            self.mmap.close()
+            self.mmap = mmap = map_file(self.file_name, 4 + (size + 50_000) * 80)
+        if size >= len(self):
+            mmap[:4] = pack_le_uint32(size + 1)
+        return mmap, start
+
+    def _set_raw_header(self, header_idx, raw_header):
+        # header_idx is assumed checked
+        if not isinstance(raw_header, bytes):
+            raise TypeError('raw header must be of type bytes')
+        if len(raw_header) != 80:
+            raise ValueError('raw header must be of length 80')
+        mmap, start = self._grow(header_idx)
+        mmap[start: start + 80] = raw_header
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self.raw_header(key)
+        else:
+            raise TypeError(f'key {key} should be an integer')
+
+    def __setitem__(self, key, value):
+        if isinstance(key, int):
+            self._set_raw_header(key, value)
+        else:
+            raise TypeError(f'key {key} should be an integer')
+
+    def __len__(self):
+        count, = unpack_le_uint32(self.mmap[:4])
+        return count
+
+    @classmethod
+    def create_new(cls, file_name):
+        with open(file_name, 'wb') as f:
+            f.write(bytes(4))
+        return cls(file_name)
+
+    @classmethod
+    def open_or_create(cls, file_name):
+        try:
+            return cls(file_name)
+        except FileNotFoundError:
+            return cls.create_new(file_name)
+
     def raw_header(self, header_idx):
         start = 4 + header_idx * 80
-        return self.mmap[start: start + 80]
+        header = self.mmap[start: start + 80]
+        if not header or header == empty_header:
+            raise MissingHeader(f'no header at index {header_idx}')
+        return header
 
-    def add_header(self, raw_header):
-        mmap = self.mmap
-        header_idx, = unpack_le_uint32(mmap[:4])
-        start = 4 + header_idx * 80
-        if start >= len(mmap):
-            new_size = len(mmap) + 80 * 50_000
-            mmap.close()
-            self.mmap = mmap = _map(self.file_name, new_size)
-        mmap[start: start + 80] = raw_header
-        mmap[:4] = pack_le_uint32(header_idx + 1)
+    def append(self, raw_header):
+        header_idx = len(self)
+        self._set_raw_header(header_idx, raw_header)
         return header_idx
 
     def close(self):
