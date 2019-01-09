@@ -59,10 +59,9 @@ class Coin(object):
     def __init__(self, genesis_header):
         self.genesis_header = genesis_header
 
-    def deserialized_header(self, raw):
-        '''Returns a deserialized header object.  The height attribute
-        of the header should be set by the caller if needed.'''
-        return Header(*unpack_header(raw), self.header_hash(raw), raw, -1)
+    def deserialized_header(self, raw, height):
+        '''Returns a deserialized header object.'''
+        return Header(*unpack_header(raw), self.header_hash(raw), raw, height)
 
     def header_hash(self, raw_header):
         return double_sha256(raw_header)
