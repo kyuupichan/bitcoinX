@@ -24,7 +24,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Bitcoin', 'Coin', 'Header'
+    'Bitcoin', 'BitcoinTestnet', 'Coin', 'Header'
 )
 
 import struct
