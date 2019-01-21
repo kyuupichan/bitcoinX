@@ -30,6 +30,7 @@ __all__ = (
 import array
 from collections import namedtuple
 import logging
+import math
 from struct import Struct
 
 from bitcoinx.hashes import hash_to_hex_str
@@ -96,6 +97,12 @@ class Chain(object):
         elif height >= 0:
             return height
         raise MissingHeader(f'no header at height {height}')
+
+    def log2_work(self, dps=8):
+        result = math.log(self.work, 2)
+        if dps is not None:
+            result = round(result, dps)
+        return result
 
     @property
     def height(self):
