@@ -27,6 +27,7 @@
 
 import mmap
 
+
 def map_file(file_name, new_size=None):
     '''Map an existing file into memory.  If new_size is specified the
     file is truncated or extended to that size.
