@@ -1,9 +1,12 @@
-dist: trusty
 language: python
 python:
   - "3.6-dev"
   - "3.7-dev"
   - "nightly"
+os:
+  - linux
+#  - windows
+#  - osx
 # command to install dependencies
 install:
   - pip install -e .
