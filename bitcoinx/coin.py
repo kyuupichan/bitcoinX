@@ -24,7 +24,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Bitcoin', 'Coin', 'Header'
+    'Bitcoin', 'BitcoinTestnet', 'Coin', 'Header'
 )
 
 import struct
@@ -56,13 +56,13 @@ class Header(object):
 
 class Coin(object):
 
-    def __init__(self, genesis_header):
+    def __init__(self, name, genesis_header):
+        self.name = name
         self.genesis_header = genesis_header
 
-    def deserialized_header(self, raw):
-        '''Returns a deserialized header object.  The height attribute
-        of the header should be set by the caller if needed.'''
-        return Header(*unpack_header(raw), self.header_hash(raw), raw, -1)
+    def deserialized_header(self, raw, height):
+        '''Returns a deserialized header object.'''
+        return Header(*unpack_header(raw), self.header_hash(raw), raw, height)
 
     def header_hash(self, raw_header):
         return double_sha256(raw_header)
@@ -76,6 +76,16 @@ class Coin(object):
 
 
 Bitcoin = Coin(
+    'Bitcoin mainnet',
+    b'\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    b'\x00\x00\x00\x00;\xa3\xed\xfdz{\x12\xb2z\xc7,>gv\x8fa\x7f\xc8\x1b'
+    b'\xc3\x88\x8aQ2:\x9f\xb8\xaaK\x1e^J)\xab_I\xff\xff\x00\x1d\x1d\xac+|'
+)
+
+
+BitcoinTestnet = Coin(
+    'Bitcoin testnet',
     b'\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
     b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
     b'\x00\x00\x00\x00;\xa3\xed\xfdz{\x12\xb2z\xc7,>gv\x8fa\x7f\xc8\x1b'
