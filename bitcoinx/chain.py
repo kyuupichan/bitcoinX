@@ -381,3 +381,10 @@ class Headers(object):
 
     def chain_count(self):
         return len(self._chains)
+
+    def longest_chain(self):
+        longest = self._chains[0]
+        for chain in self._chains:
+            if chain.work > longest.work:
+                longest = chain
+        return longest
