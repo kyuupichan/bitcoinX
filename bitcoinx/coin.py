@@ -27,8 +27,6 @@ __all__ = (
     'Bitcoin', 'BitcoinTestnet', 'Coin', 'Header'
 )
 
-import struct
-
 import attr
 
 from bitcoinx.hashes import double_sha256
