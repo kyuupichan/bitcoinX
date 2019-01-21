@@ -43,7 +43,7 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
     assert Bitcoin.header_prev_hash(raw_header) == prev_hash
     assert Bitcoin.header_work(raw_header) == bits_to_work(bits)
 
-    header = Bitcoin.deserialized_header(raw_header)
+    header = Bitcoin.deserialized_header(raw_header, -1)
     assert header.version == version
     assert header.prev_hash == prev_hash
     assert header.merkle_root == merkle_root
