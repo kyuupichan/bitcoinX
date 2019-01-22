@@ -60,6 +60,7 @@ class Chain(object):
     through parent chains).
 
     Public attributes:
+        parent  the parent chain this one forks from, can be None
         height  the height of the chain
         tip     the Header object of the chain tip
         work    cumulative chain work to the tip
@@ -67,12 +68,12 @@ class Chain(object):
 
     def __init__(self, parent, tip, tip_header_index, prev_work):
         '''common_height is the greatest height common to the chain and its parent.'''
-        self._parent = parent
+        self.parent = parent
+        self.tip = tip
+        self.work = prev_work + tip.work()
         self._header_indices = array.array('I')
         self._header_indices.append(tip_header_index)
         self._first_height = tip.height
-        self.tip = tip
-        self.work = prev_work + tip.work()
 
     @classmethod
     def from_checkpoint(cls, checkpoint, coin):
@@ -92,8 +93,8 @@ class Chain(object):
                 return self._header_indices[height - self._first_height]
             except IndexError:
                 pass
-        elif self._parent:
-            return self._parent.header_index(height)
+        elif self.parent:
+            return self.parent.header_index(height)
         elif height >= 0:
             return height
         raise MissingHeader(f'no header at height {height}')
