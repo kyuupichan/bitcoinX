@@ -101,6 +101,7 @@ class TestChain(object):
                 fork.append(header, index)
 
         # Test public attributes
+        assert fork.parent is base
         assert fork.height == common_height + N
         assert fork.work == work + sum(header.work() for header in headers[N:])
         assert fork.tip == headers[-1]
@@ -121,7 +122,7 @@ class TestChain(object):
         assert chain.height == bsv_checkpoint.height
         assert chain.tip == header
         assert chain.work == bsv_checkpoint.prev_work + header.work() == 0xd54c9a84f54e93d3d87015
-        assert chain._parent == None
+        assert chain.parent == None
         assert chain._header_indices[-1] == bsv_checkpoint.height
 
 
