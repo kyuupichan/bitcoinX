@@ -4,8 +4,8 @@ from .hashes import *
 from .packing import *
 from .work import *
 
-_version = (0, 0, 1)
-_version_str = '.'.join(str(part) for part in _version)
+_version_str = '0.0.2'
+_version = tuple(int(part) for part in _version_str.split('.'))
 
 __all__ = sum((
     chain.__all__,
