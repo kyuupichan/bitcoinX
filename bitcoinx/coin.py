@@ -29,9 +29,11 @@ __all__ = (
 
 import attr
 
-from bitcoinx.hashes import double_sha256
+from bitcoinx.hashes import double_sha256, hash_to_hex_str
 from bitcoinx.packing import unpack_header, unpack_le_uint32
-from bitcoinx.work import bits_to_work
+from bitcoinx.work import (
+    bits_to_work, bits_to_target, required_bits_mainnet, required_bits_testnet
+)
 
 
 @attr.s(slots=True)
@@ -51,12 +53,22 @@ class Header(object):
     def work(self):
         return bits_to_work(self.bits)
 
+    def __str__(self):
+        return (f'Header(version={self.version}, prev_hash="{hash_to_hex_str(self.prev_hash)}", '
+                f'merkle_root="{hash_to_hex_str(self.merkle_root)}", timestamp={self.timestamp}, '
+                f'bits={self.bits}, nonce={self.nonce}, hash="{hash_to_hex_str(self.hash)}" '
+                f'height={self.height})')
+
 
 class Coin(object):
 
-    def __init__(self, name, genesis_header):
+    def __init__(self, name, genesis_header, required_bits):
         self.name = name
-        self.genesis_header = genesis_header
+        self.genesis_header = bytes.fromhex(genesis_header)
+        self.genesis_bits = self.header_bits(self.genesis_header)
+        self.max_target = bits_to_target(self.genesis_bits)
+        # Signature:  def required_bits(self, headers, chain, height, timestamp=None)
+        self.required_bits = required_bits
 
     def deserialized_header(self, raw, height):
         '''Returns a deserialized header object.'''
@@ -68,24 +80,29 @@ class Coin(object):
     def header_prev_hash(self, raw_header):
         return raw_header[4:36]
 
-    def header_work(self, raw_header):
+    def header_timestamp(self, raw_header):
+        timestamp, = unpack_le_uint32(raw_header[68:72])
+        return timestamp
+
+    def header_bits(self, raw_header):
         bits, = unpack_le_uint32(raw_header[72:76])
-        return bits_to_work(bits)
+        return bits
+
+    def header_work(self, raw_header):
+        return bits_to_work(self.header_bits(raw_header))
 
 
 Bitcoin = Coin(
     'Bitcoin mainnet',
-    b'\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-    b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-    b'\x00\x00\x00\x00;\xa3\xed\xfdz{\x12\xb2z\xc7,>gv\x8fa\x7f\xc8\x1b'
-    b'\xc3\x88\x8aQ2:\x9f\xb8\xaaK\x1e^J)\xab_I\xff\xff\x00\x1d\x1d\xac+|'
+    '0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd'
+    '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c',
+    required_bits_mainnet,
 )
 
 
 BitcoinTestnet = Coin(
     'Bitcoin testnet',
-    b'\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-    b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-    b'\x00\x00\x00\x00;\xa3\xed\xfdz{\x12\xb2z\xc7,>gv\x8fa\x7f\xc8\x1b'
-    b'\xc3\x88\x8aQ2:\x9f\xb8\xaaK\x1e^J)\xab_I\xff\xff\x00\x1d\x1d\xac+|'
+    '0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd'
+    '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
+    required_bits_testnet,
 )
