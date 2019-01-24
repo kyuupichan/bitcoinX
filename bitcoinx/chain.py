@@ -253,12 +253,6 @@ class HeaderStorage(object):
         self._set_raw_header(header_index, raw_header)
         return header_index
 
-    def pop_last(self):
-        new_count = len(self) - 1
-        self._set_count(new_count)
-        offset = self._offset(new_count)
-        self.mmap[offset: offset + 80] = empty_header
-
     def close(self):
         self.mmap.close()
 
@@ -358,17 +352,13 @@ class Headers(object):
             self._add_chain(chain)
         return chain
 
-    # FIXME: remove this and pop_last()
-    def add_raw_header(self, raw_header):
+    # FIXME: remove this; it's only used to set up tests
+    def _add_raw_header(self, raw_header):
         '''Add a single header to storage if it connects, either to extend an existing chain or
         create a new one.  Return the chain the header lies on.
         '''
         header_index = self.storage.append(raw_header)
-        try:
-            return self._read_header(header_index)
-        except MissingHeader:
-            self.storage.pop_last()
-            raise
+        return self._read_header(header_index)
 
     def set_one(self, height, raw_header):
         '''Set the raw header for a height before the checkpoint.

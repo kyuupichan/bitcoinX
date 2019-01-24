@@ -50,7 +50,7 @@ def create_chain(headers_obj, count, prior=None):
     for n in range(count):
         new_header = random_header(prior.hash, orig_prior.height + n + 1)
         new_headers.append(new_header)
-        chain = headers_obj.add_raw_header(new_header.raw)
+        chain = headers_obj._add_raw_header(new_header.raw)
         prior = new_header
 
     assert len(headers_obj) == prior_len + count
@@ -219,17 +219,6 @@ class TestHeaderStorage(object):
             hs[N + 1]
         assert hs[bsv_checkpoint.height] == bsv_checkpoint.raw_header
 
-    def test_pop_last(self, tmpdir):
-        hs = create_or_open_storage(tmpdir, bsv_checkpoint)
-        assert len(hs) == bsv_checkpoint.height + 1
-        hs.append(urandom(80))
-        assert len(hs) == bsv_checkpoint.height + 2
-        hs[bsv_checkpoint.height + 1]
-        hs.pop_last()
-        assert len(hs) == bsv_checkpoint.height + 1
-        with pytest.raises(MissingHeader):
-            hs[bsv_checkpoint.height + 1]
-
     def test_flush(self, tmpdir):
         # flush is likely needed on some OSes and not others.  It doesn't appear to be
         # needed on a Mac.
@@ -343,7 +332,7 @@ class TestHeaders(object):
         prior_len = len(headers_obj)
         new_header = random_header()
         with pytest.raises(MissingHeader):
-            headers_obj.add_raw_header(new_header.raw)
+            headers_obj.connect(new_header.raw)
         assert len(headers_obj) == prior_len
 
     def test_create_two_chains_and_reload(self, tmpdir):
