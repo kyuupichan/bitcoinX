@@ -349,15 +349,17 @@ class Headers(object):
         The caller is responsible for the validity of the raw header.'''
         self.storage[height] = raw_header
 
-    def chainwork_to_height(self, chain, height):
-        '''Returns the chainwork to and including height on a chain.'''
+    def chainwork_range(self, chain, start_height, end_height):
+        '''Returns the chainwork for the half-open range [start_height, end_height).'''
         raw_header = self.storage.__getitem__
         get_header_index = chain.header_index
         header_work = self.coin.header_work
+        return sum(header_work(raw_header(get_header_index(h)))
+                   for h in range(start_height, end_height))
 
-        later_work = sum(header_work(raw_header(get_header_index(h)))
-                         for h in range(height + 1, chain.tip.height + 1))
-        return chain.work - later_work
+    def chainwork_to_height(self, chain, height):
+        '''Returns the chainwork to and including height on a chain.'''
+        return chain.work - self.chainwork_range(chain, height + 1, chain.tip.height + 1)
 
     def raw_header_at_height(self, chain, height):
         return self.storage[chain.header_index(height)]
@@ -389,3 +391,16 @@ class Headers(object):
             if chain.work > longest.work:
                 longest = chain
         return longest
+
+    def median_time_past(self, chain, height):
+        '''Returns the median time past on chain at height.'''
+        raw_header = self.raw_header_at_height
+        timestamp = self.coin.header_timestamp
+        timestamps = [timestamp(raw_header(chain, h))
+                      for h in range(height, max(-1, height - 11), -1)]
+        return sorted(timestamps)[len(timestamps) // 2]
+
+    def required_bits(self, chain, height, timetsamp=None):
+        '''Returns the required bits for a new header at the given height with the
+        given timestamp.  Testnet uses the timestamp; mainnet does not.'''
+        return self.coin.required_bits(chain, height, timestamp)

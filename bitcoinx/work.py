@@ -1,4 +1,4 @@
-# Copyright (c) 2018, Neil Booth
+# Copyright (c) 2018, 2019 Neil Booth
 #
 # All rights reserved.
 #
@@ -75,3 +75,107 @@ def target_to_bits(target):
 @lru_cache()
 def bits_to_work(bits):
     return (1 << 256) // (bits_to_target(bits) + 1)
+
+
+def _required_bits_fortnightly(headers, chain, height):
+    '''Bitcoin's original DAA.'''
+    if height == 0:
+        return headers.coin.genesis_bits
+    prev = headers.header_at_height(chain, height - 1)
+    if height % 2016:
+        return prev.bits
+    prior = headers.header_at_height(chain, height - 2016)
+
+    # Off-by-one with prev.timestamp.  Constrain the actual time.
+    period = prev.timestamp - prior.timestamp
+    target_period = 2016 * 600
+    adj_period = min(max(period, target_period // 4), target_period * 4)
+
+    prior_target = bits_to_target(prev.bits)
+    new_target = (prior_target * adj_period) // target_period
+    return target_to_bits(min(new_target, headers.coin.max_target))
+
+
+def _required_bits_DAA(headers, chain, height):
+    '''BCH's shoddy difficulty adjustment algorithm.  He was warned, he shrugged.'''
+    def median_prior_header(ref_height):
+        '''Select the median of the 3 prior headers, for a curious definition of median.'''
+        def maybe_swap(m, n):
+            if prev3[m].timestamp > prev3[n].timestamp:
+                prev3[m], prev3[n] = prev3[n], prev3[m]
+
+        prev3 = [header_at_height(chain, h) for h in range(ref_height - 3, ref_height)]
+        maybe_swap(0, 2)
+        maybe_swap(0, 1)
+        maybe_swap(1, 2)
+        return prev3[1]
+
+    header_at_height = headers.header_at_height
+    start = median_prior_header(height - 144)
+    end = median_prior_header(height)
+
+    period_work = headers.chainwork_range(chain, start.height + 1, end.height + 1)
+    period_time = min(max(end.timestamp - start.timestamp, 43200), 172800)
+
+    Wn = (period_work * 600) // period_time
+    new_target = (1 << 256) // Wn - 1
+    return target_to_bits(min(new_target, headers.coin.max_target))
+
+
+def _required_bits_EDA(headers, chain, height):
+    '''The less said the better.'''
+    bits = _required_bits_fortnightly(headers, chain, height)
+    if height % 2016 == 0:
+        return bits
+
+    mtp_diff = (headers.median_time_past(chain, height - 1) -
+                headers.median_time_past(chain, height - 7))
+    if mtp_diff < 12 * 3600:
+        return bits
+
+    # Increase target by 25% (reducing difficulty by 20%).
+    new_target = bits_to_target(bits)
+    new_target += new_target >> 2
+    return target_to_bits(min(new_target, headers.coin.max_target))
+
+
+def required_bits_mainnet(headers, chain, height, _timestamp=None):
+    # Unlike testnet, required_bits is not a function of the timestamp
+    if height < 478558:
+        return _required_bits_fortnightly(headers, chain, height)
+    elif height <= 504031:
+        return _required_bits_EDA(headers, chain, height)
+    else:
+        return _required_bits_DAA(headers, chain, height)
+
+
+def required_bits_testnet(headers, chain, height, timestamp):
+    def prior_non_special_bits():
+        genesis_bits = headers.coin.genesis_bits
+        raw_header = headers.raw_header_at_height
+        header_bits = headers.coin.header_bits
+        for test_height in range(height - 1, -1, -1):
+            bits = header_bits(raw_header(chain, test_height))
+            if test_height % 2016 == 0 or bits != genesis_bits:
+                return bits
+
+    prior_raw_header = headers.raw_header_at_height(chain, height - 1)
+    prior_timestamp = headers.coin.header_timestamp(prior_raw_header)
+    is_slow = (timestamp - prior_timestamp) > 20 * 60
+
+    if height < 1155875:
+        if height % 2016 == 0:
+            return _required_bits_fortnightly(headers, chain, height)
+        if is_slow:
+            return headers.coin.genesis_bits
+        return prior_non_special_bits()
+    elif height <= 1188697:
+        if height % 2016 == 0:
+            return _required_bits_fortnightly(headers, chain, height)
+        if is_slow:
+            return headers.coin.genesis_bits
+        return prior_non_special_bits()
+    else:
+        if is_slow:
+            return headers.coin.genesis_bits
+        return _required_bits_DAA(headers, chain, height)
