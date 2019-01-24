@@ -86,10 +86,11 @@ class Chain(object):
     through parent chains).
 
     Public attributes:
-        parent  the parent chain this one forks from, can be None
-        height  the height of the chain
-        tip     the Header object of the chain tip
-        work    cumulative chain work to the tip
+        parent        the parent chain this one forks from, can be None
+        first_height  the first height not in common with the parent (0 for the base chain)
+        height        the height of the chain
+        tip           the deserialized Header object of the chain tip
+        work          cumulative chain work to the tip
     '''
 
     def __init__(self, parent, tip, tip_header_index, prev_work):
@@ -97,9 +98,9 @@ class Chain(object):
         self.parent = parent
         self.tip = tip
         self.work = prev_work + tip.work()
+        self.first_height = tip.height
         self._header_indices = array.array('I')
         self._header_indices.append(tip_header_index)
-        self._first_height = tip.height
 
     @classmethod
     def from_checkpoint(cls, checkpoint, coin):
@@ -112,11 +113,38 @@ class Chain(object):
         self._header_indices.append(header_index)
         self.work += header.work()
 
+    def parent_heights(self):
+        '''Returns a map {chain: height}.  The keys are the chain and every parent chain,
+        recursively.  The height is the last height on that chain for parent chains, and
+        the chain height for ourself.
+        '''
+        result = {self: self.height}
+        chain = self
+        while chain.parent:
+            result[chain.parent] = chain.first_height - 1
+            chain = chain.parent
+        return result
+
+    def common_chain_and_height(self, other_chain):
+        '''Returns a pair (chain, height).  The height is the greatest height common between this
+        chain and another chain back to the genesis block, and chain is the chain of that
+        height.
+        '''
+        other_heights = other_chain.parent_heights()
+        our_heights = self.parent_heights()
+        result = (None, -1)
+        for chain in our_heights:
+            if chain in other_heights:
+                common_height = min(other_heights[chain], our_heights[chain])
+                if common_height > result[1]:
+                    result = (chain, common_height)
+        return result
+
     def header_index(self, height):
         '''Return the index of the header in storage.'''
-        if height >= self._first_height:
+        if height >= self.first_height:
             try:
-                return self._header_indices[height - self._first_height]
+                return self._header_indices[height - self.first_height]
             except IndexError:
                 pass
         elif self.parent:
@@ -125,15 +153,15 @@ class Chain(object):
             return height
         raise MissingHeader(f'no header at height {height}')
 
-    def log2_work(self, dps=8):
-        result = math.log(self.work, 2)
-        if dps is not None:
-            result = round(result, dps)
-        return result
+    def log2_work(self):
+        return math.log(self.work, 2)
 
     @property
     def height(self):
-        return self._first_height + len(self._header_indices) - 1
+        return self.first_height + len(self._header_indices) - 1
+
+    def desc(self):
+        return f'tip={self.tip} log2_work={round(self.log2_work(), 8)}'
 
 
 class HeaderStorage(object):
@@ -396,7 +424,7 @@ class Headers(object):
     def connect(self, raw_header):
         '''Given a raw header, try to connect it to existing headers.
 
-        Returns a (chain, header) pair if the header could be connected or already exists.
+        Returns a (header, chain) pair if the header could be connected or already exists.
 
         Check the header's "bits" and that the header's hash is good for the target that
         implies.

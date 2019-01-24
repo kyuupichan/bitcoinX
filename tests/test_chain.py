@@ -78,10 +78,13 @@ class TestChain(object):
             if n < N:
                 base.append(header, index)
 
-        # Test public attributes
+        # Test all public attributes and methods
+        assert base.parent is None
+        assert base.first_height == 0
         assert base.height == N
-        assert base.work == genesis.work() + sum(header.work() for header in headers[:N])
         assert base.tip == headers[N - 1]
+        assert base.work == genesis.work() + sum(header.work() for header in headers[:N])
+        assert base.desc()
 
         for height in range(1, N + 1):
             assert base.header_index(height) == indices[height - 1]
@@ -89,6 +92,9 @@ class TestChain(object):
         for n in -1, N + 1:
             with pytest.raises(MissingHeader):
                 base.header_index(n)
+
+        assert base.parent_heights() == {base: base.height}
+        assert base.common_chain_and_height(base) == (base, base.height)
 
         # Build a fork chain
         common_height = 5
@@ -100,11 +106,12 @@ class TestChain(object):
             elif n > N:
                 fork.append(header, index)
 
-        # Test public attributes
+        # Test all public attributes and methods
         assert fork.parent is base
+        assert fork.first_height == common_height + 1
         assert fork.height == common_height + N
-        assert fork.work == work + sum(header.work() for header in headers[N:])
         assert fork.tip == headers[-1]
+        assert fork.work == work + sum(header.work() for header in headers[N:])
 
         for height in range(1, fork.height + 1):
             if height <= common_height:
@@ -115,6 +122,12 @@ class TestChain(object):
         for n in -1, fork.height + 1:
             with pytest.raises(MissingHeader):
                 fork.header_index(n)
+
+        assert fork.parent_heights() == {fork: fork.height, base: common_height}
+        assert fork.common_chain_and_height(fork) == (fork, fork.height)
+        assert fork.common_chain_and_height(base) == (base, common_height)
+        assert base.common_chain_and_height(fork) == (base, common_height)
+
 
     def test_from_checkpoint(self):
         header = Bitcoin.deserialized_header(bsv_checkpoint.raw_header, bsv_checkpoint.height)
