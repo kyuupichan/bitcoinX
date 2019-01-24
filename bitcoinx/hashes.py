@@ -72,11 +72,18 @@ def hash160(x):
 
 
 def hash_to_hex_str(x):
-    '''Convert a big-endian binary hash to displayed hex string.
+    '''Convert a little-endian binary hash to displayed hex string.
 
     Display form of a binary hash is reversed and converted to hex.
     '''
     return bytes(reversed(x)).hex()
+
+
+def hash_to_value(x):
+    '''Convert a little-endian binary hash to an integer value (to e.g. compare to a proof of
+    work target).
+    '''
+    return int.from_bytes(x, 'little')
 
 
 def hex_str_to_hash(x):

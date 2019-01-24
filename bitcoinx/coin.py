@@ -29,7 +29,7 @@ __all__ = (
 
 import attr
 
-from bitcoinx.hashes import double_sha256, hash_to_hex_str
+from bitcoinx.hashes import double_sha256, hash_to_hex_str, hash_to_value
 from bitcoinx.packing import unpack_header, unpack_le_uint32
 from bitcoinx.work import (
     bits_to_work, bits_to_target, required_bits_mainnet, required_bits_testnet
@@ -52,6 +52,12 @@ class Header(object):
 
     def work(self):
         return bits_to_work(self.bits)
+
+    def target(self):
+        return bits_to_target(self.bits)
+
+    def hash_value(self):
+        return hash_to_value(self.hash)
 
     def __str__(self):
         return (f'Header(version={self.version}, prev_hash="{hash_to_hex_str(self.prev_hash)}", '
