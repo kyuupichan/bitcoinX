@@ -236,7 +236,7 @@ class HeaderStorage(object):
         self.mmap[4:8] = pack_le_uint32(count)
 
     def _set_raw_header(self, index, raw_header):
-        if not isinstance(raw_header, bytes) or len(raw_header) != 80:
+        if not isinstance(raw_header, (bytes, bytearray)) or len(raw_header) != 80:
             raise TypeError('raw header must be binary of length 80')
         # Grow if needed
         mmap = self.mmap

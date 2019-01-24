@@ -62,6 +62,9 @@ class Header(object):
     def hex_str(self):
         return hash_to_hex_str(self.hash)
 
+    def difficulty(self):
+        return Bitcoin.bits_to_difficulty(self.bits)
+
     def __str__(self):
         return (f'Header(version=0x{self.version:x}, prev_hash={hash_to_hex_str(self.prev_hash)}, '
                 f'merkle_root={hash_to_hex_str(self.merkle_root)}, timestamp={self.timestamp}, '
@@ -78,6 +81,9 @@ class Coin(object):
         self.max_target = bits_to_target(self.genesis_bits)
         # Signature:  def required_bits(self, headers, chain, height, timestamp=None)
         self.required_bits = required_bits
+
+    def bits_to_difficulty(self, bits):
+        return Bitcoin.max_target / bits_to_target(bits)
 
     def deserialized_header(self, raw, height):
         '''Returns a deserialized header object.'''
