@@ -429,7 +429,7 @@ class Headers(object):
         required_bits = self.required_bits(chain, header.height, header.timestamp)
         if header.bits != required_bits:
             raise IncorrectBits(header, required_bits)
-        if header.hash_value() > header.target:
+        if header.hash_value() > header.target():
             raise InsufficientPoW(header)
         # OK, the header is good, store it and get its chain
         header_index = self.storage.append(raw_header)
