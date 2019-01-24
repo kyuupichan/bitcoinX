@@ -24,7 +24,8 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Chain', 'CheckPoint', 'Headers', 'MissingHeader', 'HeaderStorage',
+    'Chain', 'CheckPoint', 'Headers', 'HeaderStorage',
+    'ChainException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
 )
 
 import array
@@ -47,11 +48,36 @@ logger = logging.getLogger('chain')
 CheckPoint = namedtuple('CheckPoint', 'raw_header height prev_work')
 
 
-class MissingHeader(Exception):
+class ChainException(Exception):
     pass
 
 
-class BadHeadersFile(Exception):
+class MissingHeader(ChainException):
+    pass
+
+
+class IncorrectBits(ChainException):
+
+    def __init__(self, header, required_bits):
+        super().__init__(header, required_bits)
+        self.header = header
+        self.required_bits = required_bits
+
+    def __str__(self):
+        return f'header f{self.header} requires bits 0x{self.required_bits}'
+
+
+class InsufficientPoW(ChainException):
+    def __init__(self, header):
+        super().__init__(header)
+        self.header = header
+
+    def __str__(self):
+        return (f'header f{self.header} hash value f{self.header.hash_value()} exceeds '
+                f'its target {self.header.target()}')
+
+
+class _BadHeadersFile(Exception):
     pass
 
 
@@ -165,7 +191,7 @@ class HeaderStorage(object):
                 return
         self.mmap.close()
         self.mmap = None
-        raise BadHeadersFile(f'invalid headers file {self.filename}')
+        raise _BadHeadersFile(f'invalid headers file {self.filename}')
 
     def open_or_create(self):
         try:
@@ -173,7 +199,7 @@ class HeaderStorage(object):
             return
         except FileNotFoundError:
             logger.debug(f'{self.filename} not found, creating it')
-        except (BadHeadersFile, MissingHeader):
+        except (_BadHeadersFile, MissingHeader):
             logger.debug(f're-creating headers file {self.filename}')
         self._create_file()
         self._open_file()
@@ -332,6 +358,7 @@ class Headers(object):
             self._add_chain(chain)
         return chain
 
+    # FIXME: remove this and pop_last()
     def add_raw_header(self, raw_header):
         '''Add a single header to storage if it connects, either to extend an existing chain or
         create a new one.  Return the chain the header lies on.
@@ -376,6 +403,39 @@ class Headers(object):
         header = self.coin.deserialized_header(raw_header, self._heights[our_index])
         return header, self._chains[self._chain_indices[our_index]]
 
+    def connect(self, raw_header):
+        '''Given a raw header, try to connect it to existing headers.
+
+        Returns a (chain, header) pair if the header could be connected or already exists.
+
+        Check the header's "bits" and that the header's hash is good for the target that
+        implies.
+
+        Raises MissingHeader if the previous header cannot be found, IncorrectBits if the
+        header's bits don't meet the chain's rules, and InsufficientPow if the header's
+        hash doesn't meet the target.
+        '''
+        header = self.coin.deserialized_header(raw_header, -1)
+        prev_header, chain = self.lookup_header_and_chain(header.prev_hash)
+        header.height = prev_header.height + 1
+        # If the chain tip is the prior header then this header is new.  Otherwise we must
+        # check.
+        if chain.tip.hash != prev_header.hash:
+            try:
+                return self.lookup_header_and_chain(header.hash)
+            except MissingHeader:
+                pass
+
+        required_bits = self.required_bits(chain, header.height, header.timestamp)
+        if header.bits != required_bits:
+            raise IncorrectBits(header, required_bits)
+        if header.hash_value() > header.target:
+            raise InsufficientPoW(header)
+        # OK, the header is good, store it and get its chain
+        header_index = self.storage.append(raw_header)
+        chain = self._read_header(header_index)
+        return header, chain
+
     def __len__(self):
         return len(self.storage)
 
@@ -400,7 +460,7 @@ class Headers(object):
                       for h in range(height, max(-1, height - 11), -1)]
         return sorted(timestamps)[len(timestamps) // 2]
 
-    def required_bits(self, chain, height, timetsamp=None):
+    def required_bits(self, chain, height, timestamp=None):
         '''Returns the required bits for a new header at the given height with the
         given timestamp.  Testnet uses the timestamp; mainnet does not.'''
-        return self.coin.required_bits(chain, height, timestamp)
+        return self.coin.required_bits(self, chain, height, timestamp)
