@@ -3,11 +3,11 @@ import os
 import pytest
 
 from bitcoinx import (
-    HeaderStorage, CheckPoint, Bitcoin, Headers, unpack_le_uint32, pack_le_uint32,
+    CheckPoint, Bitcoin, Headers, unpack_le_uint32, pack_le_uint32,
 )
 from bitcoinx.work import *
 
-from .test_chain import create_or_open_storage
+from .test_chain import create_headers
 
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
@@ -91,8 +91,7 @@ def setup_headers(tmpdir, headers_file):
     last_height, = unpack_le_uint32(raw_headers[-84:-80])
     last_raw = raw_headers[-80:]
     checkpoint = CheckPoint(last_raw, last_height, 0)
-    storage = create_or_open_storage(tmpdir, checkpoint)
-    headers = Headers(Bitcoin, storage)
+    headers = create_headers(tmpdir, checkpoint)
     for offset in range(0, len(raw_headers), 84):
         height, = unpack_le_uint32(raw_headers[offset: offset + 4])
         raw_header = raw_headers[offset + 4: offset + 84]
@@ -114,7 +113,7 @@ def test_mainnet_2016_headers(tmpdir):
 
     bounded_bits = 403011440
     # Test // 4 is lower bound for the last one
-    raw_header = bytearray(headers.storage[height - 2016])
+    raw_header = bytearray(headers.raw_header_at_height(chain, height - 2016))
     timestamp = Bitcoin.header_timestamp(raw_header)
     # Add 8 weeks and a 14 seconds; the minimum to trigger it
     raw_header[68:72] = pack_le_uint32(timestamp + 4 * 2016 * 600 + 14)
