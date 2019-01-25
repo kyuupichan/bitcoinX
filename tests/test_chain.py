@@ -4,7 +4,7 @@ import random
 import pytest
 
 from bitcoinx import Bitcoin, pack_le_uint32, double_sha256
-from bitcoinx.chain import *
+from bitcoinx.chain import _HeaderStorage, Chain, Headers, CheckPoint, MissingHeader
 
 
 good_bits = [486604799, 472518933, 453281356, 436956491]
@@ -32,14 +32,19 @@ def storage_filename(tmpdir):
 
 def create_or_open_storage(tmpdir, checkpoint=None):
     checkpoint = checkpoint or genesis_checkpoint
-    hs = HeaderStorage(storage_filename(tmpdir), checkpoint)
-    hs.open_or_create()
+    hs = _HeaderStorage(storage_filename(tmpdir))
+    hs.open_or_create(checkpoint)
     return hs
 
 
+def create_headers(tmpdir, checkpoint=None):
+    checkpoint = checkpoint or genesis_checkpoint
+    return Headers.from_file(Bitcoin, storage_filename(tmpdir), checkpoint)
+
+
 def create_chain(headers_obj, count, prior=None):
-    checkpoint_hash = double_sha256(headers_obj.storage.checkpoint.raw_header)
-    checkpoint, chain = headers_obj.lookup_header_and_chain(checkpoint_hash)
+    checkpoint_hash = double_sha256(headers_obj.checkpoint.raw_header)
+    checkpoint, chain = headers_obj.lookup(checkpoint_hash)
 
     prior = prior or checkpoint
     orig_prior = prior
@@ -131,7 +136,7 @@ class TestChain(object):
 
     def test_from_checkpoint(self):
         header = Bitcoin.deserialized_header(bsv_checkpoint.raw_header, bsv_checkpoint.height)
-        chain = Chain.from_checkpoint(bsv_checkpoint, Bitcoin)
+        chain = Chain.from_checkpoint(Bitcoin, bsv_checkpoint)
         assert chain.height == bsv_checkpoint.height
         assert chain.tip == header
         assert chain.work == bsv_checkpoint.prev_work + header.work() == 0xd54c9a84f54e93d3d87015
@@ -143,7 +148,6 @@ class TestHeaderStorage(object):
 
     def test_new(self, tmpdir):
         hs = create_or_open_storage(tmpdir)
-        assert hs.checkpoint is genesis_checkpoint
         assert len(hs) == 1
         assert hs[0] == Bitcoin.genesis_header
 
@@ -155,8 +159,7 @@ class TestHeaderStorage(object):
         hs = create_or_open_storage(tmpdir)
         hs[0]
         hs.close()
-        hs = HeaderStorage(hs.filename, bsv_checkpoint)
-        hs.open_or_create()
+        hs = create_or_open_storage(tmpdir, bsv_checkpoint)
         assert len(hs) == bsv_checkpoint.height + 1
         with pytest.raises(MissingHeader):
             hs[0]
@@ -171,8 +174,7 @@ class TestHeaderStorage(object):
         hs.close()
 
         checkpoint2 = CheckPoint(urandom(80), checkpoint.height, 0)
-        hs = HeaderStorage(hs.filename, checkpoint2)
-        hs.open_or_create()
+        hs = create_or_open_storage(tmpdir, checkpoint2)
         assert len(hs) == checkpoint.height + 1
         assert hs[checkpoint.height] == checkpoint2.raw_header
         with pytest.raises(MissingHeader):
@@ -211,8 +213,6 @@ class TestHeaderStorage(object):
         hs[0] = Bitcoin.genesis_header
         hs[1] = empty_header
         hs[bsv_checkpoint.height] = bsv_checkpoint.raw_header
-        with pytest.raises(ValueError):
-            hs[bsv_checkpoint.height + 1] = empty_header
         with pytest.raises(TypeError):
             hs[1] = bytes(85)
         with pytest.raises(TypeError):
@@ -256,26 +256,24 @@ class TestHeaderStorage(object):
 class TestHeaders(object):
 
     def test_constructor(self, tmpdir):
-        storage = create_or_open_storage(tmpdir)
-        headers = Headers(Bitcoin, storage)
+        headers = create_headers(tmpdir)
         assert headers.coin is Bitcoin
-        assert len(headers) == len(storage)
+        assert len(headers) == len(headers._storage)
         assert len(headers.chains()) == 1
         chain = headers.chains()[0]
         assert chain.tip.height == 0
         assert chain.tip.prev_hash == bytes(32)
         assert chain.work == chain.tip.work()
 
-    def test_lookup_header_and_chain(self, tmpdir):
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers = Headers(Bitcoin, storage)
+    def test_lookup(self, tmpdir):
+        headers = create_headers(tmpdir, bsv_checkpoint)
         assert len(headers) == bsv_checkpoint.height + 1
 
         checkpoint_hash = double_sha256(bsv_checkpoint.raw_header)
         for clear_cache in (False, True):
             if clear_cache:
                 headers._cache.clear()
-            header, chain = headers.lookup_header_and_chain(checkpoint_hash)
+            header, chain = headers.lookup(checkpoint_hash)
             assert header.hash == checkpoint_hash
             assert header.height == bsv_checkpoint.height
             assert chain.tip.raw == header.raw
@@ -283,11 +281,10 @@ class TestHeaders(object):
         # Test header_index for chain with hole
         assert chain.header_index(0) == 0
         with pytest.raises(MissingHeader):
-            headers.lookup_header_and_chain(header.prev_hash)
+            headers.lookup(header.prev_hash)
 
     def test_set_one(self, tmpdir):
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers = Headers(Bitcoin, storage)
+        headers = create_headers(tmpdir, bsv_checkpoint)
         assert len(headers) == bsv_checkpoint.height + 1
 
         chain = headers.chains()[0]
@@ -301,12 +298,14 @@ class TestHeaders(object):
         headers.set_one(height, header.raw)
         assert headers.header_at_height(chain, height).raw == header.raw
 
+        with pytest.raises(ValueError):
+            headers.set_one(bsv_checkpoint.height + 1, empty_header)
+
     def test_chainwork_to_height(self, tmpdir):
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers_obj = Headers(Bitcoin, storage)
+        headers_obj = create_headers(tmpdir, bsv_checkpoint)
 
         checkpoint_hash = double_sha256(bsv_checkpoint.raw_header)
-        cp_header, chain = headers_obj.lookup_header_and_chain(checkpoint_hash)
+        cp_header, chain = headers_obj.lookup(checkpoint_hash)
 
         # Test chainwork_to_height
         chainwork = bsv_checkpoint.prev_work + cp_header.work()
@@ -321,19 +320,17 @@ class TestHeaders(object):
             assert headers_obj.chainwork_to_height(chain, new_header.height) == chainwork
 
     def test_create_single_chain_and_reload(self, tmpdir):
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers_obj = Headers(Bitcoin, storage)
+        headers_obj = create_headers(tmpdir, bsv_checkpoint)
 
         checkpoint_hash = double_sha256(bsv_checkpoint.raw_header)
-        prior, chain = headers_obj.lookup_header_and_chain(checkpoint_hash)
+        prior, chain = headers_obj.lookup(checkpoint_hash)
 
         count = 10
         new_headers, chain = create_chain(headers_obj, count)
         assert chain.height == bsv_checkpoint.height + count
-        storage.close()
+        headers_obj._storage.close()
 
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers_obj = Headers(Bitcoin, storage)
+        headers_obj = create_headers(tmpdir, bsv_checkpoint)
         chains = headers_obj.chains()
         assert len(chains) == 1
         chain = chains[0]
@@ -349,11 +346,10 @@ class TestHeaders(object):
         assert len(headers_obj) == prior_len
 
     def test_create_two_chains_and_reload(self, tmpdir):
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers_obj = Headers(Bitcoin, storage)
+        headers_obj = create_headers(tmpdir, bsv_checkpoint)
 
         checkpoint_hash = double_sha256(bsv_checkpoint.raw_header)
-        prior, chain = headers_obj.lookup_header_and_chain(checkpoint_hash)
+        prior, chain = headers_obj.lookup(checkpoint_hash)
 
         count = 10
         chain1_headers, chain1 = create_chain(headers_obj, count)
@@ -369,10 +365,9 @@ class TestHeaders(object):
         assert chain3 is chain1
         assert chain4 is chain2
         assert headers_obj.chain_count() == 2
-        storage.close()
+        headers_obj._storage.close()
 
-        storage = create_or_open_storage(tmpdir, bsv_checkpoint)
-        headers_obj = Headers(Bitcoin, storage)
+        headers_obj = create_headers(tmpdir, bsv_checkpoint)
         assert headers_obj.chain_count() == 2
         chain5, chain6 = headers_obj.chains()
         assert chain5.work == chain1.work

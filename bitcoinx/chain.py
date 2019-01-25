@@ -24,7 +24,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Chain', 'CheckPoint', 'Headers', 'HeaderStorage',
+    'Chain', 'CheckPoint', 'Headers',
     'ChainException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
 )
 
@@ -103,7 +103,7 @@ class Chain(object):
         self._header_indices.append(tip_header_index)
 
     @classmethod
-    def from_checkpoint(cls, checkpoint, coin):
+    def from_checkpoint(cls, coin, checkpoint):
         tip = coin.deserialized_header(checkpoint.raw_header, checkpoint.height)
         return cls(None, tip, tip.height, checkpoint.prev_work)
 
@@ -164,7 +164,7 @@ class Chain(object):
         return f'tip={self.tip} log2_work={round(self.log2_work(), 8)}'
 
 
-class HeaderStorage(object):
+class _HeaderStorage(object):
     '''Implementation of raw header storage for flat files.
 
     Block headers are looked up by index, which in general is not equal to its height.
@@ -181,19 +181,9 @@ class HeaderStorage(object):
     '''
     struct_reserved = Struct('<HHI')
 
-    def __init__(self, filename, checkpoint):
-        '''Open filename for header storage with the given checkpoint.
-
-        If opening the file raises FileNotFoundError then it is created.
-
-        If the file exists but is not consistent with the given checkpoint (too few
-        headers or the header conflicts) then the file is re-created as if it didn't
-        exist.
-
-        On successful return the storage file is good for the checkpoint.
-        '''
+    def __init__(self, filename):
+        '''Create an object representing flat file header storage in filename.'''
         self.filename = filename
-        self.checkpoint = checkpoint
         self.mmap = None
         self.reserved_size = self.struct_reserved.size
         self.header_count = 0
@@ -201,36 +191,36 @@ class HeaderStorage(object):
     def _offset(self, key):
         return self.reserved_size + key * 80
 
-    def _create_file(self):
+    def _create_file(self, checkpoint):
         s = self.struct_reserved
         self.reserved_size = s.size
         with open(self.filename, 'wb') as f:
-            f.write(s.pack(s.size, 0, self.checkpoint.height + 1))
-            f.seek(self._offset(self.checkpoint.height))
-            f.write(self.checkpoint.raw_header)
+            f.write(s.pack(s.size, 0, checkpoint.height + 1))
+            f.seek(self._offset(checkpoint.height))
+            f.write(checkpoint.raw_header)
 
-    def _open_file(self):
+    def _open_file(self, checkpoint):
         logger.debug(f'opening headers file {self.filename}')
         s = self.struct_reserved
         self.mmap = map_file(self.filename)
         if len(self.mmap) >= s.size:
             self.reserved_size, version, self.header_count = s.unpack(self.mmap[:s.size])
-            if version == 0 and self[self.checkpoint.height] == self.checkpoint.raw_header:
+            if version == 0 and self[checkpoint.height] == checkpoint.raw_header:
                 return
         self.mmap.close()
         self.mmap = None
         raise _BadHeadersFile(f'invalid headers file {self.filename}')
 
-    def open_or_create(self):
+    def open_or_create(self, checkpoint):
         try:
-            self._open_file()
+            self._open_file(checkpoint)
             return
         except FileNotFoundError:
             logger.debug(f'{self.filename} not found, creating it')
         except (_BadHeadersFile, MissingHeader):
             logger.debug(f're-creating headers file {self.filename}')
-        self._create_file()
-        self._open_file()
+        self._create_file(checkpoint)
+        self._open_file(checkpoint)
 
     def _set_count(self, count):
         self.mmap[4:8] = pack_le_uint32(count)
@@ -266,8 +256,6 @@ class HeaderStorage(object):
 
     def __setitem__(self, key, raw_header):
         if isinstance(key, int):
-            if not 0 <= key <= self.checkpoint.height:
-                raise ValueError(f'cannot set header at height {key:,d}')
             self._set_raw_header(key, raw_header)
         else:
             raise TypeError(f'key {key} should be an integer')
@@ -311,9 +299,10 @@ class Headers(object):
     in addition to the standard header attributes such as nonce and timestamp.
     '''
 
-    def __init__(self, coin, storage):
+    def __init__(self, coin, storage, checkpoint):
         self.coin = coin
-        self.storage = storage
+        self.checkpoint = checkpoint
+        self._storage = storage
         self._chains = []
         self._short_hashes = bytearray()
         self._heights = array.array('I')
@@ -321,7 +310,7 @@ class Headers(object):
         self._cache = {}
 
         # Create the base chain out to the checkpoint
-        self._add_chain(Chain.from_checkpoint(storage.checkpoint, coin))
+        self._add_chain(Chain.from_checkpoint(coin, checkpoint))
         # Read in chains from storage
         self._read_headers()
 
@@ -351,7 +340,7 @@ class Headers(object):
             index = self._short_hashes.find(key, start)
             if index % 4 == 0:
                 our_index = index // 4
-                raw_header = self.storage[our_index + self.storage.checkpoint.height]
+                raw_header = self._storage[our_index + self.checkpoint.height]
                 if self.coin.header_hash(raw_header) == header_hash:
                     return raw_header, our_index
             if index == -1:
@@ -361,15 +350,15 @@ class Headers(object):
     def _read_headers(self):
         '''Read in all the headers from storage.'''
         read_header = self._read_header
-        for header_index in range(self.storage.checkpoint.height + 1, len(self.storage)):
+        for header_index in range(self.checkpoint.height + 1, len(self)):
             read_header(header_index)
 
     def _read_header(self, header_index):
         '''Read a single header from storage.  The header must connect, either to extend an
         existing chain or create a new one.  Return the chain the header lies on.
         '''
-        new_tip = self.coin.deserialized_header(self.storage[header_index], -1)
-        prev_header, chain = self.lookup_header_and_chain(new_tip.prev_hash)
+        new_tip = self.coin.deserialized_header(self._storage[header_index], -1)
+        prev_header, chain = self.lookup(new_tip.prev_hash)
         new_tip.height = prev_header.height + 1
         if chain.tip.hash == prev_header.hash:
             chain.append(new_tip, header_index)
@@ -385,18 +374,30 @@ class Headers(object):
         '''Add a single header to storage if it connects, either to extend an existing chain or
         create a new one.  Return the chain the header lies on.
         '''
-        header_index = self.storage.append(raw_header)
+        header_index = self._storage.append(raw_header)
         return self._read_header(header_index)
+
+    #
+    # External API
+    #
+
+    @classmethod
+    def from_file(cls, coin, file_path, checkpoint):
+        storage = _HeaderStorage(file_path)
+        storage.open_or_create(checkpoint)
+        return cls(coin, storage, checkpoint)
 
     def set_one(self, height, raw_header):
         '''Set the raw header for a height before the checkpoint.
 
         The caller is responsible for the validity of the raw header.'''
-        self.storage[height] = raw_header
+        if not 0 <= height <= self.checkpoint.height:
+            raise ValueError(f'cannot set header at height {height:,d}')
+        self._storage[height] = raw_header
 
     def chainwork_range(self, chain, start_height, end_height):
         '''Returns the chainwork for the half-open range [start_height, end_height).'''
-        raw_header = self.storage.__getitem__
+        raw_header = self._storage.__getitem__
         get_header_index = chain.header_index
         header_work = self.coin.header_work
         return sum(header_work(raw_header(get_header_index(h)))
@@ -407,13 +408,13 @@ class Headers(object):
         return chain.work - self.chainwork_range(chain, height + 1, chain.tip.height + 1)
 
     def raw_header_at_height(self, chain, height):
-        return self.storage[chain.header_index(height)]
+        return self._storage[chain.header_index(height)]
 
     def header_at_height(self, chain, height):
         raw_header = self.raw_header_at_height(chain, height)
         return self.coin.deserialized_header(raw_header, height)
 
-    def lookup_header_and_chain(self, header_hash):
+    def lookup(self, header_hash):
         result = self._cache.get(header_hash)
         if result:
             return result
@@ -434,13 +435,13 @@ class Headers(object):
         hash doesn't meet the target.
         '''
         header = self.coin.deserialized_header(raw_header, -1)
-        prev_header, chain = self.lookup_header_and_chain(header.prev_hash)
+        prev_header, chain = self.lookup(header.prev_hash)
         header.height = prev_header.height + 1
         # If the chain tip is the prior header then this header is new.  Otherwise we must
         # check.
         if chain.tip.hash != prev_header.hash:
             try:
-                return self.lookup_header_and_chain(header.hash)
+                return self.lookup(header.hash)
             except MissingHeader:
                 pass
 
@@ -450,12 +451,13 @@ class Headers(object):
         if header.hash_value() > header.target():
             raise InsufficientPoW(header)
         # OK, the header is good, store it and get its chain
-        header_index = self.storage.append(raw_header)
+        header_index = self._storage.append(raw_header)
         chain = self._read_header(header_index)
         return header, chain
 
     def __len__(self):
-        return len(self.storage)
+        '''The number of headers stored.'''
+        return len(self._storage)
 
     def chains(self):
         return self._chains
