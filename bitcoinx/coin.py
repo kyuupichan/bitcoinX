@@ -60,10 +60,10 @@ class Header(object):
         return hash_to_value(self.hash)
 
     def __str__(self):
-        return (f'Header(version={self.version}, prev_hash="{hash_to_hex_str(self.prev_hash)}", '
-                f'merkle_root="{hash_to_hex_str(self.merkle_root)}", timestamp={self.timestamp}, '
-                f'bits={self.bits}, nonce={self.nonce}, hash="{hash_to_hex_str(self.hash)}" '
-                f'height={self.height})')
+        return (f'Header(version={self.version:x}, prev_hash={hash_to_hex_str(self.prev_hash)}, '
+                f'merkle_root={hash_to_hex_str(self.merkle_root)}, timestamp={self.timestamp}, '
+                f'bits={self.bits}, nonce={self.nonce}, hash={hash_to_hex_str(self.hash)}) '
+                f'height={self.height}')
 
 
 class Coin(object):
