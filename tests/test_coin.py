@@ -1,6 +1,8 @@
 import pytest
 
-from bitcoinx import hex_str_to_hash, bits_to_work
+from bitcoinx import (
+    hex_str_to_hash, bits_to_work, bits_to_target, hash_to_value, hash_to_hex_str,
+)
 from bitcoinx.coin import *
 
 header_400k = (
@@ -42,8 +44,9 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
     assert Bitcoin.header_hash(raw_header) == header_hash
     assert Bitcoin.header_prev_hash(raw_header) == prev_hash
     assert Bitcoin.header_work(raw_header) == bits_to_work(bits)
+    assert Bitcoin.header_timestamp(raw_header) == timestamp
 
-    header = Bitcoin.deserialized_header(raw_header, -1)
+    header = Bitcoin.deserialized_header(raw_header, 0)
     assert header.version == version
     assert header.prev_hash == prev_hash
     assert header.merkle_root == merkle_root
@@ -52,5 +55,9 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
     assert header.nonce == nonce
     assert header.raw == raw_header
     assert header.hash == header_hash
-    assert header.height == -1
+    assert header.height == 0
     assert header.work() == Bitcoin.header_work(raw_header)
+    assert header.target() == bits_to_target(bits)
+    assert header.hash_value() == hash_to_value(header_hash)
+    assert header.hex_str() == hash_to_hex_str(header_hash)
+    assert 'height=0' in str(header)

@@ -31,7 +31,7 @@ import hashlib
 __all__ = (
     'sha1', 'sha256', 'ripemd160',
     'double_sha256', 'hash160',
-    'hash_to_hex_str', 'hex_str_to_hash'
+    'hash_to_hex_str', 'hex_str_to_hash', 'hash_to_value',
 )
 
 
