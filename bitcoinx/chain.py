@@ -203,13 +203,17 @@ class _HeaderStorage(object):
         logger.debug(f'opening headers file {self.filename}')
         s = self.struct_reserved
         self.mmap = map_file(self.filename)
-        if len(self.mmap) >= s.size:
-            self.reserved_size, version, self.header_count = s.unpack(self.mmap[:s.size])
-            if version == 0 and self[checkpoint.height] == checkpoint.raw_header:
-                return
-        self.mmap.close()
-        self.mmap = None
-        raise _BadHeadersFile(f'invalid headers file {self.filename}')
+        try:
+            if len(self.mmap) >= s.size:
+                self.reserved_size, version, self.header_count = s.unpack(self.mmap[:s.size])
+                # Note self[checkpoint.height] might raise MissingHeader
+                if version == 0 and self[checkpoint.height] == checkpoint.raw_header:
+                    return
+            raise _BadHeadersFile(f'invalid headers file {self.filename}')
+        except Exception:
+            self.mmap.close()
+            self.mmap = None
+            raise
 
     def open_or_create(self, checkpoint):
         try:
