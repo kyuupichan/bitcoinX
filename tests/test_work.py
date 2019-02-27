@@ -1,9 +1,11 @@
+import array
+import io
 import os
 
 import pytest
 
 from bitcoinx import (
-    CheckPoint, Bitcoin, Headers, unpack_le_uint32, pack_le_uint32,
+    CheckPoint, Bitcoin, Headers, unpack_le_uint16, unpack_le_uint32, pack_le_uint32,
 )
 from bitcoinx.work import *
 
@@ -119,3 +121,63 @@ def test_mainnet_2016_headers(tmpdir):
     raw_header[68:72] = pack_le_uint32(timestamp + 4 * 2016 * 600 + 14)
     headers.set_one(height - 1, raw_header)
     assert headers.required_bits(chain, height, ) == bounded_bits
+
+
+def setup_compressed_headers(tmpdir, headers_file):
+    with open(os.path.join(data_dir, headers_file), 'rb') as f:
+        raw_data = f.read()
+
+    all_times = array.array('I')
+    all_bits = array.array('I')
+    read = io.BytesIO(raw_data).read
+
+    first_height, = unpack_le_uint32(read(4))
+    header_count, = unpack_le_uint32(read(4))
+
+    # Timestamps
+    first_time, = unpack_le_uint32(read(4))
+    all_times.append(first_time)
+    for n in range(1, header_count):
+        diff_300, = unpack_le_uint16(read(2))
+        all_times.append(all_times[-1] + diff_300 - 300)
+    # Bits
+    while True:
+        raw = read(4)
+        if not raw:
+            break
+        bits, = unpack_le_uint32(raw)
+        if bits < 2016 * 2:
+            count = bits
+            bits, = unpack_le_uint32(read(4))
+            all_bits.extend(array.array('I', [bits]) * count)
+        else:
+            all_bits.append(bits)
+
+    assert len(all_times) == header_count
+    assert len(all_bits) == header_count
+
+    raw_header = bytearray(80)
+    raw_header[0] = 1
+
+    checkpoint = CheckPoint(raw_header, first_height + header_count - 1, 0)
+    headers = create_headers(tmpdir, checkpoint)
+
+    for height, (bits, timestamp) in enumerate(zip(all_bits, all_times), start=first_height):
+        raw_header[68:72] = pack_le_uint32(timestamp)
+        raw_header[72:76] = pack_le_uint32(bits)
+        headers.set_one(height, raw_header)
+
+    return headers
+
+
+def test_mainnet_EDA_and_DAA(tmpdir):
+    # Mainnet bits and timestamps from height 478400 to 564528 inclusive
+    headers = setup_compressed_headers(tmpdir, 'mainnet-headers-compressed')
+
+    EDA_height = 478558
+    chain = headers.chains()[0]
+    for height in range(EDA_height - 3, len(headers)):
+        header = headers.header_at_height(chain, height)
+        required_bits = headers.required_bits(chain, height, None)
+        #print(height, required_bits, header.bits, required_bits == header.bits)
+        assert headers.required_bits(chain, height, None) == header.bits
