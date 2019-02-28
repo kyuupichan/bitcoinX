@@ -303,6 +303,8 @@ class Headers(object):
     in addition to the standard header attributes such as nonce and timestamp.
     '''
 
+    max_cache_size = 1000
+
     def __init__(self, coin, storage, checkpoint):
         self.coin = coin
         self.checkpoint = checkpoint
@@ -331,7 +333,7 @@ class Headers(object):
         # Add to cache; prevent it getting too big
         cache = self._cache
         cache[header.hash] = header, chain
-        if len(cache) > 1000:
+        if len(cache) > self.max_cache_size:
             keys = list(cache.keys())
             for n in range(len(cache) // 2):
                 del cache[keys[n]]
