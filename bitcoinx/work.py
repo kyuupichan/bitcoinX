@@ -163,13 +163,7 @@ def required_bits_testnet(headers, chain, height, timestamp):
     prior_timestamp = headers.coin.header_timestamp(prior_raw_header)
     is_slow = (timestamp - prior_timestamp) > 20 * 60
 
-    if height < 1155875:
-        if height % 2016 == 0:
-            return _required_bits_fortnightly(headers, chain, height)
-        if is_slow:
-            return headers.coin.genesis_bits
-        return prior_non_special_bits()
-    elif height <= 1188697:
+    if height <= 1188697:
         # Note: testnet did not use the EDA
         if height % 2016 == 0:
             return _required_bits_fortnightly(headers, chain, height)
