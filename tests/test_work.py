@@ -5,7 +5,8 @@ import os
 import pytest
 
 from bitcoinx import (
-    CheckPoint, Bitcoin, Headers, unpack_le_uint16, unpack_le_uint32, pack_le_uint32,
+    CheckPoint, Bitcoin, BitcoinTestnet, Headers,
+    unpack_le_uint16, unpack_le_uint32, pack_le_uint32,
 )
 from bitcoinx.work import *
 
@@ -123,7 +124,7 @@ def test_mainnet_2016_headers(tmpdir):
     assert headers.required_bits(chain, height, ) == bounded_bits
 
 
-def setup_compressed_headers(tmpdir, headers_file):
+def setup_compressed_headers(tmpdir, headers_file, ts_offset, coin):
     with open(os.path.join(data_dir, headers_file), 'rb') as f:
         raw_data = f.read()
 
@@ -138,8 +139,8 @@ def setup_compressed_headers(tmpdir, headers_file):
     first_time, = unpack_le_uint32(read(4))
     all_times.append(first_time)
     for n in range(1, header_count):
-        diff_300, = unpack_le_uint16(read(2))
-        all_times.append(all_times[-1] + diff_300 - 300)
+        diff, = unpack_le_uint16(read(2))
+        all_times.append(all_times[-1] + diff - ts_offset)
     # Bits
     while True:
         raw = read(4)
@@ -160,7 +161,7 @@ def setup_compressed_headers(tmpdir, headers_file):
     raw_header[0] = 1
 
     checkpoint = CheckPoint(raw_header, first_height + header_count - 1, 0)
-    headers = create_headers(tmpdir, checkpoint)
+    headers = create_headers(tmpdir, checkpoint, coin=coin)
 
     for height, (bits, timestamp) in enumerate(zip(all_bits, all_times), start=first_height):
         raw_header[68:72] = pack_le_uint32(timestamp)
@@ -172,12 +173,25 @@ def setup_compressed_headers(tmpdir, headers_file):
 
 def test_mainnet_EDA_and_DAA(tmpdir):
     # Mainnet bits and timestamps from height 478400 to 564528 inclusive
-    headers = setup_compressed_headers(tmpdir, 'mainnet-headers-compressed')
+    headers = setup_compressed_headers(tmpdir, 'mainnet-headers-compressed', 300, Bitcoin)
 
     EDA_height = 478558
     chain = headers.chains()[0]
     for height in range(EDA_height - 3, len(headers)):
         header = headers.header_at_height(chain, height)
         required_bits = headers.required_bits(chain, height, None)
-        #print(height, required_bits, header.bits, required_bits == header.bits)
         assert headers.required_bits(chain, height, None) == header.bits
+
+
+def test_testnet_fortnightly(tmpdir):
+    # Testnet bits and timestamps from height 52416 to 56454 inclusive
+    headers = setup_compressed_headers(tmpdir, 'testnet-headers-52416', 3600, BitcoinTestnet)
+
+    first_height = 52417   # Avoid need to know timestamp 2016 blocks prior
+    chain = headers.chains()[0]
+    prior_timestamp = 0
+    for height in range(first_height, len(headers)):
+        header = headers.header_at_height(chain, height)
+        required_bits = headers.required_bits(chain, height, header.timestamp)
+        assert required_bits == header.bits
+        prior_timestamp = header.timestamp

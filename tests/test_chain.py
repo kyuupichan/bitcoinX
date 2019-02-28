@@ -37,9 +37,9 @@ def create_or_open_storage(tmpdir, checkpoint=None):
     return hs
 
 
-def create_headers(tmpdir, checkpoint=None):
+def create_headers(tmpdir, checkpoint=None, coin=Bitcoin):
     checkpoint = checkpoint or genesis_checkpoint
-    return Headers.from_file(Bitcoin, storage_filename(tmpdir), checkpoint)
+    return Headers.from_file(coin, storage_filename(tmpdir), checkpoint)
 
 
 def create_chain(headers_obj, count, prior=None):
