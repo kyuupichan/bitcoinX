@@ -183,11 +183,14 @@ def test_mainnet_EDA_and_DAA(tmpdir):
         assert headers.required_bits(chain, height, None) == header.bits
 
 
-def test_testnet_fortnightly(tmpdir):
-    # Testnet bits and timestamps from height 52416 to 56454 inclusive
-    headers = setup_compressed_headers(tmpdir, 'testnet-headers-52416', 3600, BitcoinTestnet)
+@pytest.mark.parametrize("filename, first_height", (
+    ('testnet-headers-52416', 52417),
+    ('testnet-headers-1155850', 1155851),
+    ('testnet-headers-1175328', 1175329),
+))
+def test_testnet(tmpdir, filename, first_height):
+    headers = setup_compressed_headers(tmpdir, filename, 3600, BitcoinTestnet)
 
-    first_height = 52417   # Avoid need to know timestamp 2016 blocks prior
     chain = headers.chains()[0]
     prior_timestamp = 0
     for height in range(first_height, len(headers)):
