@@ -3,11 +3,13 @@ import random
 
 import pytest
 
-from bitcoinx import Bitcoin, pack_le_uint32, double_sha256
+from bitcoinx import (
+    Bitcoin, BitcoinTestnet, pack_le_uint32, double_sha256, IncorrectBits, InsufficientPoW,
+)
 from bitcoinx.chain import _HeaderStorage, Chain, Headers, CheckPoint, MissingHeader
 
 
-good_bits = [486604799, 472518933, 453281356, 436956491]
+some_good_bits = [486604799, 472518933, 453281356, 436956491]
 empty_header = bytes(80)
 
 genesis_checkpoint = CheckPoint(Bitcoin.genesis_header, 0, 0)
@@ -18,7 +20,8 @@ bsv_raw_header = bytes.fromhex(
 bsv_checkpoint = CheckPoint(bsv_raw_header, height=557957, prev_work=0xd54c44dbdc491c25d097bf)
 
 
-def random_header(prev_hash=None, height=-1):
+def random_header(prev_hash=None, height=-1, good_bits=None):
+    good_bits = good_bits or some_good_bits
     raw_header = bytearray(urandom(80))
     raw_header[72:76] = pack_le_uint32(random.choice(good_bits))
     if prev_hash:
@@ -42,7 +45,7 @@ def create_headers(tmpdir, checkpoint=None, coin=Bitcoin):
     return Headers.from_file(coin, storage_filename(tmpdir), checkpoint)
 
 
-def create_chain(headers_obj, count, prior=None):
+def create_chain(headers_obj, count, prior=None, good_bits=None):
     checkpoint_hash = double_sha256(headers_obj.checkpoint.raw_header)
     checkpoint, chain = headers_obj.lookup(checkpoint_hash)
 
@@ -53,7 +56,7 @@ def create_chain(headers_obj, count, prior=None):
 
     new_headers = []
     for n in range(count):
-        new_header = random_header(prior.hash, orig_prior.height + n + 1)
+        new_header = random_header(prior.hash, orig_prior.height + n + 1, good_bits)
         new_headers.append(new_header)
         chain = headers_obj._add_raw_header(new_header.raw)
         prior = new_header
@@ -351,10 +354,13 @@ class TestHeaders(object):
         checkpoint_hash = double_sha256(bsv_checkpoint.raw_header)
         prior, chain = headers_obj.lookup(checkpoint_hash)
 
+        good_bits = [some_good_bits[0]]
         count = 10
-        chain1_headers, chain1 = create_chain(headers_obj, count)
+        chain1_headers, chain1 = create_chain(headers_obj, count, good_bits=good_bits)
         fork_point = chain1_headers[0]
-        chain2_headers, chain2 = create_chain(headers_obj, count, fork_point)
+        chain2_headers, chain2 = create_chain(headers_obj, count, fork_point, good_bits=good_bits)
+        assert headers_obj.longest_chain() is chain2
+
         assert chain1 is not chain2
         assert headers_obj.chain_count() == 2
         assert (headers_obj.chainwork_to_height(chain1, fork_point.height) ==
@@ -374,3 +380,40 @@ class TestHeaders(object):
         assert chain6.work == chain2.work
         assert chain5.tip.hash == chain1.tip.hash
         assert chain6.tip.hash == chain6.tip.hash
+
+    def test_connect(self, tmpdir):
+        testnet_genesis_checkpoint = CheckPoint(BitcoinTestnet.genesis_header, 0, 0)
+        headers_obj = create_headers(tmpdir, testnet_genesis_checkpoint)
+
+        header1 = bytes.fromhex(
+            '0100000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea330900000000bac8b0fa'
+            '927c0ac8234287e33c5f74d38d354820e24756ad709d7038fc5f31f020e7494dffff001d03e4b672'
+        )
+        header2 = bytes.fromhex(
+            '0100000006128e87be8b1b4dea47a7247d5528d2702c96826c7a648497e773b800000000e241352e'
+            '3bec0a95a6217e10c3abb54adfa05abb12c126695595580fb92e222032e7494dffff001d00d23534'
+        )
+
+        # Test cache-clearing
+        headers_obj.max_cache_size = 1
+
+        # Test they connect
+        headers_obj.connect(header1)
+        headers_obj.connect(header2)
+
+        # Test re-adding is OK
+        headers_obj.connect(header1)
+
+        # Test bad bits raises
+        bad_header = bytearray(header1)
+        bad_header[72:76] = pack_le_uint32(472518933)
+        with pytest.raises(IncorrectBits) as e:
+            headers_obj.connect(bad_header)
+        assert str(e.value).endswith('requires bits 0x486604799')
+
+        # Test insufficient PoW raises
+        bad_header = bytearray(header1)
+        bad_header[0] = 2
+        with pytest.raises(InsufficientPoW) as e:
+            headers_obj.connect(bad_header)
+        assert 'exceeds its target' in str(e.value)
