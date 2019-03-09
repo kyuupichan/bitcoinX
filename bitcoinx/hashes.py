@@ -27,10 +27,11 @@
 
 
 import hashlib
+import hmac
 
 __all__ = (
-    'sha1', 'sha256', 'ripemd160',
-    'double_sha256', 'hash160',
+    'sha1', 'sha256', 'sha512', 'double_sha256',
+    'ripemd160', 'hash160',
     'hash_to_hex_str', 'hex_str_to_hash', 'hash_to_value',
 )
 
@@ -50,6 +51,11 @@ def sha1(x):
 def sha256(x):
     '''Simple wrapper of hashlib sha256.'''
     return _sha256(x).digest()
+
+
+def sha512(x):
+    '''Simple wrapper of hashlib sha256.'''
+    return _sha512(x).digest()
 
 
 def ripemd160(x):
@@ -89,3 +95,11 @@ def hash_to_value(x):
 def hex_str_to_hash(x):
     '''Convert a displayed hex string to a binary hash.'''
     return bytes(reversed(bytes_fromhex(x)))
+
+
+if hasattr(hmac, 'digest'):
+    # Python 3.7+
+    hmac_digest = hmac.digest
+else:
+    def hmac_digest(key, msg, digest):
+        return hmac.new(key, msg, digest).digest()

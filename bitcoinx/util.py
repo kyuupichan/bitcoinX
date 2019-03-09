@@ -45,6 +45,8 @@ def map_file(file_name, new_size=None):
 be_bytes_to_int = partial(int.from_bytes, byteorder='big')
 
 
-def int_to_be_bytes(value):
+def int_to_be_bytes(value, size=None):
     '''Converts an integer to a big-endian sequence of bytes'''
-    return value.to_bytes((value.bit_length() + 7) // 8, 'big')
+    if size is None:
+        size = (value.bit_length() + 7) // 8
+    return value.to_bytes(size, 'big')

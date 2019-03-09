@@ -1,0 +1,504 @@
+# Copyright (c) 2019, Neil Booth
+#
+# All rights reserved.
+#
+# The MIT License (MIT)
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+# WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
+# Some parts based on ideas from the "coincurve" package.
+
+'''Public and Private keys of various kinds.'''
+
+__all__ = (
+    'PrivateKey', 'PublicKey',
+    'KeyException', 'InvalidSignatureError', 'DecryptionError',
+    'message_sig_to_base64', 'base64_to_message_sig',
+)
+
+import base64
+from os import urandom
+
+from electrumsv_secp256k1 import ffi, lib, create_context
+
+from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv, BadPaddingError
+from .base58 import base58_encode_check, base58_decode_check, is_minikey
+from .coin import Bitcoin
+from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
+from .packing import pack_byte, pack_varbytes
+from .util import be_bytes_to_int, int_to_be_bytes
+
+
+KEY_SIZE = 32
+GROUP_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+CONTEXT = create_context()
+CDATA_SIG_LENGTH = 64
+MAX_SIG_LENGTH = 72
+EC_COMPRESSED = lib.SECP256K1_EC_COMPRESSED
+EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED
+SIGNED_MESSAGE_PREFIX = pack_varbytes('Bitcoin Signed Message:\n'.encode())
+
+
+class KeyException(Exception):
+    pass
+
+
+class InvalidSignatureError(KeyException):
+    pass
+
+
+class DecryptionError(KeyException):
+    pass
+
+
+def _to_32_bytes(value):
+    if not isinstance(value, (bytes, bytearray)):
+        raise TypeError('value must have type bytes or bytearray')
+    if len(value) != 32:
+        raise ValueError('value must be 32 bytes')
+    return bytes(value)
+
+
+def _message_hash(message, hasher):
+    msg_hash = hasher(message) if hasher is not None else message
+    if len(msg_hash) != 32:
+        raise ValueError('hashed message must be 32 bytes')
+    return msg_hash
+
+
+def _serialize_recoverable(recover_sig, context):
+    '''Return a 65-byte compact serialized signature.'''
+    output = ffi.new(f'unsigned char [{CDATA_SIG_LENGTH}]')
+    recid = ffi.new('int *')
+
+    lib.secp256k1_ecdsa_recoverable_signature_serialize_compact(
+        context, output, recid, recover_sig)
+
+    # recid is 0, 1, 2 or 3.
+    return bytes(ffi.buffer(output, CDATA_SIG_LENGTH)) + bytes([recid[0]])
+
+
+def _deserialize_recoverable_sig(recover_sig_bytes):
+    if len(recover_sig_bytes) != 65:
+        raise InvalidSignatureError('invalid recoverable signature')
+    recoverable_sig = ffi.new('secp256k1_ecdsa_recoverable_signature *')
+    recid = recover_sig_bytes[-1]
+    if not 0 <= recid <= 3:
+        raise InvalidSignatureError('invalid recoverable signature')
+    if not lib.secp256k1_ecdsa_recoverable_signature_parse_compact(
+            CONTEXT, recoverable_sig, recover_sig_bytes, recid):
+        raise InvalidSignatureError('invalid recoverable signature')
+    return recoverable_sig
+
+
+def _message_sig_to_recoverable_sig(message_sig):
+    '''Return a recoverable signature from a message signature.'''
+    if not isinstance(message_sig, (bytes, bytearray)) or len(message_sig) != 65:
+        raise InvalidSignatureError('message signature must be 65 bytes')
+    if not 27 <= message_sig[0] < 35:
+        raise InvalidSignatureError('invalid message signature format')
+    return bytes(message_sig[1:]) + pack_byte((message_sig[0] - 27) & 3)
+
+
+def _recoverable_sig_to_message_sig(recoverable_sig, compressed):
+    leading_byte = 27 + (4 if compressed else 0) + recoverable_sig[-1]
+    return pack_byte(leading_byte) + recoverable_sig[:64]
+
+
+def message_sig_to_base64(message_sig):
+    '''Converts a message signature to a base64 ASCII string, as is traditional.'''
+    return base64.b64encode(message_sig).decode()
+
+
+def base64_to_message_sig(message_sig):
+    '''Converts a base64 ASCII message signature to binary.'''
+    return base64.b64decode(message_sig.encode())
+
+
+class PrivateKey:
+
+    def __init__(self, secret, compressed=True):
+        '''Construct a PrivateKey from 32 big-endian bytes.
+
+        compressed is passed on to the PublicKey constructor to indicate whether the
+        public key should return an compressed serialization.
+        '''
+        if isinstance(secret, (bytes, bytearray)):
+            if len(secret) != KEY_SIZE:
+                raise ValueError('private key must be 32 bytes')
+            # ffi doesn't take bytearray objects
+            secret = bytes(secret)
+            if not lib.secp256k1_ec_seckey_verify(CONTEXT, secret):
+                raise ValueError('private key out of range')
+            self._secret = secret
+        else:
+            self._secret = bytes(ffi.buffer(secret, 32))
+        self._compressed = compressed
+
+    def __eq__(self, other):
+        '''Return True if this PrivateKey is equal to another.'''
+        return self._secret == other._secret
+
+    def to_int(self):
+        '''Return the private key's representation as an integer.'''
+        return be_bytes_to_int(self._secret)
+
+    def to_hex(self):
+        '''Return the private key's representation as a hexidecimal string.'''
+        return self._secret.hex()
+
+    def to_bytes(self):
+        '''Return the private key's representation as bytes (32 bytes, big-endian).'''
+        return self._secret
+
+    @classmethod
+    def from_int(cls, value):
+        '''Contruct a PrivateKey from an unsigned integer.'''
+        return cls(int_to_be_bytes(value, 32), True)
+
+    @classmethod
+    def from_hex(cls, hex_str):
+        '''Contruct a PrivateKey from a hexadecimal string of 64 characters.
+
+        There is no automatic padding.'''
+        return cls(bytes.fromhex(hex_str), True)
+
+    @classmethod
+    def from_minikey(cls, minikey):
+        '''Construct a PrivateKey from its Minikey encoding (used in Casascius coins).
+
+        Minikeys used uncompressed public keys.'''
+        if not is_minikey(minikey):
+            raise ValueError('invalid minikey')
+        return cls(sha256(minikey.encode()), False)
+
+    @classmethod
+    def from_random(cls, *, source=urandom):
+        while True:
+            try:
+                return cls(source(32), True)
+            except ValueError:
+                pass
+
+    @classmethod
+    def from_WIF(cls, coin, txt):
+        '''Construct a PriveKey from the WIF form for the given coin.'''
+        raw = base58_decode_check(txt)
+        if (len(raw) == 33 or len(raw) == 34 and raw[-1] == 0x01) and raw[0] == coin.WIF_byte:
+            return cls(raw[1:33], len(raw) == 34)
+        raise ValueError('invalid WIF private key')
+
+    def to_WIF(self, coin, compressed):
+        '''Return the WIF form of the private key for the given coin.
+
+        Set compressed to True to indicate the corresponding public key should be the
+        compressed form.
+        '''
+        payload = pack_byte(coin.WIF_byte) + self._secret
+        if compressed:
+            payload += pack_byte(0x01)
+        return base58_encode_check(payload)
+
+    def add(self, value):
+        '''Return a new PrivateKey instance adding value to our secret.'''
+        secret = ffi.new('unsigned char [32]', self._secret)
+        if not lib.secp256k1_ec_privkey_tweak_add(CONTEXT, secret, _to_32_bytes(value)):
+            raise ValueError('value or result out of range')
+        return PrivateKey(secret, self._compressed)
+
+    def multiply(self, value):
+        '''Return a new PrivateKey instance multiplying value by our secret.'''
+        secret = ffi.new('unsigned char [32]', self._secret)
+        if not lib.secp256k1_ec_privkey_tweak_mul(CONTEXT, secret, _to_32_bytes(value)):
+            raise ValueError('value or result out of range')
+        return PrivateKey(secret, self._compressed)
+
+    def sign(self, message, hasher=sha256):
+        '''Sign a message (more correctly its hash, by default SHA256).'''
+        msg_hash = _message_hash(message, hasher)
+        signature = ffi.new('secp256k1_ecdsa_signature *')
+        signed = lib.secp256k1_ecdsa_sign(CONTEXT, signature, msg_hash, self._secret,
+                                          ffi.NULL, ffi.NULL)
+        if not signed:
+            raise ValueError('invalid private key')
+
+        size = ffi.new('size_t *', MAX_SIG_LENGTH)
+        data = ffi.new(f'unsigned char [{MAX_SIG_LENGTH}]')
+        result = lib.secp256k1_ecdsa_signature_serialize_der(CONTEXT, data, size, signature)
+        # Failure should never happen - MAX_SIG_LENGTH bytes is always enough
+        assert result
+        return bytes(ffi.buffer(data, size[0]))
+
+    def sign_recoverable(self, message, hasher=sha256):
+        '''Sign a message (more correctly its hash, by default SHA256) so that the public key can
+        be recovered from the signature.
+        '''
+        msg_hash = _message_hash(message, hasher)
+        signature = ffi.new('secp256k1_ecdsa_recoverable_signature *')
+        signed = lib.secp256k1_ecdsa_sign_recoverable(CONTEXT, signature, msg_hash, self._secret,
+                                                      ffi.NULL, ffi.NULL)
+        if not signed:
+            raise ValueError('invalid private key')
+
+        return _serialize_recoverable(signature, CONTEXT)
+
+    def sign_message(self, message, hasher=double_sha256):
+        '''Sign a message compatibly with bitcoind (and ElectrumSV).
+
+        Compressed appears to be legacy and the signature is valid whether True or False;
+        in any case only the first byte of the signature changes.
+        '''
+        msg_to_sign = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
+        recoverable_sig = self.sign_recoverable(msg_to_sign, hasher)
+        return _recoverable_sig_to_message_sig(recoverable_sig, compressed=self._compressed)
+
+    def public_key(self):
+        '''Return a PublicKey corresponding to this private key.'''
+        return PublicKey.from_PrivateKey(self)
+
+    def shared_secret(self, public_key, message, hasher=sha256):
+        '''Return a shared secret (as a public key) given their public key and a message.
+
+        The deterministic key is formed by hashing the message; alternatively it can be
+        passed in directly if hasher is None.
+        '''
+        deterministic_key = _message_hash(message, hasher)
+        private_key2 = self.add(deterministic_key)
+        public_key2 = public_key.add(deterministic_key)
+        return public_key2.multiply(private_key2._secret)
+
+    def ecdh_shared_secret(self, public_key):
+        '''Return an Elliptic Curve Diffie-Helman shared secret (as a public key) given their
+        public key.
+
+        This is a degenerate form of shared_secret() where the deterministic key is zero.
+        '''
+        return public_key.multiply(self._secret)
+
+    def decrypt_message(self, message, magic=b'BIE1'):
+        '''Decrypt a message encrypted with PublicKey.encrypt_message().'''
+        mlen = len(magic)
+        if len(message) < 81 + mlen:
+            raise DecryptionError('message too short')
+        if not message.startswith(magic):
+            raise DecryptionError('bad magic')
+
+        try:
+            ephemeral_pubkey = PublicKey.from_bytes(message[mlen: mlen + 33])
+        except ValueError as e:
+            raise DecryptionError(f'invalid ephemeral public key: {e}') from None
+
+        ciphertext = message[mlen + 33:-32]
+        hmac = message[-32:]
+        key = sha512(self.ecdh_shared_secret(ephemeral_pubkey).to_bytes())
+        iv, key_e, key_m = key[0:16], key[16:32], key[32:]
+
+        if hmac_digest(key_m, message[:-32], _sha256) != hmac:
+            raise DecryptionError('bad HMAC')
+
+        try:
+            return aes_decrypt_with_iv(key_e, iv, bytes(ciphertext))
+        except BadPaddingError as e:
+            raise DecryptionError(f'{e}') from None
+
+
+class PublicKey:
+
+    def __init__(self, public_key, compressed):
+        '''Construct a PublicKey.
+
+        This function is not intended to be called directly; use instead one of the
+        "from_" class methods.
+
+        compressed is True if to_bytes() serializations yield public keys of 33 bytes.
+        '''
+        if not repr(public_key).startswith("<cdata 'secp256k1_pubkey *'"):
+            raise TypeError('PublicKey constructor requires a secp256k1_pubkey')
+        self.public_key = public_key
+        self._compressed = compressed
+
+    def __eq__(self, other):
+        '''Return True if this PublicKey is equal to another.'''
+        return self._serialize(True) == other._serialize(True)
+
+    def _serialize(self, compressed):
+        '''Serialize a PublicKey to bytes.
+
+        Return the compressed form if compressed is True, otherwise the uncompressed form.'''
+        if compressed:
+            length, flag = 33, EC_COMPRESSED
+        else:
+            length, flag = 65, EC_UNCOMPRESSED
+        result = ffi.new(f'unsigned char [{length}]')
+        rlength = ffi.new('size_t *', length)
+
+        lib.secp256k1_ec_pubkey_serialize(CONTEXT, result, rlength, self.public_key, flag)
+        return bytes(ffi.buffer(result, length))
+
+    def is_compressed(self):
+        '''Return true if it serializes to 33 bytes.'''
+        return self._compressed
+
+    def to_explicit_form(self, compressed=True):
+        '''Return the public key with the explicit serialization.'''
+        if bool(compressed) is bool(self._compressed):
+            return self
+        return PublicKey(self.public_key, compressed)
+
+    def to_bytes(self):
+        '''Serialize a PublicKey to bytes.'''
+        return self._serialize(self._compressed)
+
+    @classmethod
+    def from_bytes(cls, data):
+        '''Construct a PublicKey from its serialized bytes.
+
+        data should be bytes of length 33 or 65.'''
+        public_key = ffi.new('secp256k1_pubkey *')
+        if not lib.secp256k1_ec_pubkey_parse(CONTEXT, public_key, bytes(data), len(data)):
+            raise ValueError('invalid public key')
+        return cls(public_key, len(data) == 33)
+
+    @classmethod
+    def from_PrivateKey(cls, private_key):
+        '''Construct a PublicKey from a private key.
+
+        The curve's generator point G is multiplied by the secret.
+        '''
+        public_key = ffi.new('secp256k1_pubkey *')
+        created = lib.secp256k1_ec_pubkey_create(CONTEXT, public_key, private_key._secret)
+        if not created:
+            raise ValueError('invalid private key')
+        return cls(public_key, private_key._compressed)
+
+    @classmethod
+    def from_recoverable_signature(cls, recoverable_sig, message, hasher=sha256):
+        '''Constuct a PublicKey from a recoverable signature and message (hash) that was
+        signed.'''
+        msg_hash = _message_hash(message, hasher)
+        recoverable_sig = _deserialize_recoverable_sig(recoverable_sig)
+        public_key = ffi.new('secp256k1_pubkey *')
+        if not lib.secp256k1_ecdsa_recover(CONTEXT, public_key, recoverable_sig, msg_hash):
+            raise InvalidSignatureError('invalid recoverable signature')
+        return cls(public_key, True)
+
+    @classmethod
+    def from_signed_message(cls, message_sig, message, hasher=double_sha256):
+        '''Contruct a PublicKey from a message and its signature.'''
+        message = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
+        recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
+        return cls.from_recoverable_signature(recoverable_sig, message, hasher)
+
+    def to_hex(self):
+        '''Convert a PublicKey to a hexadecimal string.'''
+        return self.to_bytes().hex()
+
+    @classmethod
+    def from_hex(cls, hex_str):
+        '''Construct a PublicKey from a hexadecimal string.'''
+        return cls.from_bytes(bytes.fromhex(hex_str))
+
+    def to_point(self):
+        '''Return the PublicKey as an (x, y) point on the curve.'''
+        data = self._serialize(False)
+        x = be_bytes_to_int(data[1:33])
+        y = be_bytes_to_int(data[33:])
+        return x, y
+
+    @classmethod
+    def from_point(cls, x, y):
+        '''Construct a PublicKey from a (x, y) point on the curve.'''
+        x_bytes = int_to_be_bytes(x, 32)
+        y_bytes = int_to_be_bytes(y, 32)
+        return cls.from_bytes(b''.join((b'\x04', x_bytes, y_bytes)))
+
+    def to_address(self, coin):
+        '''Return the public key as a bitcoin P2PKH address.'''
+        return base58_encode_check(pack_byte(coin.P2PKH_verbyte) + hash160(self.to_bytes()))
+
+    def add(self, value):
+        '''Return a new PublicKey instance formed by adding value*G to this one.
+
+        Preserves compressed / uncompressed serialization.'''
+        public_key = ffi.new('secp256k1_pubkey *', self.public_key[0])
+        if not lib.secp256k1_ec_pubkey_tweak_add(CONTEXT, public_key, _to_32_bytes(value)):
+            raise ValueError('value or result out of range')
+        return PublicKey(public_key, self._compressed)
+
+    def multiply(self, value):
+        '''Return a new PublicKey instance formed by multiplying this one by value (i.e. adding
+        it to itself value times).
+
+        Preserves compressed / uncompressed serialization.
+        '''
+        public_key = ffi.new('secp256k1_pubkey *', self.public_key[0])
+        if not lib.secp256k1_ec_pubkey_tweak_mul(CONTEXT, public_key, _to_32_bytes(value)):
+            raise ValueError('value or result out of range')
+        return PublicKey(public_key, self._compressed)
+
+    @classmethod
+    def combine_keys(cls, public_keys):
+        '''Return a new PublicKey equal to the sum of the given PublicKeys.
+
+        The result serializes compressed if any input does.
+        '''
+        lib_keys = [pk.public_key for pk in public_keys]
+        if not lib_keys:
+            raise ValueError('no public keys to combine')
+        public_key = ffi.new('secp256k1_pubkey *')
+        if not lib.secp256k1_ec_pubkey_combine(CONTEXT, public_key, lib_keys, len(lib_keys)):
+            raise ValueError('the sum of the public keys is invalid')
+        return cls(public_key, any(pk._compressed for pk in public_keys))
+
+    def verify_message(self, message_sig, message, hasher=double_sha256):
+        '''Verify a message signed with bitcoind (and ElectrumSV).'''
+        recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
+        msg_to_sign = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
+        return self.verify_signature(recoverable_sig, msg_to_sign, hasher)
+
+    def verify_signature(self, signature, message, hasher=sha256):
+        '''Verify a serialized signature.  Return True if good otherwise False.'''
+        msg_hash = _message_hash(message, hasher)
+        cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
+        sig_len = len(signature)
+        # Handle recoverable and normal signatures
+        if sig_len == 65:
+            recoverable_sig = _deserialize_recoverable_sig(signature)
+            lib.secp256k1_ecdsa_recoverable_signature_convert(
+                CONTEXT, cdata_sig, recoverable_sig)
+        else:
+            if not lib.secp256k1_ecdsa_signature_parse_der(
+                    CONTEXT, cdata_sig, signature, sig_len):
+                raise InvalidSignatureError('invalid DER-encoded signature')
+
+        return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self.public_key))
+
+    def encrypt_message(self, message, magic=b'BIE1'):
+        '''Encrypt a message using ECIES.
+
+        AES-128-CBC with PKCS7 is used as the cipher; hmac-sha256 is used as the MAC.
+        '''
+        ephemeral_key = PrivateKey.from_random()
+        key = sha512(ephemeral_key.ecdh_shared_secret(self)._serialize(True))
+        iv, key_e, key_m = key[0:16], key[16:32], key[32:]
+        ciphertext = aes_encrypt_with_iv(key_e, iv, bytes(message))
+        ephemeral_pubkey = ephemeral_key.public_key()._serialize(True)
+        encrypted_data = b''.join((magic, ephemeral_pubkey, ciphertext))
+        return encrypted_data + hmac_digest(key_m, encrypted_data, _sha256)
