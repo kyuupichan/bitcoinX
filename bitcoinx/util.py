@@ -25,6 +25,7 @@
 
 '''Internal utilities'''
 
+from functools import partial
 import mmap
 
 
@@ -38,3 +39,12 @@ def map_file(file_name, new_size=None):
         if new_size is not None:
             f.truncate(new_size)
         return mmap.mmap(f.fileno(), 0)
+
+
+'''Converts big-endian bytes to an integer.'''
+be_bytes_to_int = partial(int.from_bytes, byteorder='big')
+
+
+def int_to_be_bytes(value):
+    '''Converts an integer to a big-endian sequence of bytes'''
+    return value.to_bytes((value.bit_length() + 7) // 8, 'big')
