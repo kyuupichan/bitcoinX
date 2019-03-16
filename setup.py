@@ -20,7 +20,7 @@ setuptools.setup(
     name='bitcoinX',
     version=version,
     python_requires='>=3.6',
-    install_requires=['attrs'],
+    install_requires=['attrs', 'pyaes'],
     packages=['bitcoinx'],
     description='Library of Bitcoin functions',
     author='Neil Booth',

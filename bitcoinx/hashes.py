@@ -25,15 +25,17 @@
 
 '''Cryptographic hash functions and related classes.'''
 
-
-import hashlib
-import hmac
-
 __all__ = (
     'sha1', 'sha256', 'sha512', 'double_sha256',
     'ripemd160', 'hash160',
+    'hmac_digest', 'hmac_sha512_halves',
     'hash_to_hex_str', 'hex_str_to_hash', 'hash_to_value',
 )
+
+from functools import partial
+
+import hashlib
+import hmac
 
 
 _sha1 = hashlib.sha1
@@ -103,3 +105,8 @@ if hasattr(hmac, 'digest'):
 else:
     def hmac_digest(key, msg, digest):
         return hmac.new(key, msg, digest).digest()
+
+
+def hmac_sha512_halves(key, msg):
+    hmac = hmac_digest(key, msg, _sha512)
+    return hmac[:32], hmac[32:]
