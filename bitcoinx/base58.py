@@ -9,10 +9,10 @@
 
 __all__ = (
     'base58_decode', 'base58_encode', 'base58_decode_check', 'base58_encode_check',
-    'Base58Error',
+    'Base58Error', 'is_minikey',
 )
 
-from .hashes import double_sha256
+from .hashes import double_sha256, sha256
 from .util import int_to_be_bytes, be_bytes_to_int
 
 
@@ -86,3 +86,14 @@ def base58_encode_check(payload):
     '''
     be_bytes = payload + double_sha256(payload)[:4]
     return base58_encode(be_bytes)
+
+
+def is_minikey(text):
+    # Minikeys are 22 or 30 characters.  A valid minikey must begin with an 'S', be in
+    # base58, and when suffixed with '?' have its SHA256 hash begin with a zero byte.
+    # They are widely used in Casascius physical bitcoins, where the address corresponded
+    # to an uncompressed public key.
+    return (len(text) in (22, 30)
+            and text[0] == 'S'
+            and all(c in base58_cmap for c in text)
+            and sha256((text + '?').encode())[0] == 0x00)

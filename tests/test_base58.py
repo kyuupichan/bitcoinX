@@ -1,5 +1,3 @@
-import array
-import io
 import os
 
 import pytest
@@ -65,3 +63,16 @@ def test_base58_decode_check():
 def test_base58_encode_check():
     with pytest.raises(TypeError):
         base58_encode_check('foo')
+
+
+@pytest.mark.parametrize("key,value", (
+    ('', False),                                 # Incorrect length
+    ('Se8PHsmtYGZkpciL1cWVh7W', False),          # Incorrect length
+    ('W8ZcbzkX9TSoJ54SRV9tXR', False),           # Does not begin with S
+    ('SQiH93YO37ZF9rSnWjMg3Z1IO1zHHo', False),   # Not Base58
+    ('S8sv8WF3zptsD2rMHsSc9D', False),           # Bad sha256 when suffixed with '?'
+    ('SZEfg4eYxCJoqzumUqP34g', True),            # Good length 22
+    ('S6c56bnXQiBjk9mqSYE7ykVQ7NzrRy', True),    # Good length 30
+))
+def test_is_minikey(key, value):
+    assert is_minikey(key) == value
