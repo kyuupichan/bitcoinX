@@ -50,3 +50,17 @@ def int_to_be_bytes(value, size=None):
     if size is None:
         size = (value.bit_length() + 7) // 8
     return value.to_bytes(size, 'big')
+
+
+# Method decorator.  To be used for calculations that will always deliver the same result.
+# The method cannot take any arguments and should be accessed as an attribute.
+class cachedproperty(object):
+
+    def __init__(self, f):
+        self.f = f
+
+    def __get__(self, obj, type):
+        obj = obj or type
+        value = self.f(obj)
+        setattr(obj, self.f.__name__, value)
+        return value

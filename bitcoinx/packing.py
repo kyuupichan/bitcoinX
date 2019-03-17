@@ -95,10 +95,10 @@ def pack_varint(n):
     if n < 253:
         return pack_byte(n)
     if n < 65536:
-        return pack_byte(253) + pack_le_uint16(n)
+        return b'\xfd' + pack_le_uint16(n)
     if n < 4294967296:
-        return pack_byte(254) + pack_le_uint32(n)
-    return pack_byte(255) + pack_le_uint64(n)
+        return b'\xfe' + pack_le_uint32(n)
+    return b'\xff' + pack_le_uint64(n)
 
 
 def pack_varbytes(data):

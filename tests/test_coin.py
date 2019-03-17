@@ -61,3 +61,18 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
     assert header.hash_value() == hash_to_value(header_hash)
     assert header.hex_str() == hash_to_hex_str(header_hash)
     assert 'height=0' in str(header)
+
+
+def test_from_WIF_byte():
+    for coin in all_coins:
+        assert Coin.from_WIF_byte(coin.WIF_byte) is coin
+    with pytest.raises(ValueError):
+        Coin.from_WIF_byte(0x01)
+
+
+def test_lookup_xver_bytes():
+    for coin in all_coins:
+        assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (coin, True)
+        assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (coin, False)
+    with pytest.raises(ValueError):
+        Coin.lookup_xver_bytes(bytes.fromhex("043587ff"))

@@ -16,6 +16,7 @@ install:
   - pip install coveralls
   - pip install electrumsv-secp256k1
   - pip install pycodestyle
+  - pip install pyaes
 #  - pip install Sphinx
 # command to run tests
 script:

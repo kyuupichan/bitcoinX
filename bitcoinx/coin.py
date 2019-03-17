@@ -24,7 +24,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Bitcoin', 'BitcoinTestnet', 'Coin', 'Header'
+    'Bitcoin', 'BitcoinTestnet', 'Coin', 'Header', 'all_coins',
 )
 
 import attr
@@ -74,7 +74,8 @@ class Header(object):
 
 class Coin(object):
 
-    def __init__(self, name, genesis_header, required_bits, P2PKH_verbyte, WIF_byte):
+    def __init__(self, name, genesis_header, required_bits, P2PKH_verbyte, WIF_byte,
+                 xpub_verbytes, xprv_verbytes):
         self.name = name
         self.genesis_header = bytes.fromhex(genesis_header)
         self.genesis_bits = self.header_bits(self.genesis_header)
@@ -83,6 +84,8 @@ class Coin(object):
         self.required_bits = required_bits
         self.P2PKH_verbyte = P2PKH_verbyte
         self.WIF_byte = WIF_byte
+        self.xpub_verbytes = xpub_verbytes
+        self.xprv_verbytes = xprv_verbytes
 
     def bits_to_difficulty(self, bits):
         return Bitcoin.max_target / bits_to_target(bits)
@@ -108,6 +111,24 @@ class Coin(object):
     def header_work(self, raw_header):
         return bits_to_work(self.header_bits(raw_header))
 
+    @classmethod
+    def from_WIF_byte(cls, WIF_byte):
+        '''Return the coin using the given WIF byte.'''
+        for coin in all_coins:
+            if WIF_byte == coin.WIF_byte:
+                return coin
+        raise ValueError(f'invalid WIF byte {WIF_byte}')
+
+    @classmethod
+    def lookup_xver_bytes(cls, xver_bytes):
+        '''Returns a (coin, is_public_key) pair.'''
+        for coin in all_coins:
+            if xver_bytes == coin.xpub_verbytes:
+                return coin, True
+            if xver_bytes == coin.xprv_verbytes:
+                return coin, False
+        raise ValueError(f'invalid xver_bytes {xver_bytes}')
+
 
 Bitcoin = Coin(
     'Bitcoin mainnet',
@@ -116,6 +137,8 @@ Bitcoin = Coin(
     required_bits_mainnet,
     0x00,
     0x80,
+    bytes.fromhex("0488b21e"),
+    bytes.fromhex("0488ade4"),
 )
 
 
@@ -126,4 +149,9 @@ BitcoinTestnet = Coin(
     required_bits_testnet,
     0x6f,
     0xef,
+    bytes.fromhex("043587cf"),
+    bytes.fromhex("04358394"),
 )
+
+
+all_coins = (Bitcoin, BitcoinTestnet)
