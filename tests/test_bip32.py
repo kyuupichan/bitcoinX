@@ -345,3 +345,35 @@ class TestVectors():
                         "qaMWPrS7AANYqdq6vcBcBUdJCVVFceUvJFjaPdGZ2y9WACViL4L")
         assert xpub == ("xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQr"
                         "ADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y")
+
+
+@pytest.mark.parametrize("chain_str,answer", (
+    ("m/0", [0]),
+    ("m/1'", [0x80000001]),
+    ("m/1/2/3'/4/5/6", [1, 2, 0x80000003, 4, 5, 6]),
+    ("m/2147483647/2", [0x07fffffff, 2]),
+    ("m/2147483647'/255'", [0xffffffff, 0x800000ff]),
+))
+def test_bip32_decompose_chain_string(chain_str, answer):
+    assert bip32_decompose_chain_string(chain_str) == answer
+    assert bip32_is_valid_chain_string(exc)
+
+
+@pytest.mark.parametrize("bad_arg,exc", (
+    (1, TypeError),
+    (b'm/0', TypeError),
+    ('s/1', ValueError),
+    ("m/", ValueError),
+    ("m/1//2", ValueError),
+    ("m/1''", ValueError),
+    ("m/-1/2", ValueError),
+    ("m/2147483648/2", ValueError),
+    ("m/0xab/2", ValueError),
+    ("m/1/2/3/", ValueError),
+    ("m/1/2/2147483648'", ValueError),
+))
+def test_bip32_decompose_chain_string(bad_arg, exc):
+    with pytest.raises(exc):
+        bip32_decompose_chain_string(bad_arg)
+    if exc is ValueError:
+        assert not bip32_is_valid_chain_string(bad_arg)
