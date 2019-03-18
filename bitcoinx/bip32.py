@@ -211,7 +211,7 @@ def _from_extended_key(ekey):
     if is_public_key:
         key = BIP32PublicKey(PublicKey.from_bytes(ekey[45:]), derivation, coin)
     else:
-        if ekey[45] is not 0:
+        if ekey[45] != 0:
             raise ValueError(f'invalid extended private key prefix byte {ekey[45]}')
         key = BIP32PrivateKey(ekey[46:], derivation, coin)
 
