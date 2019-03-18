@@ -179,5 +179,6 @@ def _required_bits_testnet(headers, chain, height, timestamp, daa_height):
 def required_bits_testnet(headers, chain, height, timestamp):
     return _required_bits_testnet(headers, chain, height, timestamp, 1188697)
 
+
 def required_bits_scaling_testnet(headers, chain, height, timestamp):
     return _required_bits_testnet(headers, chain, height, timestamp, 2200)
