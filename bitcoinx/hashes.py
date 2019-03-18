@@ -99,7 +99,7 @@ def hex_str_to_hash(x):
 
 if hasattr(hmac, 'digest'):
     # Python 3.7+
-    hmac_digest = hmac.digest
+    hmac_digest = hmac.digest   # pylint: disable=no-member
 else:
     def hmac_digest(key, msg, digest):
         return hmac.new(key, msg, digest).digest()
