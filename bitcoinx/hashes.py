@@ -32,8 +32,6 @@ __all__ = (
     'hash_to_hex_str', 'hex_str_to_hash', 'hash_to_value',
 )
 
-from functools import partial
-
 import hashlib
 import hmac
 
@@ -108,5 +106,5 @@ else:
 
 
 def hmac_sha512_halves(key, msg):
-    hmac = hmac_digest(key, msg, _sha512)
-    return hmac[:32], hmac[32:]
+    hmacd = hmac_digest(key, msg, _sha512)
+    return hmacd[:32], hmacd[32:]
