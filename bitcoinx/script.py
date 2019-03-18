@@ -95,9 +95,9 @@ class Ops(IntEnum):
 
     # splice ops
     OP_CAT = 0x7e
-    OP_SPLIT = 0x7f,    # after monolith upgrade (May 2018)
-    OP_NUM2BIN = 0x80,  # after monolith upgrade (May 2018)
-    OP_BIN2NUM = 0x81,  # after monolith upgrade (May 2018)
+    OP_SPLIT = 0x7f    # after monolith upgrade (May 2018)
+    OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
+    OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
     OP_SIZE = 0x82
 
     # bit logic

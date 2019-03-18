@@ -41,7 +41,7 @@ def map_file(file_name, new_size=None):
         return mmap.mmap(f.fileno(), 0)
 
 
-'''Converts big-endian bytes to an integer.'''
+# Converts big-endian bytes to an integer
 be_bytes_to_int = partial(int.from_bytes, byteorder='big')
 
 
@@ -59,8 +59,8 @@ class cachedproperty(object):
     def __init__(self, f):
         self.f = f
 
-    def __get__(self, obj, type):
-        obj = obj or type
+    def __get__(self, obj, type_):
+        obj = obj or type_
         value = self.f(obj)
         setattr(obj, self.f.__name__, value)
         return value

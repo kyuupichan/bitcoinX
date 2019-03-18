@@ -375,14 +375,6 @@ class Headers(object):
             self._add_chain(chain)
         return chain
 
-    # FIXME: remove this; it's only used to set up tests
-    def _add_raw_header(self, raw_header):
-        '''Add a single header to storage if it connects, either to extend an existing chain or
-        create a new one.  Return the chain the header lies on.
-        '''
-        header_index = self._storage.append(raw_header)
-        return self._read_header(header_index)
-
     #
     # External API
     #

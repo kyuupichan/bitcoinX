@@ -26,9 +26,11 @@
 '''BIP32 implementation.'''
 
 __all__ = (
-    'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation', 'bip32_key_from_string'
+    'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation', 'bip32_key_from_string',
+    'bip32_decompose_chain_string', 'bip32_is_valid_chain_string',
 )
 
+import re
 
 import attr
 
@@ -40,6 +42,7 @@ from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
 from .util import cachedproperty
 
 HARDENED = 1 << 31
+PART_REGEX = re.compile("([0-9]+)'?$")
 
 
 @attr.s(slots=True, repr=False)
@@ -211,7 +214,7 @@ def _from_extended_key(ekey):
     if is_public_key:
         key = BIP32PublicKey(PublicKey.from_bytes(ekey[45:]), derivation, coin)
     else:
-        if ekey[45] is not 0:
+        if ekey[45] != 0:
             raise ValueError(f'invalid extended private key prefix byte {ekey[45]}')
         key = BIP32PrivateKey(ekey[46:], derivation, coin)
 
@@ -227,3 +230,41 @@ def bip32_key_from_string(ekey_str):
     return a BIP32PubKey or BIP32PrivKey.
     '''
     return _from_extended_key(base58_decode_check(ekey_str))
+
+
+def bip32_decompose_chain_string(chain_str):
+    '''Given a chain string return a list of unsigned integers.
+
+       For example:  m/1/2'/3'/0  -> [1, 0x80000002, 0x800000003, 0]
+                     m            -> []
+
+       The chain string must be 'm' or begin with 'm/'.
+    '''
+    if not isinstance(chain_str, str):
+        raise TypeError(f'chain_str {chain_str} must be a string')
+    if chain_str == 'm':
+        return []
+    if not chain_str.startswith('m/'):
+        raise ValueError(f'invalid bip32 chain: {chain_str}')
+
+    result = []
+    for part in chain_str.split('/')[1:]:
+        match = PART_REGEX.match(part)
+        if not match:
+            raise ValueError(f'invalid bip32 chain: {chain_str}')
+        value = int(match.group())
+        if value >= 2147483648:
+            raise ValueError(f'invalid bip32 chain: {chain_str}')
+        if part[-1] == "'":
+            value += HARDENED
+        result.append(value)
+    return result
+
+
+def bip32_is_valid_chain_string(chain_str):
+    '''Return True if chain_str is a valid BIP32 chain string.'''
+    try:
+        bip32_decompose_chain_string(chain_str)
+        return True
+    except ValueError:
+        return False
