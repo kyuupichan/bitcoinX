@@ -149,7 +149,7 @@ def required_bits_mainnet(headers, chain, height, _timestamp=None):
         return _required_bits_DAA(headers, chain, height)
 
 
-def required_bits_testnet(headers, chain, height, timestamp):
+def _required_bits_testnet(headers, chain, height, timestamp, daa_height):
     def prior_non_special_bits():
         genesis_bits = headers.coin.genesis_bits
         raw_header = headers.raw_header_at_height
@@ -164,7 +164,7 @@ def required_bits_testnet(headers, chain, height, timestamp):
     prior_timestamp = headers.coin.header_timestamp(prior_raw_header)
     is_slow = (timestamp - prior_timestamp) > 20 * 60
 
-    if height <= 1188697:
+    if height <= daa_height:
         # Note: testnet did not use the EDA
         if height % 2016 == 0:
             return _required_bits_fortnightly(headers, chain, height)
@@ -175,3 +175,11 @@ def required_bits_testnet(headers, chain, height, timestamp):
         if is_slow:
             return headers.coin.genesis_bits
         return _required_bits_DAA(headers, chain, height)
+
+
+def required_bits_testnet(headers, chain, height, timestamp):
+    return _required_bits_testnet(headers, chain, height, timestamp, 1188697)
+
+
+def required_bits_scaling_testnet(headers, chain, height, timestamp):
+    return _required_bits_testnet(headers, chain, height, timestamp, 2200)
