@@ -58,7 +58,8 @@ def create_chain(headers_obj, count, prior=None, good_bits=None):
     for n in range(count):
         new_header = random_header(prior.hash, orig_prior.height + n + 1, good_bits)
         new_headers.append(new_header)
-        chain = headers_obj._add_raw_header(new_header.raw)
+        header_index = headers_obj._storage.append(new_header.raw)
+        chain = headers_obj._read_header(header_index)
         prior = new_header
 
     assert len(headers_obj) == prior_len + count
