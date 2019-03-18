@@ -1,7 +1,7 @@
 import pytest
 
 from bitcoinx.bip32 import *
-from bitcoinx import Bitcoin, Base58Error, base58_decode_check, base58_encode_check
+from bitcoinx import Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check
 
 
 HARDENED = 1 << 31
@@ -12,8 +12,8 @@ MXPRV_TESTNET = 'tprv8ZgxMBicQKsPdVb2X1oSyPQX2pFVvH3m2sUPKdBZo7RYBNeJDrCf' \
 MPRIVKEY = bytes.fromhex('3bf4bf48d230ea94015f101bc3b0ffc917243f4b02e58252e5b341db87264500')
 MXPUB = 'xpub661MyMwAqRbcFARxxUUxAsjGGifn6Djc4YUsFbAisUU3GaEMn2BA' \
         'BYKVQTHrDtwvSfgY2bK8aFGyCNmB52SKjkFGP18sSRTNn1sCeez7Utd'
-MXPUB_TESTNET = 'tpubDAJwQB5kjxHGSk2phVowuVb58t9B1U5kQoT24A1h86XzGyhoSPf' \
-                'JFKfhvi6LYqcLWjKoyXjCbpcvgaHxAiKnkrfDVeZGujihY85wW9nteiX'
+MXPUB_TESTNET = 'tpubD6NzVbkrYhZ4WxcpQfU3No4dbqmS5cEfcB5Ac9DsDPDw1ru4rF2FKyzK' \
+                'eVNdkPuAEaDSeAq17M71tZFnTtHZdBhZSbtB7x7cMyTcQiWF5J8'
 
 
 mpubkey = bip32_key_from_string(MXPUB)
