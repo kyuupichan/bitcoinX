@@ -65,14 +65,23 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
 
 def test_from_WIF_byte():
     for coin in all_coins:
-        assert Coin.from_WIF_byte(coin.WIF_byte) is coin
+        if coin is BitcoinScalingTestnet:
+            # Testnet has the same identifiers as scaling testnet, as the latter is dumbed down.
+            assert Coin.from_WIF_byte(coin.WIF_byte) is BitcoinTestnet
+        else:
+            assert Coin.from_WIF_byte(coin.WIF_byte) is coin
     with pytest.raises(ValueError):
         Coin.from_WIF_byte(0x01)
 
 
 def test_lookup_xver_bytes():
     for coin in all_coins:
-        assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (coin, True)
-        assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (coin, False)
+        if coin is BitcoinScalingTestnet:
+            # Testnet has the same identifiers as scaling testnet, as the latter is dumbed down.
+            assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (BitcoinTestnet, True)
+            assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (BitcoinTestnet, False)
+        else:
+            assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (coin, True)
+            assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (coin, False)
     with pytest.raises(ValueError):
         Coin.lookup_xver_bytes(bytes.fromhex("043587ff"))

@@ -5,7 +5,7 @@ import os
 import pytest
 
 from bitcoinx import (
-    CheckPoint, Bitcoin, BitcoinTestnet, Headers,
+    CheckPoint, Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32,
 )
 from bitcoinx.work import *
@@ -170,6 +170,23 @@ def setup_compressed_headers(tmpdir, headers_file, ts_offset, coin):
 
     return headers
 
+def setup_gzipped_headers(tmpdir, headers_file, coin):
+    import gzip
+    with gzip.open(os.path.join(data_dir, headers_file), 'rb') as f:
+        first_height = unpack_le_uint32(f.read(4))[0]
+        header_count = unpack_le_uint32(f.read(4))[0]
+
+        raw_header = bytearray(80)
+        raw_header[0] = 1
+
+        checkpoint = CheckPoint(raw_header, first_height + header_count - 1, 0)
+        headers = create_headers(tmpdir, checkpoint, coin=coin)
+
+        for height in range(first_height, header_count):
+            headers.set_one(height, f.read(80))
+
+        return headers
+
 
 def test_mainnet_EDA_and_DAA(tmpdir):
     # Mainnet bits and timestamps from height 478400 to 564528 inclusive
@@ -198,3 +215,13 @@ def test_testnet(tmpdir, filename, first_height):
         required_bits = headers.required_bits(chain, height, header.timestamp)
         assert required_bits == header.bits
         prior_timestamp = header.timestamp
+
+def test_scalingtestnet(tmpdir):
+    headers = setup_gzipped_headers(tmpdir, "stnheaders.gz", BitcoinScalingTestnet)
+
+    first_height = 150
+    chain = headers.chains()[0]
+    for height in range(first_height, len(headers)):
+        header = headers.header_at_height(chain, height)
+        required_bits = headers.required_bits(chain, height, header.timestamp)
+        assert required_bits == header.bits
