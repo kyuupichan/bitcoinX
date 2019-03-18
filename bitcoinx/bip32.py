@@ -236,11 +236,14 @@ def bip32_decompose_chain_string(chain_str):
     '''Given a chain string return a list of unsigned integers.
 
        For example:  m/1/2'/3'/0  -> [1, 0x80000002, 0x800000003, 0]
+                     m            -> []
 
-       The chain string must begin with m/.
+       The chain string must be 'm' or begin with 'm/'.
     '''
     if not isinstance(chain_str, str):
         raise TypeError(f'chain_str {chain_str} must be a string')
+    if chain_str == 'm':
+        return []
     if not chain_str.startswith('m/'):
         raise ValueError(f'invalid bip32 chain: {chain_str}')
 

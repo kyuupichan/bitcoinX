@@ -348,6 +348,7 @@ class TestVectors():
 
 
 @pytest.mark.parametrize("chain_str,answer", (
+    ("m", []),
     ("m/0", [0]),
     ("m/1'", [0x80000001]),
     ("m/1/2/3'/4/5/6", [1, 2, 0x80000003, 4, 5, 6]),
@@ -364,6 +365,8 @@ def test_bip32_decompose_chain_string(chain_str, answer):
     (b'm/0', TypeError),
     ('s/1', ValueError),
     ("m/", ValueError),
+    ("mm", ValueError),
+    ("mm/1", ValueError),
     ("m/1//2", ValueError),
     ("m/1''", ValueError),
     ("m/-1/2", ValueError),
