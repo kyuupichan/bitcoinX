@@ -242,17 +242,17 @@ def bip32_decompose_chain_string(chain_str):
     '''
     if not isinstance(chain_str, str):
         raise TypeError(f'chain_str {chain_str} must be a string')
-    if chain_str == 'm':
-        return []
-    if not chain_str.startswith('m/'):
+
+    parts = chain_str.split('/')
+    if not parts or parts[0] != 'm':
         raise ValueError(f'invalid bip32 chain: {chain_str}')
 
     result = []
-    for part in chain_str.split('/')[1:]:
+    for part in parts[1:]:
         match = PART_REGEX.match(part)
         if not match:
             raise ValueError(f'invalid bip32 chain: {chain_str}')
-        value = int(match.group())
+        value = int(match.groups()[0])
         if value >= 2147483648:
             raise ValueError(f'invalid bip32 chain: {chain_str}')
         if part[-1] == "'":

@@ -357,7 +357,7 @@ class TestVectors():
 ))
 def test_bip32_decompose_chain_string(chain_str, answer):
     assert bip32_decompose_chain_string(chain_str) == answer
-    assert bip32_is_valid_chain_string(exc)
+    assert bip32_is_valid_chain_string(chain_str)
 
 
 @pytest.mark.parametrize("bad_arg,exc", (
@@ -375,7 +375,7 @@ def test_bip32_decompose_chain_string(chain_str, answer):
     ("m/1/2/3/", ValueError),
     ("m/1/2/2147483648'", ValueError),
 ))
-def test_bip32_decompose_chain_string(bad_arg, exc):
+def test_bip32_decompose_chain_string_bad(bad_arg, exc):
     with pytest.raises(exc):
         bip32_decompose_chain_string(bad_arg)
     if exc is ValueError:
