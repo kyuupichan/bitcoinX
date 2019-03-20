@@ -141,13 +141,15 @@ class TestPrivKey(object):
     def test_from_random(self):
         p = BIP32PrivateKey.from_random()
         assert isinstance(p, BIP32PrivateKey)
+
+        values = [bytes(range(64)), bytes(64)]
         def source(size):
-            assert size == 32
-            return bytes(range(32))
+            assert size == 64
+            return values.pop()
         p = BIP32PrivateKey.from_random(source=source)
         assert p.extended_key_string() == (
-            'xprv9s21ZrQH143K3EuJY8RRCWBLXFgB9WCcFKsv28bcaDy9LUZtXgH'
-            'e9q9V8kLi4aJ6H8r5X2wu9gz2ZYXbAhtsAcJKX8Z1Ackw6Wq1oi8DEEk'
+            'xprv9s21ZrQH143K2NukZg6wLLhBGTfK6twkq4qMuqCpX2uq3udoAx4'
+            'cKXFmyQrGAMn8TNyjNJThnPHL321QCxRxZpg7QQAvQFb7kePtCLcSrq3'
         )
 
     def test_identifier(self):

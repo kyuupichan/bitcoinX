@@ -37,7 +37,7 @@ import attr
 
 from .base58 import base58_decode_check, base58_encode_check
 from .coin import Bitcoin, Coin
-from .hashes import hmac_sha512_halves, hash160, sha256
+from .hashes import hmac_sha512_halves, hash160
 from .keys import PrivateKey, PublicKey
 from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
 from .util import cachedproperty
@@ -100,18 +100,23 @@ class BIP32PrivateKey(PrivateKey):
         return self._derivation.extended_key(coin, self._secret)
 
     @classmethod
+    def _from_parts(cls, privkey, chain_code, coin):
+        derivation = BIP32Derivation(chain_code, 0, 0, bytes(4))
+        return cls(privkey, derivation, coin)
+
+    @classmethod
     def from_seed(cls, seed, *, coin=Bitcoin):
         # This hard-coded message string seems to be coin-independent...
         privkey, chain_code = hmac_sha512_halves(b'Bitcoin seed', seed)
-        derivation = BIP32Derivation(chain_code, 0, 0, bytes(4))
-        return cls(privkey, derivation, coin)
+        return cls._from_parts(privkey, chain_code, coin)
 
     @classmethod
     def from_random(cls, *, source=urandom):
         '''Return a random, valid PrivateKey.'''
         while True:
             try:
-                return cls.from_seed(source(32))
+                data = source(64)
+                return cls._from_parts(data[:32], data[32:], Bitcoin)
             except ValueError:
                 pass
 
