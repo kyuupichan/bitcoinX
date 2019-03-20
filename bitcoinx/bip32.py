@@ -30,13 +30,14 @@ __all__ = (
     'bip32_decompose_chain_string', 'bip32_is_valid_chain_string',
 )
 
+from os import urandom
 import re
 
 import attr
 
 from .base58 import base58_decode_check, base58_encode_check
 from .coin import Bitcoin, Coin
-from .hashes import hmac_sha512_halves, hash160
+from .hashes import hmac_sha512_halves, hash160, sha256
 from .keys import PrivateKey, PublicKey
 from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
 from .util import cachedproperty
@@ -105,6 +106,15 @@ class BIP32PrivateKey(PrivateKey):
         derivation = BIP32Derivation(chain_code, 0, 0, bytes(4))
         return cls(privkey, derivation, coin)
 
+    @classmethod
+    def from_random(cls, *, source=urandom):
+        '''Return a random, valid PrivateKey.'''
+        while True:
+            try:
+                return cls.from_seed(source(32))
+            except ValueError:
+                pass
+
     @cachedproperty
     def public_key(self):
         '''Return the corresponding BIP32PublicKey object.'''
@@ -142,11 +152,8 @@ class BIP32PrivateKey(PrivateKey):
         '''Return an extended key as a base58 string.'''
         return base58_encode_check(self._extended_key(coin))
 
-    def __str__(self):
-        return self.extended_key_string()
-
     def __repr__(self):
-        return f'BIP32PrivateKey("{self.extended_key_string()}")'
+        return f'BIP32PrivateKey("{str(self)}")'
 
 
 class BIP32PublicKey(PublicKey):

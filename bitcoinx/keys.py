@@ -172,8 +172,9 @@ class PrivateKey:
         return self._secret == other._secret
 
     def __str__(self):
-        '''Use hex as it is independent of coin / network.'''
-        return self.to_hex()
+        '''Return a hash of the private key, out of an abundance of caution.
+        To get a real string call to_hex() explicitly.'''
+        return sha256(self._secret).hex()
 
     def coin(self):
         '''Returns an implied coin if there is one, otherwise Bitcoin.'''
@@ -223,6 +224,7 @@ class PrivateKey:
 
     @classmethod
     def from_random(cls, *, source=urandom):
+        '''Return a random, valid PrivateKey.'''
         while True:
             try:
                 return cls(source(32), True)
