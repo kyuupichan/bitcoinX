@@ -28,7 +28,7 @@ __all__ = (
     'pack_le_int32', 'pack_le_int64',
     'pack_le_uint16', 'pack_le_uint32', 'pack_le_uint64',
     'pack_be_uint16', 'pack_be_uint32',
-    'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes',
+    'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes', 'pack_list',
     'unpack_le_int32', 'unpack_le_int32_from',
     'unpack_le_int64', 'unpack_le_int64_from',
     'unpack_le_uint16', 'unpack_le_uint16_from',
@@ -40,7 +40,7 @@ __all__ = (
     'read_le_int32', 'read_le_int64',
     'read_le_uint16', 'read_le_uint32', 'read_le_uint64',
     'read_be_uint16', 'read_be_uint32',
-    'read_varint', 'read_varbytes', 'read_many',
+    'read_varint', 'read_varbytes', 'read_list',
 )
 
 
@@ -106,6 +106,15 @@ def pack_varbytes(data):
     return pack_varint(len(data)) + data
 
 
+def pack_list(items, pack_one):
+    '''Pack a list of items.
+
+    Each item is packed with pack_one, the stream begins with the item count.'''
+    parts = [pack_varint(len(items))]
+    parts.extend(pack_one(item) for item in items)
+    return b''.join(parts)
+
+
 # Stream operations
 
 
@@ -164,8 +173,8 @@ def read_varbytes(read):
     return result
 
 
-def read_many(read_one, read):
+def read_list(read, read_one):
     '''Return a list of items.
 
-    The stream is prefixed by the item count, read_one reads one.'''
-    return [read_one(read) for i in range(read_varint(read))]
+    Each item is read with read_one, the stream begins with a count of the items.'''
+    return [read_one(read) for _ in range(read_varint(read))]

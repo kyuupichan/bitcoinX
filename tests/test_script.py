@@ -1,5 +1,9 @@
+import os
+
+import pytest
 
 from bitcoinx.script import *
+from bitcoinx import pack_varint
 
 
 def test_op_exports():
@@ -240,3 +244,166 @@ def test_Ops_members():
     assert Ops['OP_NOP8'].value == 183
     assert Ops['OP_NOP9'].value == 184
     assert Ops['OP_NOP10'].value == 185
+
+
+
+@pytest.mark.parametrize("member", Ops.__members__)
+def test_byte_exports(member):
+    assert globals()[f'b_{member}'] == bytes([globals()[member]])
+
+
+
+def test_P2PK_script():
+    for n in (33, 65):
+        data = os.urandom(n)
+        assert P2PK_script(data) == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
+
+
+def test_P2PK_script_bad():
+    data = os.urandom(20)
+    with pytest.raises(ValueError):
+        P2PK_script(data)
+
+
+def test_P2PKHK_script():
+    data = os.urandom(20)
+    assert P2PKH_script(data) == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
+                                  bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
+
+
+def test_P2PKH_script_bad():
+    data = os.urandom(33)
+    with pytest.raises(ValueError):
+        P2PKH_script(data)
+
+
+def test_P2SH_script():
+    data = os.urandom(20)
+    assert P2SH_script(data) == (bytes([OP_HASH160, len(data)]) + data +
+                                 bytes([OP_EQUAL]))
+
+
+def test_P2SH_script_bad():
+    data = os.urandom(33)
+    with pytest.raises(ValueError):
+        P2SH_script(data)
+
+
+@pytest.mark.parametrize("item,answer", (
+    (b'', b_OP_0),
+    (b'\x00', bytes([1, 0])),
+    (b'\x01', b_OP_1),
+    (b'\x02', b_OP_2),
+    (b'\x03', b_OP_3),
+    (b'\x04', b_OP_4),
+    (b'\x05', b_OP_5),
+    (b'\x06', b_OP_6),
+    (b'\x07', b_OP_7),
+    (b'\x08', b_OP_8),
+    (b'\x09', b_OP_9),
+    (b'\x0a', b_OP_10),
+    (b'\x0b', b_OP_11),
+    (b'\x0c', b_OP_12),
+    (b'\x0d', b_OP_13),
+    (b'\x0e', b_OP_14),
+    (b'\x0f', b_OP_15),
+    (b'\x10', b_OP_16),
+    (b'\x11', bytes([1, 0x11])),
+    (b'\x80', bytes([1, 0x80])),
+    (b'\x81', b_OP_1NEGATE),
+    (b'\x82', bytes([1, 0x82])),
+    (b'\xff', bytes([1, 0xff])),
+    (b'abcd', bytes([4]) +  b'abcd'),
+    (b'a' * 75, bytes([75]) +  b'a' * 75),
+    (b'a' * 76, bytes([OP_PUSHDATA1, 76]) +  b'a' * 76),
+    (b'a' * 255, bytes([OP_PUSHDATA1, 255]) +  b'a' * 255),
+    (b'a' * 256, bytes([OP_PUSHDATA2, 0, 1]) +  b'a' * 256),
+    (b'a' * 260, bytes([OP_PUSHDATA2, 4, 1]) +  b'a' * 260),
+    (b'a' * 65535, bytes([OP_PUSHDATA2, 0xff, 0xff]) +  b'a' * 65535),
+    (b'a' * 65536, bytes([OP_PUSHDATA4, 0, 0, 1, 0]) +  b'a' * 65536),
+    (b'a' * 65541, bytes([OP_PUSHDATA4, 5, 0, 1, 0]) +  b'a' * 65541),
+))
+def test_push_item(item, answer):
+    # Also tests push_and_drop_item
+    assert push_item(item) == answer
+    assert push_and_drop_item(item) == answer + bytes([OP_DROP])
+
+
+@pytest.mark.parametrize("items,answer", (
+    ([b''], b_OP_0 + b_OP_DROP),
+    ([b'', b''], b_OP_0 * 2 + b_OP_2DROP),
+    ([b'', b'\x04', b''], b_OP_0 + b_OP_4 + b_OP_0 + b_OP_2DROP + b_OP_DROP),
+))
+def test_push_and_drop_items(items, answer):
+    assert push_and_drop_items(items) == answer
+
+
+@pytest.mark.parametrize("value,encoding", (
+    (-1, b_OP_1NEGATE),
+    (-2, bytes([1, 0x82])),
+    (-127, bytes([1, 0xff])),
+    (-128, bytes([2, 128, 0x80])),
+    (0, b_OP_0),
+    (1, b_OP_1),
+    (2, b_OP_2),
+    (15, b_OP_15),
+    (16, b_OP_16),
+    (17, bytes([1, 17])),
+))
+def test_push_int(value, encoding):
+    assert push_int(value) == encoding
+
+
+@pytest.mark.parametrize("value,encoding", (
+    (-1, b'\x81'),
+    (-2, b'\x82'),
+    (-127, b'\xff'),
+    (-128, b'\x80\x80'),
+    (0, b''),
+    (1, b'\x01'),
+    (2, b'\x02'),
+    (16, b'\x10'),
+    (127, b'\x7f'),
+    (128, b'\x80\x00'),
+    (129, b'\x81\x00'),
+    (255, b'\xff\x00'),
+    (256, b'\x00\x01'),
+    (32767, b'\xff\x7f'),
+    (32768, b'\x00\x80\x00'),
+))
+def test_item_to_int(value, encoding):
+    assert item_to_int(encoding) == value
+
+
+@pytest.mark.parametrize("script,ops", (
+    (bytes([OP_RESERVED, OP_DUP, OP_NOP, OP_15, OP_HASH160, OP_1NEGATE]) + push_item(b'BitcoinSV'),
+     [OP_RESERVED, OP_DUP, OP_NOP, b'\x0f', OP_HASH160, b'\x81', b'BitcoinSV']),
+    (b'', []),
+    (push_item(b'a' * 80), [b'a' * 80]),
+    (push_item(b'a' * 256), [b'a' * 256]),
+    (push_item(b'a' * 65536), [b'a' * 65536]),
+))
+def test_script_ops(script, ops):
+    assert list(script_ops(script)) == ops
+
+
+@pytest.mark.parametrize("script", (
+    push_item(bytes(2))[:-1],
+    push_item(bytes(76))[:-1],
+    push_item(bytes(80))[:-1],
+    push_item(bytes(256))[:-1],
+    push_item(bytes(65536))[:-1],
+))
+def test_script_ops_truncated(script):
+    with pytest.raises(TruncatedScriptError):
+        list(script_ops(script))
+
+
+@pytest.mark.parametrize("script", (
+    1,
+    'hello',
+    [b''],
+))
+def test_script_ops_type_error(script):
+    with pytest.raises(TypeError):
+        list(script_ops(script))

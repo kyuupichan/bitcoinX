@@ -27,11 +27,24 @@
 
 
 __all__ = (
-    'Ops',
+    'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
+    'item_to_int', 'script_ops',
+    'P2PK_script', 'P2PKH_script', 'P2SH_script',
+    'TruncatedScriptError',
 )
 
 
 from enum import IntEnum
+
+from .packing import (
+    pack_byte, pack_le_uint16, pack_le_uint32,
+    unpack_le_uint16, unpack_le_uint32,
+)
+from .util import int_to_le_bytes, le_bytes_to_int
+
+
+class TruncatedScriptError(Exception):
+    pass
 
 
 class Ops(IntEnum):
@@ -169,5 +182,134 @@ class Ops(IntEnum):
     OP_NOP10 = 0xb9
 
 
+globals().update((f'b_{name}', pack_byte(value)) for name, value in Ops.__members__.items())
 globals().update(Ops.__members__)
+__all__ += tuple(f'b_{name}' for name in Ops.__members__.keys())
 __all__ += tuple(Ops.__members__.keys())
+
+
+b_OP_DUP_OP_HASH160 = bytes([OP_DUP, OP_HASH160])
+b_OP_EQUALVERIFY_OP_CHECKSIG = bytes([OP_EQUALVERIFY, OP_CHECKSIG])
+
+
+def P2PK_script(pubkey_bytes):
+    if len(pubkey_bytes) not in (33, 65):
+        raise ValueError('invalid pubkey_bytes')
+    return push_item(pubkey_bytes) + b_OP_CHECKSIG
+
+
+def P2PKH_script(hash160_bytes):
+    if len(hash160_bytes) != 20:
+        raise ValueError('invalid hash160_bytes')
+    return b''.join((b_OP_DUP_OP_HASH160, push_item(hash160_bytes),
+                     b_OP_EQUALVERIFY_OP_CHECKSIG))
+
+
+def P2SH_script(hash160_bytes):
+    if len(hash160_bytes) != 20:
+        raise ValueError('invalid hash160_bytes')
+    return b''.join((b_OP_HASH160, push_item(hash160_bytes), b_OP_EQUAL))
+
+
+def push_item(item):
+    '''Returns script bytes to push item on the stack.'''
+    dlen = len(item)
+    if dlen <= 1:
+        # Values 1...16 and 0x81 can be pushed specially as a single opcode.
+        if dlen == 0:
+            return b_OP_0
+        value = item[0]
+        if 0 < value <= 16:
+            return pack_byte(OP_1 + value - 1)
+        if value == 0x81:
+            return b_OP_1NEGATE
+
+    if dlen < OP_PUSHDATA1:
+        return pack_byte(dlen) + item
+    if dlen <= 0xff:
+        return pack_byte(OP_PUSHDATA1) + pack_byte(dlen) + item
+    if dlen <= 0xffff:
+        return pack_byte(OP_PUSHDATA2) + pack_le_uint16(dlen) + item
+    return pack_byte(OP_PUSHDATA4) + pack_le_uint32(dlen) + item
+
+
+def push_and_drop_item(item):
+    '''Push one item onto the stack and then pop it off.'''
+    return push_item(item) + b_OP_DROP
+
+
+def push_and_drop_items(items):
+    '''Push several items onto the stack and then pop them all off.'''
+    parts = [push_item(item) for item in items]
+    if len(items) >= 2:
+        parts.append(b_OP_2DROP * (len(parts) // 2))
+    if len(items) & 1:
+        parts.append(b_OP_DROP)
+    return b''.join(parts)
+
+
+def push_int(value):
+    '''Returns script bytes to push a numerical value to the stack.  Stack values are stored as
+    signed-magnitude little-endian numbers.
+    '''
+    if value == 0:
+        return b_OP_0
+    item = int_to_le_bytes(abs(value))
+    if item[-1] & 0x80:
+        item += pack_byte(0x80 if value < 0 else 0x00)
+    elif value < 0:
+        item = item[:-1] + pack_byte(item[-1] | 0x80)
+    return push_item(item)
+
+
+def item_to_int(item):
+    '''Returns the value of a stack item interpreted as an integer.'''
+    if not item:
+        return 0
+    if item[-1] & 0x80:
+        return -le_bytes_to_int(item[:-1] + pack_byte(item[-1] & 0x7f))
+    return le_bytes_to_int(item)
+
+
+def script_ops(script):
+    '''A generator.  Yields script operations (does not check their validity) as integers, and
+    data pushed on the stack as bytes.  Returns when the end of the script is reached.
+
+    Raises TruncatedScriptError if the script was truncated.
+    '''
+    if not isinstance(script, (bytes, bytearray)):
+        raise TypeError('script must be bytes')
+    n = 0
+    limit = len(script)
+
+    while n < limit:
+        op = script[n]
+        n += 1
+        if op > OP_16:
+            yield op
+        elif op <= OP_PUSHDATA4:
+            try:
+                if op < OP_PUSHDATA1:
+                    dlen = op
+                elif op == OP_PUSHDATA1:
+                    dlen = script[n]
+                    n += 1
+                elif op == OP_PUSHDATA2:
+                    dlen, = unpack_le_uint16(script[n: n + 2])
+                    n += 2
+                else:
+                    dlen, = unpack_le_uint32(script[n: n + 4])
+                    n += 4
+                data = script[n: n + dlen]
+                n += dlen
+                assert len(data) == dlen
+                yield data
+            except Exception:
+                raise TruncatedScriptError from None
+        elif op >= OP_1:
+            yield pack_byte(op - OP_1 + 1)
+        elif op == OP_1NEGATE:
+            yield b'\x81'
+        else:
+            assert op == OP_RESERVED
+            yield op

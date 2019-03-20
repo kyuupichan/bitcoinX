@@ -5,7 +5,7 @@ import pytest
 
 from bitcoinx.coin import Bitcoin, BitcoinTestnet
 from bitcoinx.keys import GROUP_ORDER
-from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest
+from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160
 from bitcoinx.keys import *
 from bitcoinx.util import int_to_be_bytes
 
@@ -899,3 +899,25 @@ class TestPublicKey:
     def test_str(self):
         P = PrivateKey.from_random().public_key
         assert str(P) == P.to_hex()
+
+
+    def test_P2PK_script(self):
+        P = PrivateKey.from_random().public_key
+        script_c = P.P2PK_script(compressed=True)
+        script_u = P.P2PK_script(compressed=False)
+        assert script_c == bytes([33]) + P.to_bytes(compressed=True) + bytes([0xac])
+        assert script_u == bytes([65]) + P.to_bytes(compressed=False) + bytes([0xac])
+        assert script_c == P.P2PK_script()
+
+
+    def test_P2PKH_script(self):
+        P = PrivateKey.from_random().public_key
+        script_c = P.P2PKH_script(compressed=True)
+        script_u = P.P2PKH_script(compressed=False)
+        assert script_c == b''.join((bytes([0x76, 0xa9, 20]),
+                                     hash160(P.to_bytes(compressed=True)),
+                                     bytes([0x88, 0xac])))
+        assert script_u == b''.join((bytes([0x76, 0xa9, 20]),
+                                     hash160(P.to_bytes(compressed=False)),
+                                     bytes([0x88, 0xac])))
+        assert script_c == P.P2PKH_script()

@@ -43,6 +43,7 @@ def map_file(file_name, new_size=None):
 
 # Converts big-endian bytes to an integer
 be_bytes_to_int = partial(int.from_bytes, byteorder='big')
+le_bytes_to_int = partial(int.from_bytes, byteorder='little')
 
 
 def int_to_be_bytes(value, size=None):
@@ -50,6 +51,11 @@ def int_to_be_bytes(value, size=None):
     if size is None:
         size = (value.bit_length() + 7) // 8
     return value.to_bytes(size, 'big')
+
+
+def int_to_le_bytes(value):
+    '''Converts an integer to a big-endian sequence of bytes'''
+    return value.to_bytes((value.bit_length() + 7) // 8, 'little')
 
 
 # Method decorator.  To be used for calculations that will always deliver the same result.
