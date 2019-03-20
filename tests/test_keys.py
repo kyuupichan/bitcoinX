@@ -505,7 +505,7 @@ class TestPrivateKey:
 
     def test_str(self):
         p = PrivateKey.from_random()
-        assert str(p) == p.to_hex()
+        assert str(p) == sha256(p.to_bytes()).hex()
 
 
 class TestPublicKey:

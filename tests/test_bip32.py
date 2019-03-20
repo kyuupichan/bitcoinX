@@ -1,8 +1,9 @@
 import pytest
 
 from bitcoinx.bip32 import *
-from bitcoinx import Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check
-
+from bitcoinx import (
+    Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check, PrivateKey,
+)
 
 HARDENED = 1 << 31
 MXPRV = 'xprv9s21ZrQH143K2gMVrSwwojnXigqHgm1khKZGTCm7K8w4PmuDEUru' \
@@ -137,6 +138,18 @@ class TestPrivKey(object):
         assert mprivkey.to_int() == \
             27118888947022743980605817563635166434451957861641813930891160184742578898176
 
+    def test_from_random(self):
+        p = BIP32PrivateKey.from_random()
+        assert isinstance(p, BIP32PrivateKey)
+        def source(size):
+            assert size == 32
+            return bytes(range(32))
+        p = BIP32PrivateKey.from_random(source=source)
+        assert p.extended_key_string() == (
+            'xprv9s21ZrQH143K3EuJY8RRCWBLXFgB9WCcFKsv28bcaDy9LUZtXgH'
+            'e9q9V8kLi4aJ6H8r5X2wu9gz2ZYXbAhtsAcJKX8Z1Ackw6Wq1oi8DEEk'
+        )
+
     def test_identifier(self):
         assert mprivkey.identifier() == mpubkey.identifier()
 
@@ -192,19 +205,20 @@ class TestPrivKey(object):
         mprivkey.child((1 << 32) - 1)
 
     def test_str(self):
-        assert str(mprivkey) == MXPRV
+        assert str(mprivkey) == str(PrivateKey(mprivkey._secret))
 
     def test_repr(self):
-        assert repr(mprivkey) == f'BIP32PrivateKey("{MXPRV}")'
+        assert repr(mprivkey) == f'BIP32PrivateKey("{str(mprivkey)}")'
 
     def test_from_seed(self):
         seed = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
 
         # Chain m
         m = BIP32PrivateKey.from_seed(seed)
-        assert str(m) == ("xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqj"
-                          "iChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi")
-
+        assert m.extended_key_string() == (
+            "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqj"
+            "iChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+        )
 
 
 class TestVectors():
