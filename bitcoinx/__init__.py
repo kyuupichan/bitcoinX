@@ -6,6 +6,7 @@ from .hashes import *
 from .keys import *
 from .packing import *
 from .script import *
+from .tx import *
 from .work import *
 
 _version_str = '0.0.6'
@@ -20,5 +21,6 @@ __all__ = sum((
     keys.__all__,
     packing.__all__,
     script.__all__,
+    tx.__all__,
     work.__all__,
 ), ())
