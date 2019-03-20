@@ -147,3 +147,12 @@ def test_read_varbytes_short(varbyte_len):
 ))
 def test_unpack_header(header, answer):
     assert unpack_header(header) == answer
+
+
+def test_pack_and_read_list():
+    items = [1, 34598236, -23462436]
+    p = pack_list(items, pack_le_int32)
+    assert p == pack_varint(len(items)) + b''.join(pack_le_int32(item) for item in items)
+
+    bio = BytesIO(p)
+    assert read_list(bio.read, read_le_int32) == items

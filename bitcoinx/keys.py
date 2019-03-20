@@ -41,6 +41,7 @@ from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
 from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
 from .packing import pack_byte, pack_varbytes
+from .script import P2PK_script, P2PKH_script
 from .util import be_bytes_to_int, int_to_be_bytes, cachedproperty
 
 
@@ -525,3 +526,9 @@ class PublicKey:
         ephemeral_pubkey = ephemeral_key.public_key.to_bytes()
         encrypted_data = b''.join((magic, ephemeral_pubkey, ciphertext))
         return encrypted_data + hmac_digest(key_m, encrypted_data, _sha256)
+
+    def P2PK_script(self, *, compressed=None):
+        return P2PK_script(self.to_bytes(compressed=compressed))
+
+    def P2PKH_script(self, *, compressed=None):
+        return P2PKH_script(hash160(self.to_bytes(compressed=compressed)))
