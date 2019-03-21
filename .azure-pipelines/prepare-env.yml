@@ -3,10 +3,10 @@ parameters:
 
 steps:
 - script: |
-    python3 -m pip install electrumsv-secp256k1 pyaes
-    python3 -m pip install pycodestyle
-    python3 -m pip install coveralls coverage
-    python3 -m pip install pytest
+    python -m pip install electrumsv-secp256k1 pyaes
+    python -m pip install pycodestyle
+    python -m pip install coveralls coverage
+    python -m pip install pytest
   displayName: Prepare general environment
   condition: |
     and(
