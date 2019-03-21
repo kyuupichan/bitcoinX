@@ -28,10 +28,10 @@
 __all__ = (
     'PrivateKey', 'PublicKey', 'CURVE_ORDER',
     'KeyException', 'InvalidSignatureError', 'DecryptionError',
-    'message_sig_to_base64', 'base64_to_message_sig',
+    'der_signature_to_raw',
 )
 
-import base64
+from base64 import b64decode, b64encode
 from os import urandom
 
 from electrumsv_secp256k1 import ffi, lib, create_context
@@ -122,14 +122,33 @@ def _recoverable_sig_to_message_sig(recoverable_sig, compressed):
     return pack_byte(leading_byte) + recoverable_sig[:64]
 
 
-def message_sig_to_base64(message_sig):
-    '''Converts a message signature to a base64 ASCII string, as is traditional.'''
-    return base64.b64encode(message_sig).decode()
+def _recoverable_sig_to_cdata_sig(recoverable_sig):
+    cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
+    rec_sig = _deserialize_recoverable_sig(recoverable_sig)
+    # Always succeeds
+    lib.secp256k1_ecdsa_recoverable_signature_convert(CONTEXT, cdata_sig, rec_sig)
+    return cdata_sig
 
 
-def base64_to_message_sig(message_sig):
-    '''Converts a base64 ASCII message signature to binary.'''
-    return base64.b64decode(message_sig.encode())
+def _der_sig_to_cdata_sig(der_sig):
+    cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
+    if not lib.secp256k1_ecdsa_signature_parse_der(CONTEXT, cdata_sig, der_sig, len(der_sig)):
+        raise InvalidSignatureError('invalid DER-encoded signature')
+    return cdata_sig
+
+
+def _normalize_message_and_sig(message, message_sig):
+    if isinstance(message, str):
+        message = message.encode()
+    if isinstance(message_sig, str):
+        message_sig = b64decode(message_sig)
+    return message, message_sig
+
+
+def der_signature_to_raw(der_sig):
+    '''Returns 64 bytes representing r and s as concatenated 32-byte big-endian numbers.'''
+    cdata_sig = _der_sig_to_cdata_sig(der_sig)
+    return bytes(ffi.buffer(cdata_sig))
 
 
 class PrivateKey:
@@ -207,6 +226,10 @@ class PrivateKey:
     def from_int(cls, value):
         '''Contruct a PrivateKey from an unsigned integer.'''
         return cls(int_to_be_bytes(value, 32))
+
+    @classmethod
+    def from_arbitrary_bytes(cls, secret):
+        return cls.from_int(be_bytes_to_int(secret) % CURVE_ORDER)
 
     @classmethod
     def from_hex(cls, hex_str):
@@ -301,10 +324,18 @@ class PrivateKey:
 
         Compressed appears to be legacy and the signature is valid whether True or False;
         in any case only the first byte of the signature changes.
+
+        If message is a string, it is UTF-8 encoded as bytes.  The result is a bytes object.
         '''
+        if isinstance(message, str):
+            message = message.encode()
         msg_to_sign = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
         recoverable_sig = self.sign_recoverable(msg_to_sign, hasher)
         return _recoverable_sig_to_message_sig(recoverable_sig, compressed=self._compressed)
+
+    def sign_message_to_base64(self, message, hasher=double_sha256):
+        '''As for sign_message, but return the result as a base64 ASCII string.'''
+        return b64encode(self.sign_message(message, hasher)).decode()
 
     def shared_secret(self, public_key, message, hasher=sha256):
         '''Return a shared secret (as a public key) given their public key and a message.
@@ -327,6 +358,8 @@ class PrivateKey:
 
     def decrypt_message(self, message, magic=b'BIE1'):
         '''Decrypt a message encrypted with PublicKey.encrypt_message().'''
+        if isinstance(message, str):
+            message = b64decode(message)
         mlen = len(magic)
         if len(message) < 81 + mlen:
             raise DecryptionError('message too short')
@@ -425,6 +458,7 @@ class PublicKey:
     @classmethod
     def from_signed_message(cls, message_sig, message, hasher=double_sha256):
         '''Contruct a PublicKey from a message and its signature.'''
+        message, message_sig = _normalize_message_and_sig(message, message_sig)
         message = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
         recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
         return cls.from_recoverable_signature(recoverable_sig, message, hasher)
@@ -493,33 +527,47 @@ class PublicKey:
         return cls(public_key, public_keys[0]._compressed, public_keys[0]._coin)
 
     def verify_message(self, message_sig, message, hasher=double_sha256):
-        '''Verify a message signed with bitcoind (and ElectrumSV).'''
+        '''Verify a message signed with bitcoind (and ElectrumSV).
+
+        If message is a string, it is UTF-8 encoded as bytes.  If message_sig is a string,
+        it is assumed to be base64-encoded.
+        '''
+        message, message_sig = _normalize_message_and_sig(message, message_sig)
         recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
         msg_to_sign = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
         return self.verify_signature(recoverable_sig, msg_to_sign, hasher)
 
+    @classmethod
+    def verify_message_and_address(cls, message_sig, message, address, hasher=double_sha256):
+        '''As for verify_message, but also test it was signed by a private key of the given
+        address.
+        '''
+        message, message_sig = _normalize_message_and_sig(message, message_sig)
+        try:
+            public_key = cls.from_signed_message(message_sig, message, hasher)
+        except InvalidSignatureError:
+            return False
+        return (public_key.verify_message(message_sig, message, hasher) and
+                public_key.to_address() == address)
+
     def verify_signature(self, signature, message, hasher=sha256):
         '''Verify a serialized signature.  Return True if good otherwise False.'''
-        msg_hash = _message_hash(message, hasher)
-        cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
-        sig_len = len(signature)
-        # Handle recoverable and normal signatures
-        if sig_len == 65:
-            recoverable_sig = _deserialize_recoverable_sig(signature)
-            lib.secp256k1_ecdsa_recoverable_signature_convert(
-                CONTEXT, cdata_sig, recoverable_sig)
+        # Handle recoverable and der-encoded signatures
+        if len(signature) == 65:
+            cdata_sig = _recoverable_sig_to_cdata_sig(signature)
         else:
-            if not lib.secp256k1_ecdsa_signature_parse_der(
-                    CONTEXT, cdata_sig, signature, sig_len):
-                raise InvalidSignatureError('invalid DER-encoded signature')
+            cdata_sig = _der_sig_to_cdata_sig(signature)
 
+        msg_hash = _message_hash(message, hasher)
         return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self._public_key))
 
     def encrypt_message(self, message, magic=b'BIE1'):
-        '''Encrypt a message using ECIES.
+        '''Encrypt a message using ECIES.  The message can be bytes, a bytearray, or a string.
 
-        AES-128-CBC with PKCS7 is used as the cipher; hmac-sha256 is used as the MAC.
+        String are converted to UTF-8 encoded bytes.  The result has type bytes.
         '''
+        if isinstance(message, str):
+            message = message.encode()
         ephemeral_key = PrivateKey.from_random()
         key = sha512(ephemeral_key.ecdh_shared_secret(self).to_bytes(compressed=True))
         iv, key_e, key_m = key[0:16], key[16:32], key[32:]
@@ -527,6 +575,10 @@ class PublicKey:
         ephemeral_pubkey = ephemeral_key.public_key.to_bytes()
         encrypted_data = b''.join((magic, ephemeral_pubkey, ciphertext))
         return encrypted_data + hmac_digest(key_m, encrypted_data, _sha256)
+
+    def encrypt_message_to_base64(self, message, magic=b'BIE1'):
+        '''As for encrypt_message, but return the result as a base64 ASCII string.'''
+        return b64encode(self.encrypt_message(message, magic)).decode()
 
     def P2PK_script(self, *, compressed=None):
         return P2PK_script(self.to_bytes(compressed=compressed))
