@@ -1,0 +1,15 @@
+pr:
+  - master
+  - releases/*
+
+jobs:
+- template: run-tests.yml
+  parameters:
+    name: TestPython36
+    vmImage: 'ubuntu-16.04'
+    pythonVersion: '3.6'
+- template: run-tests.yml
+  parameters:
+    name: TestPython37
+    vmImage: 'ubuntu-16.04'
+    pythonVersion: '3.7'
