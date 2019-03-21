@@ -4,10 +4,9 @@ import base64
 import pytest
 
 from bitcoinx.coin import Bitcoin, BitcoinTestnet
-from bitcoinx.keys import GROUP_ORDER
-from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160
 from bitcoinx.keys import *
-from bitcoinx.util import int_to_be_bytes
+from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160
+from bitcoinx.misc import int_to_be_bytes
 
 
 one = bytes(31) + bytes([1])
@@ -33,8 +32,8 @@ def test_exceptions():
     assert issubclass(InvalidSignatureError, KeyException)
 
 
-def test_GROUP_ORDER():
-    assert GROUP_ORDER == \
+def test_CURVE_ORDER():
+    assert CURVE_ORDER == \
         115792089237316195423570985008687907852837564279074904382605163141518161494337
 
 
@@ -49,8 +48,8 @@ class TestPrivateKey:
             PrivateKey(bad_key)
 
     @pytest.mark.parametrize("bad_key", (
-        int_to_be_bytes(GROUP_ORDER),
-        int_to_be_bytes(GROUP_ORDER + 1),
+        int_to_be_bytes(CURVE_ORDER),
+        int_to_be_bytes(CURVE_ORDER + 1),
         b'',
         bytes(30) + bytes([1]),
         bytes(32),
@@ -63,7 +62,7 @@ class TestPrivateKey:
     @pytest.mark.parametrize("good_key", (
         one,
         bytearray(31) + bytes([1]),
-        int_to_be_bytes(GROUP_ORDER - 1),
+        int_to_be_bytes(CURVE_ORDER - 1),
     ))
     def test_good(self, good_key):
         p = PrivateKey(good_key)
@@ -177,7 +176,7 @@ class TestPrivateKey:
 
     def test_from_random(self):
         secret = int_to_be_bytes(39823453, 32)
-        values = [secret, int_to_be_bytes(0, 32), int_to_be_bytes(GROUP_ORDER, 32)]
+        values = [secret, int_to_be_bytes(0, 32), int_to_be_bytes(CURVE_ORDER, 32)]
         def source(size):
             assert size == 32
             return values.pop()
@@ -243,7 +242,7 @@ class TestPrivateKey:
 
     def test_subtract_one(self):
         p1 = PrivateKey.from_random()
-        p2 = p1.add(int_to_be_bytes(GROUP_ORDER - 1))
+        p2 = p1.add(int_to_be_bytes(CURVE_ORDER - 1))
         assert p1.to_int() - 1 == p2.to_int()
 
 
@@ -251,7 +250,7 @@ class TestPrivateKey:
         p1 = PrivateKey.from_random()
         p2 = PrivateKey.from_random()
         p2_int = p2.to_int()
-        result = (p1.to_int() + p2_int) % GROUP_ORDER
+        result = (p1.to_int() + p2_int) % CURVE_ORDER
         p3 = p2.add(p1._secret)
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
@@ -267,11 +266,11 @@ class TestPrivateKey:
     def test_add_bad(self):
         p1 = PrivateKey.from_random()
         with pytest.raises(ValueError):
-            p1.add(int_to_be_bytes(GROUP_ORDER - p1.to_int()))
+            p1.add(int_to_be_bytes(CURVE_ORDER - p1.to_int()))
         with pytest.raises(ValueError):
-            p1.add(int_to_be_bytes(GROUP_ORDER))
+            p1.add(int_to_be_bytes(CURVE_ORDER))
         with pytest.raises(ValueError):
-            p1.add(int_to_be_bytes(GROUP_ORDER + 1))
+            p1.add(int_to_be_bytes(CURVE_ORDER + 1))
         with pytest.raises(ValueError):
             p1.add(bytes(33))
         with pytest.raises(ValueError):
@@ -293,7 +292,7 @@ class TestPrivateKey:
         p1 = PrivateKey.from_random()
         p2 = PrivateKey.from_random()
         p2_int = p2.to_int()
-        result = (p1.to_int() * p2_int) % GROUP_ORDER
+        result = (p1.to_int() * p2_int) % CURVE_ORDER
         p3 = p2.multiply(p1._secret)
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
@@ -311,9 +310,9 @@ class TestPrivateKey:
         with pytest.raises(ValueError):
             p1.multiply(bytes(32))
         with pytest.raises(ValueError):
-            p1.multiply(int_to_be_bytes(GROUP_ORDER))
+            p1.multiply(int_to_be_bytes(CURVE_ORDER))
         with pytest.raises(ValueError):
-            p1.multiply(int_to_be_bytes(GROUP_ORDER + 1))
+            p1.multiply(int_to_be_bytes(CURVE_ORDER + 1))
         with pytest.raises(ValueError):
             p1.add(bytes(33))
         with pytest.raises(ValueError):
@@ -665,7 +664,7 @@ class TestPublicKey:
         priv = PrivateKey.from_random()
         P = priv.public_key
 
-        value = int_to_be_bytes(GROUP_ORDER - priv.to_int())
+        value = int_to_be_bytes(CURVE_ORDER - priv.to_int())
         with pytest.raises(ValueError):
             P.add(value)
         with pytest.raises(ValueError):
@@ -745,14 +744,14 @@ class TestPublicKey:
 
     def test_combine_keys_bad(self):
         priv = PrivateKey.from_random()
-        priv2 = PrivateKey(int_to_be_bytes(GROUP_ORDER - priv.to_int()))
+        priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int()))
         with pytest.raises(ValueError):
             PublicKey.combine_keys([priv.public_key, priv2.public_key])
 
 
     def test_combine_keys_bad_intermediate(self):
         priv = PrivateKey.from_random()
-        priv2 = PrivateKey(int_to_be_bytes(GROUP_ORDER - priv.to_int()))
+        priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int()))
         # But combining with bad intermediate result but good final is fine
         P = PublicKey.combine_keys([priv.public_key, priv2.public_key, priv.public_key])
         assert P == priv.public_key

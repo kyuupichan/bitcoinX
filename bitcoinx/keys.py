@@ -26,7 +26,7 @@
 '''Public and Private keys of various kinds.'''
 
 __all__ = (
-    'PrivateKey', 'PublicKey',
+    'PrivateKey', 'PublicKey', 'CURVE_ORDER',
     'KeyException', 'InvalidSignatureError', 'DecryptionError',
     'message_sig_to_base64', 'base64_to_message_sig',
 )
@@ -40,13 +40,14 @@ from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
 from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
+from .misc import be_bytes_to_int, int_to_be_bytes
 from .packing import pack_byte, pack_varbytes
 from .script import P2PK_script, P2PKH_script
-from .util import be_bytes_to_int, int_to_be_bytes, cachedproperty
+from .util import cachedproperty
 
 
 KEY_SIZE = 32
-GROUP_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+CURVE_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 CONTEXT = create_context()
 CDATA_SIG_LENGTH = 64
 MAX_SIG_LENGTH = 72
