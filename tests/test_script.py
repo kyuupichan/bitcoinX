@@ -5,6 +5,14 @@ import pytest
 from bitcoinx.script import *
 from bitcoinx import pack_varint
 
+# Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
+# https://github.com/pytest-dev/pytest/issues/2951
+last_id = -1
+def parameter_id(v):
+    global last_id
+    last_id += 1
+    return last_id
+
 
 def test_op_exports():
     assert OP_0 == 0
@@ -322,7 +330,7 @@ def test_P2SH_script_bad():
     (b'a' * 65535, bytes([OP_PUSHDATA2, 0xff, 0xff]) +  b'a' * 65535),
     (b'a' * 65536, bytes([OP_PUSHDATA4, 0, 0, 1, 0]) +  b'a' * 65536),
     (b'a' * 65541, bytes([OP_PUSHDATA4, 5, 0, 1, 0]) +  b'a' * 65541),
-))
+), ids=parameter_id)
 def test_push_item(item, answer):
     # Also tests push_and_drop_item
     assert push_item(item) == answer
@@ -333,7 +341,7 @@ def test_push_item(item, answer):
     ([b''], b_OP_0 + b_OP_DROP),
     ([b'', b''], b_OP_0 * 2 + b_OP_2DROP),
     ([b'', b'\x04', b''], b_OP_0 + b_OP_4 + b_OP_0 + b_OP_2DROP + b_OP_DROP),
-))
+), ids=parameter_id)
 def test_push_and_drop_items(items, answer):
     assert push_and_drop_items(items) == answer
 
@@ -349,7 +357,7 @@ def test_push_and_drop_items(items, answer):
     (15, b_OP_15),
     (16, b_OP_16),
     (17, bytes([1, 17])),
-))
+), ids=parameter_id)
 def test_push_int(value, encoding):
     assert push_int(value) == encoding
 
@@ -370,7 +378,7 @@ def test_push_int(value, encoding):
     (256, b'\x00\x01'),
     (32767, b'\xff\x7f'),
     (32768, b'\x00\x80\x00'),
-))
+), ids=parameter_id)
 def test_item_to_int(value, encoding):
     assert item_to_int(encoding) == value
 
@@ -382,7 +390,7 @@ def test_item_to_int(value, encoding):
     (push_item(b'a' * 80), [b'a' * 80]),
     (push_item(b'a' * 256), [b'a' * 256]),
     (push_item(b'a' * 65536), [b'a' * 65536]),
-))
+), ids=parameter_id)
 def test_script_ops(script, ops):
     assert list(script_ops(script)) == ops
 
@@ -393,7 +401,7 @@ def test_script_ops(script, ops):
     push_item(bytes(80))[:-1],
     push_item(bytes(256))[:-1],
     push_item(bytes(65536))[:-1],
-))
+), ids=parameter_id)
 def test_script_ops_truncated(script):
     with pytest.raises(TruncatedScriptError):
         list(script_ops(script))
@@ -403,7 +411,7 @@ def test_script_ops_truncated(script):
     1,
     'hello',
     [b''],
-))
+), ids=parameter_id)
 def test_script_ops_type_error(script):
     with pytest.raises(TypeError):
         list(script_ops(script))
