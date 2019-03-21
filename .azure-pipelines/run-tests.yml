@@ -30,6 +30,7 @@ jobs:
       summaryFileLocation: coverage.xml
       reportDirectory: htmlcov
   - script: |
+      set
       coveralls
     displayName: 'Coveralls'
   - script: |
