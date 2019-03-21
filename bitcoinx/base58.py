@@ -13,7 +13,7 @@ __all__ = (
 )
 
 from .hashes import double_sha256, sha256
-from .util import int_to_be_bytes, be_bytes_to_int
+from .misc import int_to_be_bytes, be_bytes_to_int
 
 
 base58_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'

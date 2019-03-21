@@ -36,11 +36,11 @@ __all__ = (
 
 from enum import IntEnum
 
+from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32,
     unpack_le_uint16, unpack_le_uint32,
 )
-from .util import int_to_le_bytes, le_bytes_to_int
 
 
 class TruncatedScriptError(Exception):

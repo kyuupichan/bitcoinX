@@ -5,6 +5,7 @@ import pytest
 from bitcoinx.script import *
 from bitcoinx import pack_varint
 
+
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
 # https://github.com/pytest-dev/pytest/issues/2951
 last_id = -1

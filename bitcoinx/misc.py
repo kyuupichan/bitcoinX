@@ -1,4 +1,4 @@
-# Copyright (c) 2018, Neil Booth
+# Copyright (c) 2019, Neil Booth
 #
 # All rights reserved.
 #
@@ -23,32 +23,30 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'''Internal utilities'''
+'''Miscellaneous functions.'''
 
-import mmap
+__all__ = (
+    'be_bytes_to_int', 'le_bytes_to_int',
+    'int_to_be_bytes', 'int_to_le_bytes',
+)
 
-
-def map_file(file_name, new_size=None):
-    '''Map an existing file into memory.  If new_size is specified the
-    file is truncated or extended to that size.
-
-    Returns a Python mmap object.
-    '''
-    with open(file_name, 'rb+') as f:
-        if new_size is not None:
-            f.truncate(new_size)
-        return mmap.mmap(f.fileno(), 0)
+from functools import partial
 
 
-# Method decorator.  To be used for calculations that will always deliver the same result.
-# The method cannot take any arguments and should be accessed as an attribute.
-class cachedproperty(object):
+# Converts big-endian bytes to an integer
+be_bytes_to_int = partial(int.from_bytes, byteorder='big')
+le_bytes_to_int = partial(int.from_bytes, byteorder='little')
 
-    def __init__(self, f):
-        self.f = f
 
-    def __get__(self, obj, type_):
-        obj = obj or type_
-        value = self.f(obj)
-        setattr(obj, self.f.__name__, value)
-        return value
+def int_to_be_bytes(value, size=None):
+    '''Converts an integer to a big-endian sequence of bytes'''
+    if size is None:
+        size = (value.bit_length() + 7) // 8
+    return value.to_bytes(size, 'big')
+
+
+def int_to_le_bytes(value, size=None):
+    '''Converts an integer to a big-endian sequence of bytes'''
+    if size is None:
+        size = (value.bit_length() + 7) // 8
+    return value.to_bytes(size, 'little')
