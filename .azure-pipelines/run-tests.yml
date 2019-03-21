@@ -30,7 +30,7 @@ jobs:
       summaryFileLocation: coverage.xml
       reportDirectory: htmlcov
   - script: |
-      coveralls
+      COVERALLS_REPO_TOKEN=$(coveralls_token) coveralls
     displayName: 'Coveralls'
   - script: |
       pycodestyle --max-line-length=100 bitcoinx/*.py
