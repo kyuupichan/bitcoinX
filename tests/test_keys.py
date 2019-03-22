@@ -1,11 +1,11 @@
 import os
 
-import base64
+from base64 import b64decode, b64encode
 import pytest
 
 from bitcoinx.coin import Bitcoin, BitcoinTestnet
 from bitcoinx.keys import *
-from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160
+from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
 
 
@@ -35,6 +35,16 @@ def test_exceptions():
 def test_CURVE_ORDER():
     assert CURVE_ORDER == \
         115792089237316195423570985008687907852837564279074904382605163141518161494337
+
+
+def test_der_signature_to_raw():
+    der_sig = bytes.fromhex(
+        '3045022100fd34ef3048a25a782819532c4227b118d4baaf25f08f4278fd8b3925c1310f60022'
+        '023cb697b5aa7aff84e3c0d316884139db8178bd3d88ba910bdb7c8c6ef062759')
+    assert der_signature_to_raw(der_sig) == bytes.fromhex(
+        '600f31c125398bfd78428ff025afbad418b127422c531928785aa24830ef34f'
+        'd592706efc6c8b7bd10a98bd8d38b17b89d138468310d3c4ef8afa75a7b69cb23'
+    )
 
 
 class TestPrivateKey:
@@ -80,6 +90,17 @@ class TestPrivateKey:
         p3 = PrivateKey(secret)
         assert p3.coin() is Bitcoin
         assert p3.is_compressed()
+
+
+    def test_from_arbitrary_bytes(self):
+        p = PrivateKey.from_arbitrary_bytes(b'BitcoinSV')
+        assert p._secret == bytes(23) + b'BitcoinSV'
+        p = PrivateKey.from_arbitrary_bytes(double_sha256(b'a') + double_sha256(b'b'))
+        assert p.to_hex() == '6d2611b247da5cfe25f82673fb52d1739635bedfd3f1c2aa0bc5b10c044f18e9'
+        with pytest.raises(ValueError):
+            PrivateKey.from_arbitrary_bytes(bytes(46))
+        with pytest.raises(ValueError):
+            PrivateKey.from_arbitrary_bytes(int_to_be_bytes(CURVE_ORDER) * 10)
 
 
     def test_inert(self):
@@ -393,19 +414,20 @@ class TestPrivateKey:
             p.sign_recoverable(msg)
 
 
-    def test_sign_message(self):
+    @pytest.mark.parametrize("msg", (b'BitcoinSV', 'BitcoinSV'))
+    def test_sign_message_and_to_base64(self, msg):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
         priv = PrivateKey.from_WIF(secret)
-        P = priv.public_key
-        msg = b'BitcoinSV'
-
+        priv._compressed=True
         msg_sig = priv.sign_message(msg)
-        assert message_sig_to_base64(msg_sig) == ('IIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
-                                                  'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
+        for encoded_sig in (b64encode(msg_sig).decode(), priv.sign_message_to_base64(msg)):
+            assert encoded_sig == ('IIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
+                                   'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
+
         priv._compressed=False
         msg_sig = priv.sign_message(msg)
-        assert message_sig_to_base64(msg_sig) == ('HIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
-                                                  'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
+        assert b64encode(msg_sig) == (b'HIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
+                                      b'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
 
 
     def test_sign_message_long(self):
@@ -418,8 +440,8 @@ class TestPrivateKey:
             'Digital signatures provide part of the solution, but the main benefits are lost if '
             'a trusted third party is still required to prevent double-spending.'
         )
-        msg_sig = priv.sign_message(msg.encode())
-        assert msg_sig == base64_to_message_sig(
+        msg_sig = priv.sign_message(msg)
+        assert b64encode(msg_sig).decode() == (
             'H7iIlcANsbiKmCGgMus8GIw8AYjQs+uzUQX1z/bFyv8aeJlGBM'
             '1rG4B7SvE0vDDT1q2T6wSElIp6wysKJKOH7RQ='
         )
@@ -837,20 +859,36 @@ class TestPublicKey:
         assert P2.coin() is Bitcoin
 
 
-    def test_verify_message(self):
+    @pytest.mark.parametrize("msg", (
+        b'BitcoinSV', 'BitcoinSV', bytearray(b'BitcoinSV'),
+        # Test longer messages are prefix-encoded correctly
+        b'BitcoinSV * 100',
+    ))
+    def test_verify_message(self, msg):
         priv = PrivateKey.from_random()
         P = priv.public_key
+        address = P.to_address()
         base_msg = b'BitcoinSV'
 
-        # Test longer messages are prefix-encoded correctly
-        for msg in (base_msg, base_msg * 100):
-            msg_sig = priv.sign_message(msg)
-            assert P.verify_message(msg_sig, msg)
-            # Test bytearray is accepted for the sig and the message
-            msg_sig2 = bytearray(msg_sig)
-            assert P.verify_message(msg_sig2, bytearray(msg))
-            msg_sig2[3] ^= 79
-            assert not P.verify_message(msg_sig2, msg)
+        msg_sig = priv.sign_message(msg)
+        msg_sig2 = bytearray(msg_sig)
+        assert P.verify_message(msg_sig, msg)
+        assert PublicKey.verify_message_and_address(msg_sig, msg, address)
+
+        assert P.verify_message(msg_sig2, msg)
+        assert PublicKey.verify_message_and_address(msg_sig2, msg, address)
+
+        msg_sig = priv.sign_message_to_base64(msg)
+        assert P.verify_message(msg_sig, msg)
+        assert PublicKey.verify_message_and_address(msg_sig, msg, address)
+
+        assert not PublicKey.verify_message_and_address(msg_sig, msg,
+                                                        '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')
+
+        msg_sig2[3] ^= 79
+        assert not P.verify_message(msg_sig2, msg)
+        assert not PublicKey.verify_message_and_address(msg_sig2, msg, address)
+
 
     def test_verify_message_bad(self):
         priv = PrivateKey.from_random()
@@ -859,7 +897,7 @@ class TestPublicKey:
         msg_sig = priv.sign_message(msg)
 
         with pytest.raises(InvalidSignatureError):
-            P.verify_message('foo', msg)
+            P.verify_message(b'bar', msg)
         with pytest.raises(InvalidSignatureError):
             P.verify_message(msg_sig[:-1], msg)
         msg_sig = bytearray(msg_sig)
@@ -869,21 +907,26 @@ class TestPublicKey:
                 P.verify_message(msg_sig, msg)
 
 
-    def test_encrypt_message(self):
-        msg = b'BitcoinSV'
+    def test_encrypt_message_and_to_base64(self):
+        bmsg = b'BitcoinSV'
         # Test both compressed and uncompressed pubkeys
-        for compressed in (False, True):
-            priv = PrivateKey.from_random()
-            priv._compressed = compressed
-            P = priv.public_key
-            enc_msg = P.encrypt_message(msg)
-            assert priv.decrypt_message(enc_msg) == msg
-            # Test bytearray is good
-            enc_msg = P.encrypt_message(bytearray(msg))
-            assert priv.decrypt_message(enc_msg) == msg
-            assert priv.decrypt_message(bytearray(enc_msg)) == msg
-            # This tests the default magic of both functions is b'BIE1'
-            assert priv.decrypt_message(enc_msg, magic=b'BIE1') == msg
+        for msg in (bmsg, bytearray(bmsg), bmsg.decode()):
+            for compressed in (False, True):
+                priv = PrivateKey.from_random()
+                priv._compressed = compressed
+                P = priv.public_key
+                enc_msg = P.encrypt_message(msg)
+                assert isinstance(enc_msg, bytes)
+                assert priv.decrypt_message(enc_msg) == bmsg
+                # This tests the default magic of both functions is b'BIE1'
+                assert priv.decrypt_message(enc_msg, magic=b'BIE1') == bmsg
+
+                # Now base64
+                enc_msg = P.encrypt_message_to_base64(msg)
+                assert isinstance(enc_msg, str)
+                assert priv.decrypt_message(enc_msg) == bmsg
+                # This tests the default magic of both functions is b'BIE1'
+                assert priv.decrypt_message(enc_msg, magic=b'BIE1') == bmsg
 
 
     def test_encrypt_message_magic(self):
@@ -892,6 +935,8 @@ class TestPublicKey:
         msg = b'BitcoinSV'
         for magic in (b'Z', b'ABCDEFG'):
             enc_msg = P.encrypt_message(msg, magic)
+            assert priv.decrypt_message(enc_msg, magic) == msg
+            enc_msg = P.encrypt_message_to_base64(msg, magic)
             assert priv.decrypt_message(enc_msg, magic) == msg
 
 
