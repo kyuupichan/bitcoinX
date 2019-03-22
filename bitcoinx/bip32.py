@@ -26,8 +26,8 @@
 '''BIP32 implementation.'''
 
 __all__ = (
-    'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation', 'bip32_key_from_string',
-    'bip32_decompose_chain_string', 'bip32_is_valid_chain_string',
+    'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation',
+    'bip32_key_from_string', 'bip32_decompose_chain_string', 'bip32_is_valid_chain_string',
 )
 
 from os import urandom
@@ -141,6 +141,18 @@ class BIP32PrivateKey(PrivateKey):
 
         return BIP32PrivateKey(self.add(L).to_bytes(), child_derivation, self._coin)
 
+    def child_safe(self, n):
+        '''Return a child but increment n if the child derivation is invalid.'''
+        while True:
+            try:
+                return self.child(n)
+            except ValueError:
+                if not 0 <= n < (1 << 32):
+                    raise
+                n += 1
+                if n & (HARDENED - 1) == 0:
+                    raise ValueError('out of BIP32 derivations')
+
     def derivation(self):
         '''Return a BIP32 derivation object.'''
         return self._derivation
@@ -183,7 +195,7 @@ class BIP32PublicKey(PublicKey):
 
     def child(self, n):
         '''Return the derived child extended pubkey at index N.'''
-        if not 0 <= n < (1 << 31):
+        if not 0 <= n < HARDENED:
             raise ValueError(f'invalid BIP32 public key child number: {n}')
 
         msg = self.to_bytes() + pack_be_uint32(n)
@@ -191,6 +203,16 @@ class BIP32PublicKey(PublicKey):
         child_derivation = self._derivation.child(R, n, self.fingerprint())
 
         return BIP32PublicKey(self.add(L), child_derivation, self._coin)
+
+    def child_safe(self, n):
+        '''Return a child but increment n if the child derivation is invalid.'''
+        while True:
+            try:
+                return self.child(n)
+            except ValueError:
+                if not 0 <= n < HARDENED:
+                    raise
+                n += 1
 
     def derivation(self):
         '''Return a BIP32 derivation object.'''
