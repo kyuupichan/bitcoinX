@@ -106,6 +106,49 @@ class TestBIP32PublicKey:
         # OK
         mpubkey.child((1 << 31) - 1)
 
+    def test_child_safe(self):
+        '''Test child derivations agree with Electrum.'''
+        rec_master = mpubkey.child_safe(0)
+        assert rec_master.to_address(coin=Bitcoin) == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
+        chg_master = mpubkey.child_safe(1)
+        assert chg_master.to_address(coin=Bitcoin) == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
+        rec0 = rec_master.child_safe(0)
+        assert rec0.to_address(coin=Bitcoin) == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
+        rec19 = rec_master.child_safe(19)
+        assert rec19.to_address(coin=Bitcoin) == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
+        chg0 = chg_master.child_safe(0)
+        assert chg0.to_address(coin=Bitcoin) == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
+
+        with pytest.raises(ValueError):
+            mpubkey.child_safe(-1)
+        with pytest.raises(ValueError):
+            mpubkey.child_safe(1 << 31)
+        # OK
+        mpubkey.child_safe((1 << 31) - 1)
+
+    def test_child_safe_is_safe(self):
+        pub = BIP32PrivateKey.from_random().public_key
+        bad_n = 666
+
+        def bad_child(self, n):
+            if n == bad_n:
+                return BIP32PublicKey.from_hex('04' + 'ff' * 64)
+            else:
+                return saved_child(self, n)
+
+        # monkey-patching fun
+        saved_child = BIP32PublicKey.child
+        BIP32PublicKey.child = bad_child
+        with pytest.raises(ValueError):
+            child = pub.child(bad_n)
+        child = pub.child_safe(bad_n)
+        assert child.derivation().n == bad_n + 1
+        for wrap_n in ((1 << 31) - 1, (1 << 32) - 1):
+            bad_n = wrap_n
+            with pytest.raises(ValueError):
+                pub.child_safe(bad_n)
+        BIP32PublicKey.child = saved_child
+
     def test_address(self):
         assert mpubkey.to_address(coin=Bitcoin) == '1ENCpq6mbb1KYcaodGG7eTpSpYvPnDjFmU'
 
@@ -205,6 +248,50 @@ class TestPrivKey(object):
             mprivkey.child(1 << 32)
         # OK
         mprivkey.child((1 << 32) - 1)
+
+    def test_child_safe(self):
+        '''Test child derivations agree with Electrum.'''
+        # Also tests WIF, address
+        rec_master = mprivkey.child_safe(0)
+        assert rec_master.public_key.to_address() == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
+        chg_master = mprivkey.child_safe(1)
+        assert chg_master.public_key.to_address() == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
+        rec0 = rec_master.child_safe(0)
+        assert rec0.to_WIF() == 'L2M6WWMdu3YfWxvLGF76HZgHCA6idwVQx5QL91vfdqeZi8XAgWkz'
+        rec19 = rec_master.child_safe(19)
+        assert rec19.to_WIF() == 'KwMHa1fynU2J2iBGCuBZxumM2qDXHe5tVPU9VecNGQv3UCqnET7X'
+        chg0 = chg_master.child_safe(0)
+        assert chg0.to_WIF() == 'L4J1esD4rYuBHXwjg72yi7Rw4G3iF2yUHt7LN9trpC3snCppUbq8'
+
+        with pytest.raises(ValueError):
+            mprivkey.child_safe(-1)
+        with pytest.raises(ValueError):
+            mprivkey.child_safe(1 << 32)
+        # OK
+        mprivkey.child_safe((1 << 32) - 1)
+
+    def test_child_safe_is_safe(self):
+        priv = BIP32PrivateKey.from_random()
+        bad_n = 666
+
+        def bad_child(self, n):
+            if n == bad_n:
+                return PrivateKey(bytes(32))
+            else:
+                return saved_child(self, n)
+
+        # monkey-patching fun
+        saved_child = BIP32PrivateKey.child
+        BIP32PrivateKey.child = bad_child
+        with pytest.raises(ValueError):
+            child = priv.child(bad_n)
+        child = priv.child_safe(bad_n)
+        assert child.derivation().n == bad_n + 1
+        for wrap_n in ((1 << 31) - 1, (1 << 32) - 1):
+            bad_n = wrap_n
+            with pytest.raises(ValueError):
+                priv.child_safe(bad_n)
+        BIP32PrivateKey.child = saved_child
 
     def test_str(self):
         assert str(mprivkey) == str(PrivateKey(mprivkey._secret))
