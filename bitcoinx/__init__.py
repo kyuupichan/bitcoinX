@@ -10,7 +10,7 @@ from .script import *
 from .tx import *
 from .work import *
 
-_version_str = '0.0.7'
+_version_str = '0.0.8'
 _version = tuple(int(part) for part in _version_str.split('.'))
 
 __all__ = sum((
