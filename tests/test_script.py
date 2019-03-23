@@ -298,6 +298,104 @@ class TestScript:
         with pytest.raises(ValueError):
             Script.P2SH_script(data)
 
+    @pytest.mark.parametrize("script,asm", (
+        # No script
+        (b_OP_0, '0'),
+        (b_OP_1, '1'),
+        (b_OP_2, '2'),
+        (b_OP_3, '3'),
+        (b_OP_4, '4'),
+        (b_OP_5, '5'),
+        (b_OP_6, '6'),
+        (b_OP_7, '7'),
+        (b_OP_8, '8'),
+        (b_OP_9, '9'),
+        (b_OP_10, '10'),
+        (b_OP_11, '11'),
+        (b_OP_12, '12'),
+        (b_OP_13, '13'),
+        (b_OP_14, '14'),
+        (b_OP_15, '15'),
+        (b_OP_16, '16'),
+        (b_OP_1NEGATE, '-1'),
+        (b_OP_6 + b_OP_1NEGATE, '6 -1'),
+        (b_OP_16 + bytes([1, 16, 2, 16, 0, OP_PUSHDATA1, 1, 16]), '16 16 16 16'),
+        (bytes([1, 17, 2, 17, 0, OP_PUSHDATA1, 1, 17]), '17 17 17'),
+        (bytes([1, 128, 1, 127, 1, 128, 1, 255, 2, 127, 0, 2, 128, 0, 2, 255, 0, 2, 0, 1]),
+         '0 127 0 -127 127 128 255 256'),
+        (bytes([4, 255, 255, 255, 255, 4, 255, 255, 255, 127]), "-2147483647 2147483647"),
+        # This has value 1 (if bignums are re-enabled) but shows as hex
+        (bytes([5, 1, 0, 0, 0, 0]), '0100000000'),
+        (bytes(), ''),
+        # This is a truncated script
+        (bytes([5, 1, 1, 1, 1]), '[error]'),
+        (bytes(range(OP_1NEGATE, 256)),
+         "-1 OP_RESERVED 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 OP_NOP OP_VER OP_IF OP_NOTIF "
+         "OP_VERIF OP_VERNOTIF OP_ELSE OP_ENDIF OP_VERIFY OP_RETURN OP_TOALTSTACK OP_FROMALTSTACK "
+         "OP_2DROP OP_2DUP OP_3DUP OP_2OVER OP_2ROT OP_2SWAP OP_IFDUP OP_DEPTH OP_DROP OP_DUP "
+         "OP_NIP OP_OVER OP_PICK OP_ROLL OP_ROT OP_SWAP OP_TUCK OP_CAT OP_SPLIT OP_NUM2BIN "
+         "OP_BIN2NUM OP_SIZE OP_INVERT OP_AND OP_OR OP_XOR OP_EQUAL OP_EQUALVERIFY OP_RESERVED1 "
+         "OP_RESERVED2 OP_1ADD OP_1SUB OP_2MUL OP_2DIV OP_NEGATE OP_ABS OP_NOT OP_0NOTEQUAL "
+         "OP_ADD OP_SUB OP_MUL OP_DIV OP_MOD OP_LSHIFT OP_RSHIFT OP_BOOLAND OP_BOOLOR "
+         "OP_NUMEQUAL OP_NUMEQUALVERIFY OP_NUMNOTEQUAL OP_LESSTHAN OP_GREATERTHAN "
+         "OP_LESSTHANOREQUAL OP_GREATERTHANOREQUAL OP_MIN OP_MAX OP_WITHIN OP_RIPEMD160 OP_SHA1 "
+         "OP_SHA256 OP_HASH160 OP_HASH256 OP_CODESEPARATOR OP_CHECKSIG OP_CHECKSIGVERIFY "
+         "OP_CHECKMULTISIG OP_CHECKMULTISIGVERIFY OP_NOP1 OP_CHECKLOCKTIMEVERIFY "
+         "OP_CHECKSEQUENCEVERIFY OP_NOP4 OP_NOP5 OP_NOP6 OP_NOP7 OP_NOP8 OP_NOP9 OP_NOP10 "
+         + "OP_UNKNOWN " * 69 + "OP_INVALIDOPCODE"),
+    ))
+    def test_to_asm(self, script, asm):
+        assert Script(script).to_asm() == asm
+
+    @pytest.mark.parametrize("op,word", (
+        (OP_VERIF, "OP_VERIF"),
+        (b'a', "97"),
+        (b'\x01a', str(97 * 256 + 1)),
+        (b'abcde', "6162636465"),
+        (bytes([255, 255, 255, 255]), "-2147483647"),
+        (bytes([255, 255, 255, 127]), "2147483647"),
+    ))
+    def test_op_to_asm_word(self, op, word):
+        assert Script.op_to_asm_word(op) == word
+
+    def test_to_bytes(self):
+        data = os.urandom(15)
+        script = Script(data)
+        assert script.to_bytes() == data
+        assert script.to_bytes() is script
+
+    @pytest.mark.parametrize("word,item", (
+        ("OP_VERIF", b_OP_VERIF),
+        ("OP_NOP", b_OP_NOP),
+        ("OP_0", b_OP_0),
+        ("97", b'\x01a'),
+        ("6162636465", b'\5abcde'),
+    ))
+    def test_asm_word_to_bytes(self, word, item):
+        assert Script.asm_word_to_bytes(word) == item
+
+    @pytest.mark.parametrize("word", (
+        "OP_FOO",
+        "junk",
+    ))
+    def test_asm_word_to_btyes_bad(self, word):
+        with pytest.raises(ScriptError):
+            Script.asm_word_to_bytes(word)
+
+    @pytest.mark.parametrize("asm,script", (
+        ("OP_NOP OP_CHECKSIG OP_0 90 ababababab",
+         bytes([OP_NOP, OP_CHECKSIG, OP_0, 1, 90, 5, 171, 171, 171, 171, 171])),
+    ))
+    def test_from_asm(self, asm, script):
+        assert Script.from_asm(asm) == script
+
+    @pytest.mark.parametrize("asm", (
+        "OP_NOP5 OP_CHECKSIG 0 67 287542 -1 deadbeefdead",
+    ))
+    def test_asm_both_ways(self, asm):
+        script = Script.from_asm(asm)
+        assert script.to_asm() == asm
+
 
 @pytest.mark.parametrize("item,answer", (
     (b'', b_OP_0),
