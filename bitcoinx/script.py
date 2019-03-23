@@ -27,10 +27,8 @@
 
 
 __all__ = (
-    'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
-    'item_to_int', 'script_ops',
-    'P2PK_script', 'P2PKH_script', 'P2SH_script',
-    'TruncatedScriptError',
+    'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
+    'Script', 'ScriptError', 'TruncatedScriptError',
 )
 
 
@@ -43,7 +41,11 @@ from .packing import (
 )
 
 
-class TruncatedScriptError(Exception):
+class ScriptError(Exception):
+    pass
+
+
+class TruncatedScriptError(ScriptError):
     pass
 
 
@@ -192,25 +194,6 @@ b_OP_DUP_OP_HASH160 = bytes([OP_DUP, OP_HASH160])
 b_OP_EQUALVERIFY_OP_CHECKSIG = bytes([OP_EQUALVERIFY, OP_CHECKSIG])
 
 
-def P2PK_script(pubkey_bytes):
-    if len(pubkey_bytes) not in (33, 65):
-        raise ValueError('invalid pubkey_bytes')
-    return push_item(pubkey_bytes) + b_OP_CHECKSIG
-
-
-def P2PKH_script(hash160_bytes):
-    if len(hash160_bytes) != 20:
-        raise ValueError('invalid hash160_bytes')
-    return b''.join((b_OP_DUP_OP_HASH160, push_item(hash160_bytes),
-                     b_OP_EQUALVERIFY_OP_CHECKSIG))
-
-
-def P2SH_script(hash160_bytes):
-    if len(hash160_bytes) != 20:
-        raise ValueError('invalid hash160_bytes')
-    return b''.join((b_OP_HASH160, push_item(hash160_bytes), b_OP_EQUAL))
-
-
 def push_item(item):
     '''Returns script bytes to push item on the stack.'''
     dlen = len(item)
@@ -271,45 +254,91 @@ def item_to_int(item):
     return le_bytes_to_int(item)
 
 
-def script_ops(script):
-    '''A generator.  Yields script operations (does not check their validity) as integers, and
-    data pushed on the stack as bytes.  Returns when the end of the script is reached.
+class Script(bytes):
+    '''Wraps the raw bytes of a bitcoin script.'''
 
-    Raises TruncatedScriptError if the script was truncated.
-    '''
-    if not isinstance(script, (bytes, bytearray)):
-        raise TypeError('script must be bytes')
-    n = 0
-    limit = len(script)
+    def ops(self):
+        '''A generator.  Yields script operations (does not check their validity) as integers, and
+        data pushed on the stack as bytes.  Returns when the end of the script is reached.
 
-    while n < limit:
-        op = script[n]
-        n += 1
-        if op > OP_16:
-            yield op
-        elif op <= OP_PUSHDATA4:
+        Raises TruncatedScriptError if the script was truncated.
+        '''
+        n = 0
+        limit = len(self)
+
+        while n < limit:
+            op = self[n]
+            n += 1
+            if op > OP_16:
+                yield op
+            elif op <= OP_PUSHDATA4:
+                try:
+                    if op < OP_PUSHDATA1:
+                        dlen = op
+                    elif op == OP_PUSHDATA1:
+                        dlen = self[n]
+                        n += 1
+                    elif op == OP_PUSHDATA2:
+                        dlen, = unpack_le_uint16(self[n: n + 2])
+                        n += 2
+                    else:
+                        dlen, = unpack_le_uint32(self[n: n + 4])
+                        n += 4
+                    data = self[n: n + dlen]
+                    n += dlen
+                    assert len(data) == dlen
+                    yield data
+                except Exception:
+                    raise TruncatedScriptError from None
+            elif op >= OP_1:
+                yield pack_byte(op - OP_1 + 1)
+            elif op == OP_1NEGATE:
+                yield b'\x81'
+            else:
+                assert op == OP_RESERVED
+                yield op
+
+    def to_asm(self):
+        '''Returns a script converted to bitcoin's human-readable ASM format.'''
+        return ' '.join(op.hex() if isinstance(op, bytes) else Ops(op).name for op in self.ops())
+
+    def to_bytes(self):
+        return self
+
+    @classmethod
+    def asm_word_to_bytes(cls, word):
+        '''Converts an ASM word to bytes, either a 1-byte opcode or the data bytes.'''
+        if word.startswith('OP_'):
             try:
-                if op < OP_PUSHDATA1:
-                    dlen = op
-                elif op == OP_PUSHDATA1:
-                    dlen = script[n]
-                    n += 1
-                elif op == OP_PUSHDATA2:
-                    dlen, = unpack_le_uint16(script[n: n + 2])
-                    n += 2
-                else:
-                    dlen, = unpack_le_uint32(script[n: n + 4])
-                    n += 4
-                data = script[n: n + dlen]
-                n += dlen
-                assert len(data) == dlen
-                yield data
-            except Exception:
-                raise TruncatedScriptError from None
-        elif op >= OP_1:
-            yield pack_byte(op - OP_1 + 1)
-        elif op == OP_1NEGATE:
-            yield b'\x81'
-        else:
-            assert op == OP_RESERVED
-            yield op
+                opcode = Ops[word]
+            except KeyError:
+                raise ScriptError(f'unrecognized op code {word}') from None
+            return pack_byte(opcode)
+        try:
+            return bytes.fromhex(word)
+        except ValueError:
+            raise ScriptError(f'invalid pushdata {word}') from None
+
+    @classmethod
+    def from_asm(cls, asm):
+        asm_word_to_bytes = cls.asm_word_to_bytes
+        return cls(b''.join(asm_word_to_bytes(word) for word in asm.split()))
+
+    @classmethod
+    def P2PK_script(cls, pubkey_bytes):
+        if len(pubkey_bytes) not in (33, 65):
+            raise ValueError('invalid pubkey_bytes')
+        return cls(push_item(pubkey_bytes) + b_OP_CHECKSIG)
+
+    @classmethod
+    def P2PKH_script(cls, hash160_bytes):
+        if len(hash160_bytes) != 20:
+            raise ValueError('invalid hash160_bytes')
+        return cls(b''.join((b_OP_DUP_OP_HASH160, push_item(hash160_bytes),
+                             b_OP_EQUALVERIFY_OP_CHECKSIG)))
+
+    @classmethod
+    def P2SH_script(cls, hash160_bytes):
+        if len(hash160_bytes) != 20:
+            raise ValueError('invalid hash160_bytes')
+        return cls(b''.join((b_OP_HASH160, push_item(hash160_bytes), b_OP_EQUAL)))

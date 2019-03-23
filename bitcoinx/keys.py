@@ -42,7 +42,7 @@ from .coin import Bitcoin, Coin
 from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes
 from .packing import pack_byte, pack_varbytes
-from .script import P2PK_script, P2PKH_script
+from .script import Script
 from .util import cachedproperty
 
 
@@ -584,7 +584,7 @@ class PublicKey:
         return b64encode(self.encrypt_message(message, magic)).decode()
 
     def P2PK_script(self, *, compressed=None):
-        return P2PK_script(self.to_bytes(compressed=compressed))
+        return Script.P2PK_script(self.to_bytes(compressed=compressed))
 
     def P2PKH_script(self, *, compressed=None):
-        return P2PKH_script(hash160(self.to_bytes(compressed=compressed)))
+        return Script.P2PKH_script(hash160(self.to_bytes(compressed=compressed)))
