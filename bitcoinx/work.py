@@ -158,7 +158,7 @@ def _required_bits_testnet(headers, chain, height, timestamp, daa_height):
             bits = header_bits(raw_header(chain, test_height))
             if test_height % 2016 == 0 or bits != genesis_bits:
                 return bits
-        raise RuntimeError
+        # impossible to fall through here
 
     prior_raw_header = headers.raw_header_at_height(chain, height - 1)
     prior_timestamp = headers.coin.header_timestamp(prior_raw_header)
