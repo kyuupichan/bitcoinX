@@ -69,8 +69,8 @@ class DecryptionError(KeyException):
 
 
 def _to_32_bytes(value):
-    if not isinstance(value, (bytes, bytearray)):
-        raise TypeError('value must have type bytes or bytearray')
+    if not isinstance(value, bytes):
+        raise TypeError('value must have type bytes')
     if len(value) != 32:
         raise ValueError('value must be 32 bytes')
     return bytes(value)
@@ -103,18 +103,18 @@ def _deserialize_recoverable_sig(recover_sig_bytes):
     if not 0 <= recid <= 3:
         raise InvalidSignatureError('invalid recoverable signature')
     if not lib.secp256k1_ecdsa_recoverable_signature_parse_compact(
-            CONTEXT, recoverable_sig, bytes(recover_sig_bytes), recid):
+            CONTEXT, recoverable_sig, recover_sig_bytes, recid):
         raise InvalidSignatureError('invalid recoverable signature')
     return recoverable_sig
 
 
 def _message_sig_to_recoverable_sig(message_sig):
     '''Return a recoverable signature from a message signature.'''
-    if not isinstance(message_sig, (bytes, bytearray)) or len(message_sig) != 65:
+    if not isinstance(message_sig, bytes) or len(message_sig) != 65:
         raise InvalidSignatureError('message signature must be 65 bytes')
     if not 27 <= message_sig[0] < 35:
         raise InvalidSignatureError('invalid message signature format')
-    return bytes(message_sig[1:]) + pack_byte((message_sig[0] - 27) & 3)
+    return message_sig[1:] + pack_byte((message_sig[0] - 27) & 3)
 
 
 def _recoverable_sig_to_message_sig(recoverable_sig, compressed):
@@ -166,16 +166,16 @@ class PrivateKey:
         with an implicit coin (e.g. if created from WIF), so in such cases we remember it.
         If there is no implicit coin and client code does specify one, Bitcoin is used.
         '''
-        if isinstance(secret, (bytes, bytearray)):
+        if isinstance(secret, bytes):
             if len(secret) != KEY_SIZE:
                 raise ValueError('private key must be 32 bytes')
-            # ffi doesn't take bytearray objects
-            secret = bytes(secret)
             if not lib.secp256k1_ec_seckey_verify(CONTEXT, secret):
                 raise ValueError('private key out of range')
             self._secret = secret
+        elif repr(secret).startswith("<cdata 'unsigned char[32]'"):
+            self._secret = bytes(ffi.buffer(secret))
         else:
-            self._secret = bytes(ffi.buffer(secret, 32))
+            raise TypeError('private key must be bytes')
         self._compressed = compressed
         self._coin = coin or Bitcoin
 
@@ -383,7 +383,7 @@ class PrivateKey:
             raise DecryptionError('bad HMAC')
 
         try:
-            return aes_decrypt_with_iv(key_e, iv, bytes(ciphertext))
+            return aes_decrypt_with_iv(key_e, iv, ciphertext)
         except Exception as e:  # aes library can raise Exception, unfortunately
             raise DecryptionError(f'{e}') from None
 
@@ -443,7 +443,7 @@ class PublicKey:
 
         data should be bytes of length 33 or 65.'''
         public_key = ffi.new('secp256k1_pubkey *')
-        if not lib.secp256k1_ec_pubkey_parse(CONTEXT, public_key, bytes(data), len(data)):
+        if not lib.secp256k1_ec_pubkey_parse(CONTEXT, public_key, data, len(data)):
             raise ValueError('invalid public key')
         return cls(public_key, len(data) == 33)
 
@@ -565,7 +565,7 @@ class PublicKey:
         return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self._public_key))
 
     def encrypt_message(self, message, magic=b'BIE1'):
-        '''Encrypt a message using ECIES.  The message can be bytes, a bytearray, or a string.
+        '''Encrypt a message using ECIES.  The message can be bytes or a string.
 
         String are converted to UTF-8 encoded bytes.  The result has type bytes.
         '''
@@ -574,7 +574,7 @@ class PublicKey:
         ephemeral_key = PrivateKey.from_random()
         key = sha512(ephemeral_key.ecdh_shared_secret(self).to_bytes(compressed=True))
         iv, key_e, key_m = key[0:16], key[16:32], key[32:]
-        ciphertext = aes_encrypt_with_iv(key_e, iv, bytes(message))
+        ciphertext = aes_encrypt_with_iv(key_e, iv, message)
         ephemeral_pubkey = ephemeral_key.public_key.to_bytes()
         encrypted_data = b''.join((magic, ephemeral_pubkey, ciphertext))
         return encrypted_data + hmac_digest(key_m, encrypted_data, _sha256)

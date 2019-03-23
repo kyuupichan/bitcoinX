@@ -72,7 +72,7 @@ class TestPrivateKey:
 
     @pytest.mark.parametrize("good_key", (
         one,
-        bytearray(31) + bytes([1]),
+        bytes(31) + bytes([1]),
         int_to_be_bytes(CURVE_ORDER - 1),
     ))
     def test_good(self, good_key):
@@ -103,17 +103,6 @@ class TestPrivateKey:
         with pytest.raises(ValueError):
             PrivateKey.from_arbitrary_bytes(int_to_be_bytes(CURVE_ORDER) * 10)
 
-
-    def test_inert(self):
-        # Test modifying a bytearray doesn't modify the private key
-        secret = bytearray(os.urandom(32))
-        p = PrivateKey(secret)
-        value = p.to_int()
-        secret[0] ^= 159
-        assert p._secret != secret
-        assert p.to_int() == value
-
-
     def test_eq(self):
         secret = os.urandom(32)
         p1 = PrivateKey(secret)
@@ -122,7 +111,6 @@ class TestPrivateKey:
         assert p1 == p2
         p2 = PrivateKey(os.urandom(32))
         assert p1 != p2
-
 
     def test_public_key(self):
         secret = os.urandom(32)
@@ -258,8 +246,6 @@ class TestPrivateKey:
         p1 = PrivateKey.from_random()
         p2 = p1.add(one)
         assert p2.to_int() == p1.to_int() + 1
-        p2 = p1.add(bytearray(one))
-        assert p2.to_int() == p1.to_int() + 1
 
 
     def test_subtract_one(self):
@@ -306,8 +292,6 @@ class TestPrivateKey:
         value = p1.to_int()
         p2 = p1.multiply(one)
         assert p2.to_int() == value
-        p3 = p1.multiply(bytearray(one))
-        assert p2 == p3
 
 
     def test_mult(self):
@@ -481,7 +465,7 @@ class TestPrivateKey:
         priv = PrivateKey(bytes(range(32)))
         P = priv.public_key
         msg = b'BitcoinSV'
-        enc_msg = bytearray(P.encrypt_message(msg))
+        enc_msg = P.encrypt_message(msg)
 
         with pytest.raises(DecryptionError) as e:
             priv.decrypt_message(bytes(84))
@@ -492,20 +476,20 @@ class TestPrivateKey:
         assert 'bad magic' in str(e.value)
 
         # Bad pubkey first byte
-        enc_msg[4] ^= 2
+        enc_msg2 = bytearray(enc_msg)
+        enc_msg2[4] ^= 2
         with pytest.raises(DecryptionError) as e:
-            priv.decrypt_message(enc_msg)
+            priv.decrypt_message(bytes(enc_msg2))
         assert 'invalid ephemeral public key' in str(e.value)
-        enc_msg[4] ^= 2
 
         # Bad padding.  Triggering this is work...
         ephemeral_pubkey = PublicKey.from_bytes(enc_msg[4: 37])
         key = sha512(priv.ecdh_shared_secret(ephemeral_pubkey).to_bytes())
         iv, key_e, key_m = key[0:16], key[16:32], key[32:]
 
-        encrypted_data = enc_msg[:-32]
+        encrypted_data = bytearray(enc_msg[:-32])
         encrypted_data[-1] ^= 1    # Bad padding
-        enc_msg = encrypted_data + hmac_digest(key_m, encrypted_data, _sha256)
+        enc_msg = bytes(encrypted_data) + hmac_digest(key_m, encrypted_data, _sha256)
         with pytest.raises(DecryptionError) as e:
             priv.decrypt_message(enc_msg)
         assert 'padding' in str(e.value)
@@ -673,7 +657,6 @@ class TestPublicKey:
         P2 = P.add(value)
         assert P2 == priv2.public_key
         assert P == priv.public_key
-        assert P.add(bytearray(value)) == P2
 
 
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
@@ -707,7 +690,6 @@ class TestPublicKey:
         P2 = P.multiply(value)
         assert P2 == priv2.public_key
         assert P == priv.public_key
-        assert P.multiply(bytearray(value)) == P2
 
 
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
@@ -833,10 +815,6 @@ class TestPublicKey:
         assert priv.public_key == pub
         assert pub.coin() is Bitcoin
 
-        # Test accept bytearray
-        pub2 = PublicKey.from_recoverable_signature(bytearray(rec_sig), message)
-        assert pub2 == pub
-
 
     def test_from_recoverable_signature_bad(self):
         message = b'BitcoinSV'
@@ -865,7 +843,7 @@ class TestPublicKey:
 
 
     @pytest.mark.parametrize("msg", (
-        b'BitcoinSV', 'BitcoinSV', bytearray(b'BitcoinSV'),
+        b'BitcoinSV', 'BitcoinSV',
         # Test longer messages are prefix-encoded correctly
         b'BitcoinSV * 100',
     ))
@@ -877,11 +855,11 @@ class TestPublicKey:
 
         msg_sig = priv.sign_message(msg)
         msg_sig2 = bytearray(msg_sig)
+        msg_sig2[3] ^= 79
+        msg_sig2 = bytes(msg_sig2)
+
         assert P.verify_message(msg_sig, msg)
         assert PublicKey.verify_message_and_address(msg_sig, msg, address)
-
-        assert P.verify_message(msg_sig2, msg)
-        assert PublicKey.verify_message_and_address(msg_sig2, msg, address)
 
         msg_sig = priv.sign_message_to_base64(msg)
         assert P.verify_message(msg_sig, msg)
@@ -890,7 +868,6 @@ class TestPublicKey:
         assert not PublicKey.verify_message_and_address(msg_sig, msg,
                                                         '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')
 
-        msg_sig2[3] ^= 79
         assert not P.verify_message(msg_sig2, msg)
         assert not PublicKey.verify_message_and_address(msg_sig2, msg, address)
 
@@ -909,13 +886,13 @@ class TestPublicKey:
         for n in (26, 35):
             msg_sig[0] = n
             with pytest.raises(InvalidSignatureError):
-                P.verify_message(msg_sig, msg)
+                P.verify_message(bytes(msg_sig), msg)
 
 
     def test_encrypt_message_and_to_base64(self):
         bmsg = b'BitcoinSV'
         # Test both compressed and uncompressed pubkeys
-        for msg in (bmsg, bytearray(bmsg), bmsg.decode()):
+        for msg in (bmsg, bmsg.decode()):
             for compressed in (False, True):
                 priv = PrivateKey.from_random()
                 priv._compressed = compressed
