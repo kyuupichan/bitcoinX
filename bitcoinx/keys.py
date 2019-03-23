@@ -28,7 +28,7 @@
 __all__ = (
     'PrivateKey', 'PublicKey', 'CURVE_ORDER',
     'KeyException', 'InvalidSignatureError', 'DecryptionError',
-    'der_signature_to_raw',
+    'der_signature_to_compact',
 )
 
 from base64 import b64decode, b64encode
@@ -103,7 +103,7 @@ def _deserialize_recoverable_sig(recover_sig_bytes):
     if not 0 <= recid <= 3:
         raise InvalidSignatureError('invalid recoverable signature')
     if not lib.secp256k1_ecdsa_recoverable_signature_parse_compact(
-            CONTEXT, recoverable_sig, recover_sig_bytes, recid):
+            CONTEXT, recoverable_sig, bytes(recover_sig_bytes), recid):
         raise InvalidSignatureError('invalid recoverable signature')
     return recoverable_sig
 
@@ -145,10 +145,12 @@ def _normalize_message_and_sig(message, message_sig):
     return message, message_sig
 
 
-def der_signature_to_raw(der_sig):
+def der_signature_to_compact(der_sig):
     '''Returns 64 bytes representing r and s as concatenated 32-byte big-endian numbers.'''
     cdata_sig = _der_sig_to_cdata_sig(der_sig)
-    return bytes(ffi.buffer(cdata_sig))
+    compact = ffi.new('unsigned char [64]')
+    lib.secp256k1_ecdsa_signature_serialize_compact(CONTEXT, compact, cdata_sig)
+    return bytes(ffi.buffer(compact))
 
 
 class PrivateKey:
@@ -325,7 +327,8 @@ class PrivateKey:
         Compressed appears to be legacy and the signature is valid whether True or False;
         in any case only the first byte of the signature changes.
 
-        If message is a string, it is UTF-8 encoded as bytes.  The result is a bytes object.
+        If message is a string, it is UTF-8 encoded as bytes.  The result is bytes object
+        of length 65.
         '''
         if isinstance(message, str):
             message = message.encode()

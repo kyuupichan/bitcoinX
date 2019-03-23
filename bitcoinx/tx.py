@@ -29,6 +29,7 @@ __all__ = (
 )
 
 import attr
+from io import BytesIO
 
 from .hashes import hash_to_hex_str
 from .packing import (
@@ -53,17 +54,6 @@ class Tx:
         '''Return True iff the tx is a coinbase transaction.'''
         return self.inputs[0].is_coinbase()
 
-    def to_bytes(self):
-        return b''.join((
-            pack_le_int32(self.version),
-            pack_list(self.inputs, TxInput.to_bytes),
-            pack_list(self.outputs, TxOutput.to_bytes),
-            pack_le_uint32(self.locktime),
-        ))
-
-    def to_hex(self):
-        return self.to_bytes().hex()
-
     @classmethod
     def read(cls, read):
         return cls(
@@ -72,6 +62,25 @@ class Tx:
             read_list(read, TxOutput.read),
             read_le_uint32(read),
         )
+
+    @classmethod
+    def from_bytes(cls, raw):
+        return cls.read(BytesIO(raw).read)
+
+    def to_bytes(self):
+        return b''.join((
+            pack_le_int32(self.version),
+            pack_list(self.inputs, TxInput.to_bytes),
+            pack_list(self.outputs, TxOutput.to_bytes),
+            pack_le_uint32(self.locktime),
+        ))
+
+    @classmethod
+    def from_hex(cls, hex_str):
+        return cls.from_bytes(bytes.fromhex(hex_str))
+
+    def to_hex(self):
+        return self.to_bytes().hex()
 
 
 @attr.s(slots=True, repr=False)
@@ -106,7 +115,7 @@ class TxInput:
     def __repr__(self):
         return (
             f'TxInput(prev_hash="{hash_to_hex_str(self.prev_hash)}", prev_idx={self.prev_idx}, '
-            f'script="{self.script_sig.hex()}", sequence={self.sequence})'
+            f'script_sig="{self.script_sig.hex()}", sequence={self.sequence})'
         )
 
 
@@ -131,5 +140,5 @@ class TxOutput:
 
     def __repr__(self):
         return (
-            f'TxOutput(value={self.value}, script="{self.script_pk.hex()}")'
+            f'TxOutput(value={self.value}, script_pk="{self.script_pk.hex()}")'
         )

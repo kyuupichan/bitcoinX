@@ -37,13 +37,14 @@ def test_CURVE_ORDER():
         115792089237316195423570985008687907852837564279074904382605163141518161494337
 
 
-def test_der_signature_to_raw():
+def test_der_signature_to_compact():
     der_sig = bytes.fromhex(
-        '3045022100fd34ef3048a25a782819532c4227b118d4baaf25f08f4278fd8b3925c1310f60022'
-        '023cb697b5aa7aff84e3c0d316884139db8178bd3d88ba910bdb7c8c6ef062759')
-    assert der_signature_to_raw(der_sig) == bytes.fromhex(
-        '600f31c125398bfd78428ff025afbad418b127422c531928785aa24830ef34f'
-        'd592706efc6c8b7bd10a98bd8d38b17b89d138468310d3c4ef8afa75a7b69cb23'
+        '30450221008dc02fa531a9a704f5c01abdeb58930514651565b42abf94f6ad1565d0ad'
+        '6785022027b1396f772c696629a4a09b01aed2416861aeaee05d0ff4a2e6fdfde73ec84d'
+    )
+    assert der_signature_to_compact(der_sig) == bytes.fromhex(
+        '8dc02fa531a9a704f5c01abdeb58930514651565b42abf94f6ad1565d0ad6785'
+        '27b1396f772c696629a4a09b01aed2416861aeaee05d0ff4a2e6fdfde73ec84d'
     )
 
 
@@ -831,6 +832,10 @@ class TestPublicKey:
 
         assert priv.public_key == pub
         assert pub.coin() is Bitcoin
+
+        # Test accept bytearray
+        pub2 = PublicKey.from_recoverable_signature(bytearray(rec_sig), message)
+        assert pub2 == pub
 
 
     def test_from_recoverable_signature_bad(self):
