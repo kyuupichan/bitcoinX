@@ -550,7 +550,8 @@ class PublicKey:
         return self.verify_signature(recoverable_sig, msg_to_sign, hasher)
 
     @classmethod
-    def verify_message_and_address(cls, message_sig, message, address, hasher=double_sha256):
+    def verify_message_and_address(cls, message_sig, message, address, *,
+                                   hasher=double_sha256, coin=None):
         '''As for verify_message, but also test it was signed by a private key of the given
         address.
         '''
@@ -560,7 +561,8 @@ class PublicKey:
         except InvalidSignatureError:
             return False
         return (public_key.verify_message(message_sig, message, hasher) and
-                public_key.to_address() == address)
+                any(address == public_key.to_address(compressed=compressed, coin=coin)
+                    for compressed in (True, False)))
 
     def verify_signature(self, signature, message, hasher=sha256):
         '''Verify a serialized signature.  Return True if good otherwise False.'''

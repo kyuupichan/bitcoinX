@@ -860,7 +860,9 @@ class TestPublicKey:
     def test_verify_message(self, msg):
         priv = PrivateKey.from_random()
         P = priv.public_key
-        address = P.to_address()
+        address_comp = P.to_address()
+        address_uncomp = P.to_address(compressed=False)
+        assert address_comp != address_uncomp
         base_msg = b'BitcoinSV'
 
         msg_sig = priv.sign_message(msg)
@@ -869,18 +871,42 @@ class TestPublicKey:
         msg_sig2 = bytes(msg_sig2)
 
         assert P.verify_message(msg_sig, msg)
-        assert PublicKey.verify_message_and_address(msg_sig, msg, address)
+        assert PublicKey.verify_message_and_address(msg_sig, msg, address_comp)
+        assert PublicKey.verify_message_and_address(msg_sig, msg, address_uncomp)
 
         msg_sig = priv.sign_message_to_base64(msg)
         assert P.verify_message(msg_sig, msg)
-        assert PublicKey.verify_message_and_address(msg_sig, msg, address)
+        assert PublicKey.verify_message_and_address(msg_sig, msg, address_comp)
+        assert PublicKey.verify_message_and_address(msg_sig, msg, address_uncomp)
 
         assert not PublicKey.verify_message_and_address(msg_sig, msg,
                                                         '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')
 
         assert not P.verify_message(msg_sig2, msg)
-        assert not PublicKey.verify_message_and_address(msg_sig2, msg, address)
+        assert not PublicKey.verify_message_and_address(msg_sig2, msg, address_comp)
+        assert not PublicKey.verify_message_and_address(msg_sig2, msg, address_uncomp)
 
+
+    def test_verify_message_and_address_coin(self):
+        priv = PrivateKey.from_random()
+        P = priv.public_key
+        msg = b'BitcoinSV'
+        msg_sig = priv.sign_message(msg)
+
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address())
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address(), coin=Bitcoin)
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address(coin=BitcoinTestnet),
+                                            coin=BitcoinTestnet)
+
+
+    @pytest.mark.parametrize("hasher", (double_sha256, sha256))
+    def test_verify_message_and_address_hasher(self, hasher):
+        priv = PrivateKey.from_random()
+        P = priv.public_key
+        msg = b'BitcoinSV'
+        msg_sig = priv.sign_message(msg, hasher=hasher)
+
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address(), hasher=hasher)
 
     def test_verify_message_bad(self):
         priv = PrivateKey.from_random()
