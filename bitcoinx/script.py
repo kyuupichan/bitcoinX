@@ -298,29 +298,54 @@ class Script(bytes):
                 assert op == OP_RESERVED
                 yield op
 
+    @classmethod
+    def op_to_asm_word(cls, op):
+        '''Convert a single opcode, or data push, as returned by ops(), to a human-readable
+        word.'''
+        if isinstance(op, bytes):
+            if len(op) <= 4:
+                return str(item_to_int(op))
+            # Should we implement bitcoind's sigHashDecode?
+            return op.hex()
+        try:
+            return Ops(op).name
+        except ValueError:
+            return "OP_INVALIDOPCODE" if op == 0xff else "OP_UNKNOWN"
+
     def to_asm(self):
-        '''Returns a script converted to bitcoin's human-readable ASM format.'''
-        return ' '.join(op.hex() if isinstance(op, bytes) else Ops(op).name for op in self.ops())
+        '''Return a script converted to bitcoin's human-readable ASM format.'''
+        op_to_asm_word = self.op_to_asm_word
+        try:
+            return ' '.join(op_to_asm_word(op) for op in self.ops())
+        except TruncatedScriptError:
+            return '[error]'
 
     def to_bytes(self):
+        '''Return the script as a bytes() object.'''
         return self
 
     @classmethod
     def asm_word_to_bytes(cls, word):
-        '''Converts an ASM word to bytes, either a 1-byte opcode or the data bytes.'''
+        '''Convert an ASM word to bytes, either a 1-byte opcode or the data bytes.'''
         if word.startswith('OP_'):
             try:
                 opcode = Ops[word]
             except KeyError:
                 raise ScriptError(f'unrecognized op code {word}') from None
             return pack_byte(opcode)
+        # Handle what looks like a decimal, provided it's in-range
+        if word.isdigit() or word[0] == '-' and word[1:].isdigit():
+            value = int(word)
+            if abs(value) <= 2147483647:
+                return push_int(value)
         try:
-            return bytes.fromhex(word)
+            return push_item(bytes.fromhex(word))
         except ValueError:
             raise ScriptError(f'invalid pushdata {word}') from None
 
     @classmethod
     def from_asm(cls, asm):
+        '''Convert an ASM string to a script.'''
         asm_word_to_bytes = cls.asm_word_to_bytes
         return cls(b''.join(asm_word_to_bytes(word) for word in asm.split()))
 
