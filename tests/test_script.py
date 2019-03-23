@@ -261,41 +261,42 @@ def test_byte_exports(member):
     assert globals()[f'b_{member}'] == bytes([globals()[member]])
 
 
+class TestScript:
 
-def test_P2PK_script():
-    for n in (33, 65):
-        data = os.urandom(n)
-        assert P2PK_script(data) == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
+    def test_P2PK_script(self):
+        for n in (33, 65):
+            data = os.urandom(n)
+            script = Script.P2PK_script(data)
+            assert isinstance(script, Script)
+            assert script == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
 
+    def test_P2PK_script_bad(self):
+        data = os.urandom(20)
+        with pytest.raises(ValueError):
+            Script.P2PK_script(data)
 
-def test_P2PK_script_bad():
-    data = os.urandom(20)
-    with pytest.raises(ValueError):
-        P2PK_script(data)
+    def test_P2PKHK_script(self):
+        data = os.urandom(20)
+        script = Script.P2PKH_script(data)
+        assert isinstance(script, Script)
+        assert script == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
+                          bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
 
+    def test_P2PKH_script_bad(self):
+        data = os.urandom(33)
+        with pytest.raises(ValueError):
+            Script.P2PKH_script(data)
 
-def test_P2PKHK_script():
-    data = os.urandom(20)
-    assert P2PKH_script(data) == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
-                                  bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
+    def test_P2SH_script(self):
+        data = os.urandom(20)
+        script = Script.P2SH_script(data)
+        assert isinstance(script, Script)
+        assert script == (bytes([OP_HASH160, len(data)]) + data + bytes([OP_EQUAL]))
 
-
-def test_P2PKH_script_bad():
-    data = os.urandom(33)
-    with pytest.raises(ValueError):
-        P2PKH_script(data)
-
-
-def test_P2SH_script():
-    data = os.urandom(20)
-    assert P2SH_script(data) == (bytes([OP_HASH160, len(data)]) + data +
-                                 bytes([OP_EQUAL]))
-
-
-def test_P2SH_script_bad():
-    data = os.urandom(33)
-    with pytest.raises(ValueError):
-        P2SH_script(data)
+    def test_P2SH_script_bad(self):
+        data = os.urandom(33)
+        with pytest.raises(ValueError):
+            Script.P2SH_script(data)
 
 
 @pytest.mark.parametrize("item,answer", (
@@ -388,12 +389,13 @@ def test_item_to_int(value, encoding):
     (bytes([OP_RESERVED, OP_DUP, OP_NOP, OP_15, OP_HASH160, OP_1NEGATE]) + push_item(b'BitcoinSV'),
      [OP_RESERVED, OP_DUP, OP_NOP, b'\x0f', OP_HASH160, b'\x81', b'BitcoinSV']),
     (b'', []),
+    (4, [b''] * 4),
     (push_item(b'a' * 80), [b'a' * 80]),
     (push_item(b'a' * 256), [b'a' * 256]),
     (push_item(b'a' * 65536), [b'a' * 65536]),
 ), ids=parameter_id)
 def test_script_ops(script, ops):
-    assert list(script_ops(script)) == ops
+    assert list(Script(script).ops()) == ops
 
 
 @pytest.mark.parametrize("script", (
@@ -405,14 +407,13 @@ def test_script_ops(script, ops):
 ), ids=parameter_id)
 def test_script_ops_truncated(script):
     with pytest.raises(TruncatedScriptError):
-        list(script_ops(script))
+        list(Script(script).ops())
 
 
 @pytest.mark.parametrize("script", (
-    1,
     'hello',
     [b''],
 ), ids=parameter_id)
 def test_script_ops_type_error(script):
     with pytest.raises(TypeError):
-        list(script_ops(script))
+        list(Script(script).ops())
