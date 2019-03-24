@@ -46,7 +46,7 @@ HARDENED = 1 << 31
 PART_REGEX = re.compile("([0-9]+)'?$")
 
 
-@attr.s(slots=True, repr=False)
+@attr.s(slots=True, frozen=True, repr=False)
 class BIP32Derivation(object):
     '''Metadata about a BIP32 derivation.'''
     chain_code = attr.ib()
