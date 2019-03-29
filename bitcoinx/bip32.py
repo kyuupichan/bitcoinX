@@ -165,9 +165,12 @@ class BIP32PrivateKey(PrivateKey):
         '''Return the key's fingerprint as 4 bytes.'''
         return self.public_key.fingerprint()
 
-    def extended_key_string(self, *, coin=None):
+    def to_extended_key_string(self, *, coin=None):
         '''Return an extended key as a base58 string.'''
         return base58_encode_check(self._extended_key(coin))
+
+    # Remove soon
+    extended_key_string = to_extended_key_string
 
     def __repr__(self):
         return f'BIP32PrivateKey("{str(self)}")'
@@ -226,15 +229,18 @@ class BIP32PublicKey(PublicKey):
         '''Return the key's fingerprint as 4 bytes.'''
         return self.identifier()[:4]
 
-    def extended_key_string(self, *, coin=None):
+    def to_extended_key_string(self, *, coin=None):
         '''Return an extended key as a base58 string.'''
         return base58_encode_check(self._extended_key(coin))
 
+    # Remove soon
+    extended_key_string = to_extended_key_string
+
     def __str__(self):
-        return self.extended_key_string()
+        return self.to_extended_key_string()
 
     def __repr__(self):
-        return f'BIP32PublicKey("{self.extended_key_string()}")'
+        return f'BIP32PublicKey("{self.to_extended_key_string()}")'
 
 
 def _from_extended_key(ekey):
