@@ -30,13 +30,17 @@ __all__ = (
 
 import attr
 from io import BytesIO
+from itertools import chain
 
-from .hashes import hash_to_hex_str
+from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varint, pack_varbytes, pack_le_int64, pack_list,
     read_le_int32, read_le_uint32, read_varint, read_varbytes, read_le_int64, read_list,
 )
-
+from .script import (
+    SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ANYONE_CAN_PAY, SIGHASH_FORKID,
+    SIGHASH_BASE_MASK
+)
 
 ZERO = bytes(32)
 MINUS_1 = 4294967295
@@ -82,6 +86,50 @@ class Tx:
     def to_hex(self):
         return self.to_bytes().hex()
 
+    def _hash_prevouts(self):
+        preimage = b''.join(txin.prevout_bytes() for txin in self.inputs)
+        return double_sha256(preimage)
+
+    def _hash_sequence(self):
+        preimage = b''.join(pack_le_uint32(txin.sequence) for txin in self.inputs)
+        return double_sha256(preimage)
+
+    def _hash_outputs(self):
+        preimage = b''.join(txout.to_bytes() for txout in self.outputs)
+        return double_sha256(preimage)
+
+    def signature_hash(self, input_index, value, script, *, sighash=SIGHASH_ALL | SIGHASH_FORKID):
+        if not 0 <= input_index < len(self.inputs):
+            raise IndexError(f'invalid input index: {input_index}')
+        if value < 0:
+            raise ValueError(f'value cannot be negative: {value}')
+
+        txin = self.inputs[input_index]
+        hash_prevouts = hash_sequence = hash_outputs = ZERO
+
+        sighash_base = sighash & SIGHASH_BASE_MASK
+        sighash_not_single_none = sighash_base not in (SIGHASH_SINGLE, SIGHASH_NONE)
+        if not (sighash & SIGHASH_ANYONE_CAN_PAY):
+            hash_prevouts = self._hash_prevouts()
+            if sighash_not_single_none:
+                hash_sequence = self._hash_sequence()
+        if sighash_not_single_none:
+            hash_outputs = self._hash_outputs()
+        elif (sighash_base == SIGHASH_SINGLE and input_index < len(self.outputs)):
+            hash_outputs = double_sha256(self.outputs[input_index].to_bytes())
+
+        preimage = b''.join((
+            pack_le_int32(self.version),
+            hash_prevouts,
+            hash_sequence,
+            txin.to_bytes_for_signature(value, script),
+            hash_outputs,
+            pack_le_uint32(self.locktime),
+            pack_le_uint32(sighash),
+        ))
+
+        return double_sha256(preimage)
+
 
 @attr.s(slots=True, repr=False)
 class TxInput:
@@ -104,10 +152,21 @@ class TxInput:
             read_le_uint32(read),   # sequence
         )
 
-    def to_bytes(self):
+    def prevout_bytes(self):
+        return self.prev_hash + pack_le_uint32(self.prev_idx)
+
+    def to_bytes_for_signature(self, value, script):
         return b''.join((
-            self.prev_hash,
-            pack_le_uint32(self.prev_idx),
+            self.prevout_bytes(),
+            pack_varbytes(script),
+            pack_le_int64(value),
+            pack_le_uint32(self.sequence),
+        ))
+
+    def to_bytes(self):
+        '''Pass value to get a serialization to be used in transaction signatures.'''
+        return b''.join((
+            self.prevout_bytes(),
             pack_varbytes(self.script_sig),
             pack_le_uint32(self.sequence),
         ))
