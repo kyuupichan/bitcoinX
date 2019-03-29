@@ -49,7 +49,7 @@ class TestBIP32Derivation:
 
 class TestBIP32PublicKey:
 
-    def test_from_extended_key_string(self):
+    def test_from_to_extended_key_string(self):
         assert mpubkey.coin() is Bitcoin
         d = mpubkey.derivation()
         assert d.n == 0
@@ -63,18 +63,18 @@ class TestBIP32PublicKey:
         assert x == 44977109961578369385937116592536468905742111247230478021459394832226142714624
 
     def test_extended_key(self):
-        assert mpubkey.extended_key_string() == MXPUB
-        assert mpubkey.extended_key_string(coin=Bitcoin) == MXPUB
-        assert mpubkey.extended_key_string(coin=BitcoinTestnet) == MXPUB_TESTNET
+        assert mpubkey.to_extended_key_string() == MXPUB
+        assert mpubkey.to_extended_key_string(coin=Bitcoin) == MXPUB
+        assert mpubkey.to_extended_key_string(coin=BitcoinTestnet) == MXPUB_TESTNET
         chg_master = mpubkey.child(1)
         chg5 = chg_master.child(5)
         assert chg5.to_address(coin=Bitcoin) == '1BsEFqGtcZnVBbPeimcfAFTitQdTLvUXeX'
-        assert chg5.extended_key_string() == (
+        assert chg5.to_extended_key_string() == (
             'xpub6AzPNZ1SAS7zmSnj6gakQ6tAKPzRVdQzieL3eCnoeT3A89nJaJKuUYW'
             'oZuYp8xWhCs1gF9yXAwGg7zKYhvCfhk9jrb1bULhLkQCwtB1Nnn1'
         )
 
-        ext_key_base58 = chg5.extended_key_string(coin=Bitcoin)
+        ext_key_base58 = chg5.to_extended_key_string(coin=Bitcoin)
         assert ext_key_base58 == (
             'xpub6AzPNZ1SAS7zmSnj6gakQ6tAKPzRVdQzieL3eCnoeT3A89nJaJKu'
             'UYWoZuYp8xWhCs1gF9yXAwGg7zKYhvCfhk9jrb1bULhLkQCwtB1Nnn1'
@@ -171,7 +171,7 @@ class TestBIP32PublicKey:
 
 class TestPrivKey(object):
 
-    def test_from_extended_key_string(self):
+    def test_from_to_extended_key_string(self):
         d = mprivkey.derivation()
         assert d == mpubkey.derivation()
         assert mprivkey.coin() is Bitcoin
@@ -190,7 +190,7 @@ class TestPrivKey(object):
             assert size == 64
             return values.pop()
         p = BIP32PrivateKey.from_random(source=source)
-        assert p.extended_key_string() == (
+        assert p.to_extended_key_string() == (
             'xprv9s21ZrQH143K2NukZg6wLLhBGTfK6twkq4qMuqCpX2uq3udoAx4'
             'cKXFmyQrGAMn8TNyjNJThnPHL321QCxRxZpg7QQAvQFb7kePtCLcSrq3'
         )
@@ -207,18 +207,18 @@ class TestPrivKey(object):
         assert child.derivation().parent_fingerprint == mprivkey.fingerprint()
 
     def test_extended_key(self):
-        assert mprivkey.extended_key_string() == MXPRV
-        assert mprivkey.extended_key_string(coin=Bitcoin) == MXPRV
-        assert mprivkey.extended_key_string(coin=BitcoinTestnet) == MXPRV_TESTNET
+        assert mprivkey.to_extended_key_string() == MXPRV
+        assert mprivkey.to_extended_key_string(coin=Bitcoin) == MXPRV
+        assert mprivkey.to_extended_key_string(coin=BitcoinTestnet) == MXPRV_TESTNET
         chg_master = mprivkey.child(1)
         chg5 = chg_master.child(5)
         assert chg5.to_WIF(coin=Bitcoin) == 'L5kTYMuajTGWdYiMoD4V8k6LS4Bg3HFMA5UGTfxG9Wh7UKu9CHFC'
-        ext_key_base58 = chg5.extended_key_string()
+        ext_key_base58 = chg5.to_extended_key_string()
         assert ext_key_base58 == (
             'xprv9x12y3UYL4ZhYxiFzf3k2xwRmN9w6Ah9MRQSqpPC67WBFMTA2m1evkCKi'
             'dz7UYBa5i8QwxmU9Ju7giqEmcPRXKXwzgAJwssNeZNQLPT3LAY'
         )
-        assert chg5.extended_key_string() == chg5.extended_key_string(coin=Bitcoin)
+        assert chg5.to_extended_key_string() == chg5.to_extended_key_string(coin=Bitcoin)
 
         # Check can recreate
         dup = bip32_key_from_string(ext_key_base58)
@@ -304,7 +304,7 @@ class TestPrivKey(object):
 
         # Chain m
         m = BIP32PrivateKey.from_seed(seed)
-        assert m.extended_key_string() == (
+        assert m.to_extended_key_string() == (
             "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqj"
             "iChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
         )
@@ -318,55 +318,55 @@ class TestVectors():
 
         # Chain m
         m = BIP32PrivateKey.from_seed(seed)
-        xprv = m.extended_key_string(coin=Bitcoin)
+        xprv = m.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChk"
                         "VvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi")
-        xpub = m.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY"
                         "2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8")
 
         # Chain m/0H
         m1 = m.child(0 + HARDENED)
-        xprv = m1.extended_key_string(coin=Bitcoin)
+        xprv = m1.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4c"
                         "V1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7")
-        xpub = m1.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m1.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub68Gmy5EdvgibQVfPdqkBBCHxA5htiqg55crXYuXoQRKfDBFA1WEj"
                         "WgP6LHhwBZeNK1VTsfTFUHCdrfp1bgwQ9xv5ski8PX9rL2dZXvgGDnw")
 
         # Chain m/0H/1
         m2 = m1.child(1)
-        xprv = m2.extended_key_string(coin=Bitcoin)
+        xprv = m2.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9wTYmMFdV23N2TdNG573QoEsfRrWKQgWeibmLntzniatZvR9BmLn"
                         "vSxqu53Kw1UmYPxLgboyZQaXwTCg8MSY3H2EU4pWcQDnRnrVA1xe8fs")
-        xpub = m2.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m2.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub6ASuArnXKPbfEwhqN6e3mwBcDTgzisQN1wXN9BJcM47sSikHjJf3"
                         "UFHKkNAWbWMiGj7Wf5uMash7SyYq527Hqck2AxYysAA7xmALppuCkwQ")
 
         # Chain m/0H/1/2H
         m3 = m2.child(2 + HARDENED)
-        xprv = m3.extended_key_string(coin=Bitcoin)
+        xprv = m3.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9z4pot5VBttmtdRTWfWQmoH1taj2axGVzFqSb8C9xaxKymcFzXBD"
                         "ptWmT7FwuEzG3ryjH4ktypQSAewRiNMjANTtpgP4mLTj34bhnZX7UiM")
-        xpub = m3.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m3.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub6D4BDPcP2GT577Vvch3R8wDkScZWzQzMMUm3PWbmWvVJrZwQY4VU"
                         "NgqFJPMM3No2dFDFGTsxxpG5uJh7n7epu4trkrX7x7DogT5Uv6fcLW5")
 
         # Chain m/0H/1/2H/2
         m4 = m3.child(2)
-        xprv = m4.extended_key_string(coin=Bitcoin)
+        xprv = m4.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprvA2JDeKCSNNZky6uBCviVfJSKyQ1mDYahRjijr5idH2WwLsEd4Hsb"
                         "2Tyh8RfQMuPh7f7RtyzTtdrbdqqsunu5Mm3wDvUAKRHSC34sJ7in334")
-        xpub = m4.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m4.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub6FHa3pjLCk84BayeJxFW2SP4XRrFd1JYnxeLeU8EqN3vDfZmbqBq"
                         "aGJAyiLjTAwm6ZLRQUMv1ZACTj37sR62cfN7fe5JnJ7dh8zL4fiyLHV")
 
         # Chain m/0H/1/2H/2/1000000000
         m5 = m4.child(1000000000)
-        xprv = m5.extended_key_string(coin=Bitcoin)
+        xprv = m5.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprvA41z7zogVVwxVSgdKUHDy1SKmdb533PjDz7J6N6mV6uS3ze1ai8"
                         "FHa8kmHScGpWmj4WggLyQjgPie1rFSruoUihUZREPSL39UNdE3BBDu76")
-        xpub = m5.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m5.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FS"
                         "VqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy")
 
@@ -375,35 +375,35 @@ class TestVectors():
                              "a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542")
         # Chain m
         m = BIP32PrivateKey.from_seed(seed)
-        xprv = m.extended_key_string(coin=Bitcoin)
+        xprv = m.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9s21ZrQH143K31xYSDQpPDxsXRTUcvj2iNHm5NUtrGiGG5e2DtAL"
                         "Gdso3pGz6ssrdK4PFmM8NSpSBHNqPqm55Qn3LqFtT2emdEXVYsCzC2U")
-        xpub = m.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDMsktWQcFF8syAmRUa"
                         "pSCGu8ED9W6oDMSgv6Zz8idoc4a6mr8BDzTJY47LJhkJ8UB7WEGuduB")
 
         # Chain m/0
         m1 = m.child(0)
-        xprv = m1.extended_key_string(coin=Bitcoin)
+        xprv = m1.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9vHkqa6EV4sPZHYqZznhT2NPtPCjKuDKGY38FBWLvgaDx45zo9W"
                         "QRUT3dKYnjwih2yJD9mkrocEZXo1ex8G81dwSM1fwqWpWkeS3v86pgKt")
-        xpub = m1.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m1.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub69H7F5d8KSRgmmdJg2KhpAK8SR3DjMwAdkxj3ZuxV27CprR9Lg"
                         "peyGmXUbC6wb7ERfvrnKZjXoUmmDznezpbZb7ap6r1D3tgFxHmwMkQTPH")
 
         # Chain m/0H/2147483647H
         m2 = m1.child(2147483647 + HARDENED)
-        xprv = m2.extended_key_string(coin=Bitcoin)
+        xprv = m2.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9wSp6B7kry3Vj9m1zSnLvN3xH8RdsPP1Mh7fAaR7aRLcQMKTR2vid"
                         "YEeEg2mUCTAwCd6vnxVrcjfy2kRgVsFawNzmjuHc2YmYRmagcEPdU9")
-        xpub = m2.public_key.extended_key_string(coin=Bitcoin)
+        xpub = m2.public_key.to_extended_key_string(coin=Bitcoin)
         assert xpub == ("xpub6ASAVgeehLbnwdqV6UKMHVzgqAG8Gr6riv3Fxxpj8ksbH9ebxaEyB"
                         "LZ85ySDhKiLDBrQSARLq1uNRts8RuJiHjaDMBU4Zn9h8LZNnBC5y4a")
 
         # Chain m/0H/2147483647H/1
         m3 = m2.child(1)
-        xprv = m3.extended_key_string(coin=Bitcoin)
-        xpub = m3.public_key.extended_key_string(coin=Bitcoin)
+        xprv = m3.to_extended_key_string(coin=Bitcoin)
+        xpub = m3.public_key.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9zFnWC6h2cLgpmSA46vutJzBcfJ8yaJGg8cX1e5StJh45BBciYT"
                         "RXSd25UEPVuesF9yog62tGAQtHjXajPPdbRCHuWS6T8XA2ECKADdw4Ef")
         assert xpub == ("xpub6DF8uhdarytz3FWdA8TvFSvvAh8dP3283MY7p2V4SeE2wyWmG5m"
@@ -411,8 +411,8 @@ class TestVectors():
 
         # Chain m/0/2147483647H/1/2147483646H
         m4 = m3.child(2147483646 + HARDENED)
-        xprv = m4.extended_key_string(coin=Bitcoin)
-        xpub = m4.public_key.extended_key_string(coin=Bitcoin)
+        xprv = m4.to_extended_key_string(coin=Bitcoin)
+        xpub = m4.public_key.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprvA1RpRA33e1JQ7ifknakTFpgNXPmW2YvmhqLQYMmrj4xJXXWYpDPS"
                         "3xz7iAxn8L39njGVyuoseXzU6rcxFLJ8HFsTjSyQbLYnMpCqE2VbFWc")
         assert xpub == ("xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhg"
@@ -420,8 +420,8 @@ class TestVectors():
 
         # Chain m/0/2147483647H/1/2147483646H/2
         m5 = m4.child(2)
-        xprv = m5.extended_key_string(coin=Bitcoin)
-        xpub = m5.public_key.extended_key_string(coin=Bitcoin)
+        xprv = m5.to_extended_key_string(coin=Bitcoin)
+        xpub = m5.public_key.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprvA2nrNbFZABcdryreWet9Ea4LvTJcGsqrMzxHx98MMrotbir7yrK"
                         "CEXw7nadnHM8Dq38EGfSh6dqA9QWTyefMLEcBYJUuekgW4BYPJcr9E7j")
         assert xpub == ("xpub6FnCn6nSzZAw5Tw7cgR9bi15UV96gLZhjDstkXXxvCLsUXBGXPd"
@@ -433,8 +433,8 @@ class TestVectors():
 
         # Chain m
         m = BIP32PrivateKey.from_seed(seed)
-        xprv = m.extended_key_string(coin=Bitcoin)
-        xpub = m.public_key.extended_key_string(coin=Bitcoin)
+        xprv = m.to_extended_key_string(coin=Bitcoin)
+        xpub = m.public_key.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9s21ZrQH143K25QhxbucbDDuQ4naNntJRi4KUfWT7xo4EKsHt2QJ"
                         "Du7KXp1A3u7Bi1j8ph3EGsZ9Xvz9dGuVrtHHs7pXeTzjuxBrCmmhgC6")
         assert xpub == ("xpub661MyMwAqRbcEZVB4dScxMAdx6d4nFc9nvyvH3v4gJL378CSRZiY"
@@ -442,8 +442,8 @@ class TestVectors():
 
         # Chain m/0H
         m1 = m.child(0 + HARDENED)
-        xprv = m1.extended_key_string(coin=Bitcoin)
-        xpub = m1.public_key.extended_key_string(coin=Bitcoin)
+        xprv = m1.to_extended_key_string(coin=Bitcoin)
+        xpub = m1.public_key.to_extended_key_string(coin=Bitcoin)
         assert xprv == ("xprv9uPDJpEQgRQfDcW7BkF7eTya6RPxXeJCqCJGHuCJ4GiRVLzkTXBAJMu2"
                         "qaMWPrS7AANYqdq6vcBcBUdJCVVFceUvJFjaPdGZ2y9WACViL4L")
         assert xpub == ("xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQr"
