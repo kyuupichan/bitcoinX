@@ -333,6 +333,15 @@ class Script(bytes):
         return self
 
     @classmethod
+    def from_hex(cls, hex_str):
+        '''Instantiate from a hexadecimal string.'''
+        return cls(bytes.fromhex(hex_str))
+
+    def to_hex(self):
+        '''Return the script as a hexadecimal string.'''
+        return self.hex()
+
+    @classmethod
     def asm_word_to_bytes(cls, word):
         '''Convert an ASM word to bytes, either a 1-byte opcode or the data bytes.'''
         if word.startswith('OP_'):
