@@ -364,6 +364,16 @@ class TestScript:
         assert script.to_bytes() == data
         assert script.to_bytes() is script
 
+    def test_to_hex(self):
+        data = os.urandom(15)
+        script = Script(data)
+        assert script.to_hex() == data.hex()
+
+    def test_from_hex(self):
+        data = os.urandom(20)
+        script = Script.from_hex(data.hex())
+        assert script.to_bytes() == data
+
     @pytest.mark.parametrize("word,item", (
         ("OP_VERIF", b_OP_VERIF),
         ("OP_NOP", b_OP_NOP),
