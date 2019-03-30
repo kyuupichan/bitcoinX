@@ -792,31 +792,50 @@ class TestPublicKey:
         assert P == priv.public_key
 
 
-    def test_verify_signature(self):
+    def test_verify_der_signature(self):
         priv = PrivateKey.from_random()
         message = b'BitcoinSV'
         sig = priv.sign(message)
 
         P = priv.public_key
-        assert P.verify_signature(sig, message)
-        assert P.verify_signature(sig, message, sha256)
-        assert P.verify_signature(sig, sha256(message), None)
-        assert not P.verify_signature(sig, message[:-1])
+        assert P.verify_der_signature(sig, message)
+        assert P.verify_der_signature(sig, message, sha256)
+        assert P.verify_der_signature(sig, sha256(message), None)
+        assert not P.verify_der_signature(sig, message[:-1])
 
 
-    def test_verify_signature_recoverable(self):
+    def test_verify_der_signature_bad(self):
+        priv = PrivateKey.from_random()
+        message = b'BitcoinSV'
+        sig_der = priv.sign(message)
+        sig_rec = priv.sign_recoverable(message)
+
+        P = priv.public_key
+        with pytest.raises(InvalidSignatureError):
+            P.verify_der_signature(sig_rec, message)
+
+        for n in (10, 20, 30, 40):
+            bad_der = bytearray(sig_der)
+            bad_der[n] ^= 0x10
+            try:
+                assert not P.verify_der_signature(bytes(bad_der), message)
+            except InvalidSignatureError:
+                pass
+
+
+    def test_verify_recoverable_signature(self):
         priv = PrivateKey.from_random()
         message = b'BitcoinSV'
         sig = priv.sign_recoverable(message)
 
         P = priv.public_key
-        assert P.verify_signature(sig, message)
-        assert P.verify_signature(sig, message, sha256)
-        assert P.verify_signature(sig, sha256(message), None)
-        assert not P.verify_signature(sig, message[:-1])
+        assert P.verify_recoverable_signature(sig, message)
+        assert P.verify_recoverable_signature(sig, message, sha256)
+        assert P.verify_recoverable_signature(sig, sha256(message), None)
+        assert not P.verify_recoverable_signature(sig, message[:-1])
 
 
-    def test_verify_signature_bad(self):
+    def test_verify_recoverable_signature_bad(self):
         priv = PrivateKey.from_random()
         message = b'BitcoinSV'
         sig = priv.sign(message)
@@ -825,15 +844,15 @@ class TestPublicKey:
         # Bad recid
         bad_sig = bytes([0x01]) * 64 + bytes([4])
         with pytest.raises(InvalidSignatureError):
-            P.verify_signature(bad_sig, message)
+            P.verify_recoverable_signature(bad_sig, message)
         # Overflow
         bad_sig = bytes([0xff]) * 64 + bytes([1])
         with pytest.raises(InvalidSignatureError):
-            P.verify_signature(bad_sig, message)
+            P.verify_recoverable_signature(bad_sig, message)
         # Invalid sig
         bad_sig = bytes([sig[0] ^ 1]) + sig[1:]
         with pytest.raises(InvalidSignatureError):
-            P.verify_signature(bad_sig, message)
+            P.verify_recoverable_signature(bad_sig, message)
 
 
     def test_from_recoverable_signature(self):
