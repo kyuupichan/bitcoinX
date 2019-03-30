@@ -169,9 +169,6 @@ class BIP32PrivateKey(PrivateKey):
         '''Return an extended key as a base58 string.'''
         return base58_encode_check(self._extended_key(coin))
 
-    # Remove soon
-    extended_key_string = to_extended_key_string
-
     def __repr__(self):
         return f'BIP32PrivateKey("{str(self)}")'
 
@@ -232,9 +229,6 @@ class BIP32PublicKey(PublicKey):
     def to_extended_key_string(self, *, coin=None):
         '''Return an extended key as a base58 string.'''
         return base58_encode_check(self._extended_key(coin))
-
-    # Remove soon
-    extended_key_string = to_extended_key_string
 
     def __str__(self):
         return self.to_extended_key_string()
