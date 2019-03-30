@@ -315,7 +315,10 @@ class PrivateKey:
         return PrivateKey(secret, self._compressed, self._coin)
 
     def sign(self, message, hasher=sha256):
-        '''Sign a message (more correctly its hash, by default SHA256).'''
+        '''Sign a message (more correctly its hash) and return a DER-encoded signature.
+
+        If the message is already hashed, set hasher to None.
+        '''
         msg_hash = _message_hash(message, hasher)
         signature = ffi.new('secp256k1_ecdsa_signature *')
         if not lib.secp256k1_ecdsa_sign(CONTEXT, signature, msg_hash, self._secret,
@@ -324,8 +327,10 @@ class PrivateKey:
         return _serialize_der(signature)
 
     def sign_recoverable(self, message, hasher=sha256):
-        '''Sign a message (more correctly its hash, by default SHA256) so that the public key can
-        be recovered from the signature.
+        '''Sign a message (more correctly its hash) and return a byte of metadata so that the
+        public key can be immediately recovered from the signature.
+
+        If the message is already hashed, set hasher to None.
         '''
         msg_hash = _message_hash(message, hasher)
         signature = ffi.new('secp256k1_ecdsa_recoverable_signature *')
@@ -569,7 +574,7 @@ class PublicKey:
             raise ValueError('hasher cannot be None')
         message = _normalize_message(message)
         recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
-        return self.verify_signature(recoverable_sig, message, hasher)
+        return self.verify_recoverable_signature(recoverable_sig, message, hasher)
 
     @classmethod
     def verify_message_and_address(cls, message_sig, message, address, *,
@@ -585,14 +590,15 @@ class PublicKey:
                 any(address == public_key.to_address(compressed=compressed, coin=coin)
                     for compressed in (True, False)))
 
-    def verify_signature(self, signature, message, hasher=sha256):
-        '''Verify a serialized signature.  Return True if good otherwise False.'''
-        # Handle recoverable and der-encoded signatures
-        if len(signature) == 65:
-            cdata_sig = _recoverable_sig_to_cdata_sig(signature)
-        else:
-            cdata_sig = _der_sig_to_cdata_sig(signature)
+    def verify_der_signature(self, der_sig, message, hasher=sha256):
+        '''Verify a der-encoded signature.  Return True if good otherwise False.'''
+        cdata_sig = _der_sig_to_cdata_sig(der_sig)
+        msg_hash = _message_hash(message, hasher)
+        return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self._public_key))
 
+    def verify_recoverable_signature(self, recoverable_sig, message, hasher=sha256):
+        '''Verify a recoverable signature.  Return True if good otherwise False.'''
+        cdata_sig = _recoverable_sig_to_cdata_sig(recoverable_sig)
         msg_hash = _message_hash(message, hasher)
         return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self._public_key))
 
