@@ -120,6 +120,11 @@ def _deserialize_recoverable_sig(recover_sig_bytes):
 
 def _message_sig_to_recoverable_sig(message_sig):
     '''Return a recoverable signature from a message signature.'''
+    if isinstance(message_sig, str):
+        try:
+            message_sig = b64decode(message_sig)
+        except Excdeption:
+            raise InvalidSignatureError('invalid base64 encoding of message signature')
     if not isinstance(message_sig, bytes) or len(message_sig) != 65:
         raise InvalidSignatureError('message signature must be 65 bytes')
     if not 27 <= message_sig[0] < 35:
@@ -147,12 +152,10 @@ def _der_sig_to_cdata_sig(der_sig):
     return cdata_sig
 
 
-def _normalize_message_and_sig(message, message_sig):
+def _normalize_message(message):
     if isinstance(message, str):
         message = message.encode()
-    if isinstance(message_sig, str):
-        message_sig = b64decode(message_sig)
-    return message, message_sig
+    return SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
 
 
 def der_signature_to_compact(der_sig):
@@ -333,16 +336,19 @@ class PrivateKey:
     def sign_message(self, message, hasher=double_sha256):
         '''Sign a message compatibly with bitcoind (and ElectrumSV).
 
-        Compressed appears to be legacy and the signature is valid whether True or False;
-        in any case only the first byte of the signature changes.
+        message:     the message as bytes before being prefixed with SIGNED_MESSAGE_PREFIX.
+                     If a string, it is first UTF-8 encoded to bytes before prefixing.
+        hasher:      used to hash the message to 32 bytes.  Cannot be None as message cannot be
+                     a hash.
 
-        If message is a string, it is UTF-8 encoded as bytes.  The result is bytes object
-        of length 65.
+        Returns a 65-byte signature.
         '''
-        if isinstance(message, str):
-            message = message.encode()
-        msg_to_sign = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
-        recoverable_sig = self.sign_recoverable(msg_to_sign, hasher)
+        if hasher is None:
+            raise ValueError('hasher cannot be None')
+        message = _normalize_message(message)
+        recoverable_sig = self.sign_recoverable(message, hasher)
+        # Compressed appears to be legacy and the signature is valid whether True or
+        # False; in any case only the first byte (recid) of the signature changes.
         return _recoverable_sig_to_message_sig(recoverable_sig, compressed=self._compressed)
 
     def sign_message_to_base64(self, message, hasher=double_sha256):
@@ -469,9 +475,17 @@ class PublicKey:
 
     @classmethod
     def from_signed_message(cls, message_sig, message, hasher=double_sha256):
-        '''Contruct a PublicKey from a message and its signature.'''
-        message, message_sig = _normalize_message_and_sig(message, message_sig)
-        message = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
+        '''Contruct a PublicKey from a message and its signature.
+
+        message_sig: 65 bytes; if a string assumed base64-encoded.
+        message:     the message as bytes before being prefixed with SIGNED_MESSAGE_PREFIX.
+                     If a string, it is first UTF-8 encoded to bytes before prefixing.
+        hasher:      used to hash the message to 32 bytes.  Cannot be None as message cannot be
+                     a hash.
+        '''
+        if hasher is None:
+            raise ValueError('hasher cannot be None')
+        message = _normalize_message(message)
         recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
         return cls.from_recoverable_signature(recoverable_sig, message, hasher)
 
@@ -541,13 +555,17 @@ class PublicKey:
     def verify_message(self, message_sig, message, hasher=double_sha256):
         '''Verify a message signed with bitcoind (and ElectrumSV).
 
-        If message is a string, it is UTF-8 encoded as bytes.  If message_sig is a string,
-        it is assumed to be base64-encoded.
+        message_sig: 65 bytes; if a string assumed base64-encoded.
+        message:     the message as bytes before being prefixed with SIGNED_MESSAGE_PREFIX.
+                     If a string, it is first UTF-8 encoded to bytes before prefixing.
+        hasher:      used to hash the message to 32 bytes.  Cannot be None as message cannot be
+                     a hash.
         '''
-        message, message_sig = _normalize_message_and_sig(message, message_sig)
+        if hasher is None:
+            raise ValueError('hasher cannot be None')
+        message = _normalize_message(message)
         recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
-        msg_to_sign = SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
-        return self.verify_signature(recoverable_sig, msg_to_sign, hasher)
+        return self.verify_signature(recoverable_sig, message, hasher)
 
     @classmethod
     def verify_message_and_address(cls, message_sig, message, address, *,
@@ -555,7 +573,6 @@ class PublicKey:
         '''As for verify_message, but also test it was signed by a private key of the given
         address.
         '''
-        message, message_sig = _normalize_message_and_sig(message, message_sig)
         try:
             public_key = cls.from_signed_message(message_sig, message, hasher)
         except InvalidSignatureError:
