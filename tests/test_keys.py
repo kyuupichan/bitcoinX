@@ -425,6 +425,15 @@ class TestPrivateKey:
                                       b'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
 
 
+    def test_sign_message_hash(self):
+        priv = PrivateKey.from_random()
+        # Not a hash, a message
+        priv.sign_message(bytes(32))
+        # We don't permit signing message hashes directly
+        with pytest.raises(ValueError):
+            priv.sign_message(bytes(32), hasher=None)
+
+
     def test_sign_message_long(self):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
         priv = PrivateKey.from_WIF(secret)
@@ -852,6 +861,16 @@ class TestPublicKey:
         assert P2.coin() is Bitcoin
 
 
+    def test_from_signed_message_no_hasher(self):
+        priv = PrivateKey.from_random()
+        message = bytes(32)
+        message_sig = priv.sign_message(message)
+
+        PublicKey.from_signed_message(message_sig, message)
+        with pytest.raises(ValueError):
+            PublicKey.from_signed_message(message_sig, message, None)
+
+
     @pytest.mark.parametrize("msg", (
         b'BitcoinSV', 'BitcoinSV',
         # Test longer messages are prefix-encoded correctly
@@ -885,6 +904,16 @@ class TestPublicKey:
         assert not P.verify_message(msg_sig2, msg)
         assert not PublicKey.verify_message_and_address(msg_sig2, msg, address_comp)
         assert not PublicKey.verify_message_and_address(msg_sig2, msg, address_uncomp)
+
+
+    def test_verify_message_no_hasher(self):
+        priv = PrivateKey.from_random()
+        message = bytes(32)
+        message_sig = priv.sign_message(message)
+
+        priv.public_key.verify_message(message_sig, message)
+        with pytest.raises(ValueError):
+            priv.public_key.verify_message(message_sig, message, hasher=None)
 
 
     def test_verify_message_and_address_coin(self):
