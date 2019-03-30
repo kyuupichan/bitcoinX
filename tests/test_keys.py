@@ -487,6 +487,10 @@ class TestPrivateKey:
         enc_msg = P.encrypt_message(msg)
 
         with pytest.raises(DecryptionError) as e:
+            priv.decrypt_message(b64encode(enc_msg).decode() + '%')
+        assert 'invalid base64' in str(e.value)
+
+        with pytest.raises(DecryptionError) as e:
             priv.decrypt_message(bytes(84))
         assert 'too short' in str(e.value)
 
@@ -861,6 +865,17 @@ class TestPublicKey:
         assert P2.coin() is Bitcoin
 
 
+    def test_from_signed_message_base64(self):
+        priv = PrivateKey.from_random()
+        message = b'BitcoinSV'
+        message_sig = priv.sign_message(message)
+        P1 = PublicKey.from_signed_message(message_sig, message)
+        P2 = PublicKey.from_signed_message(b64encode(message_sig).decode(), message)
+        assert P1 == P2 == priv.public_key
+        with pytest.raises(InvalidSignatureError):
+            PublicKey.from_signed_message('abcd%', message)
+
+
     def test_from_signed_message_no_hasher(self):
         priv = PrivateKey.from_random()
         message = bytes(32)
@@ -914,6 +929,17 @@ class TestPublicKey:
         priv.public_key.verify_message(message_sig, message)
         with pytest.raises(ValueError):
             priv.public_key.verify_message(message_sig, message, hasher=None)
+
+
+    def test_verify_message_sig_base64(self):
+        priv = PrivateKey.from_random()
+        P = priv.public_key
+        message = bytes(32)
+        message_sig = priv.sign_message(message)
+        P.verify_message(message_sig, message)
+        P.verify_message(b64encode(message_sig).decode(), message)
+        with pytest.raises(InvalidSignatureError):
+            P.verify_message('abcd%', message)
 
 
     def test_verify_message_and_address_coin(self):

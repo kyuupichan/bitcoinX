@@ -32,6 +32,7 @@ __all__ = (
 )
 
 from base64 import b64decode, b64encode
+from binascii import Error as binascii_Error
 from os import urandom
 
 from electrumsv_secp256k1 import ffi, lib, create_context
@@ -122,8 +123,8 @@ def _message_sig_to_recoverable_sig(message_sig):
     '''Return a recoverable signature from a message signature.'''
     if isinstance(message_sig, str):
         try:
-            message_sig = b64decode(message_sig)
-        except Excdeption:
+            message_sig = b64decode(message_sig, validate=True)
+        except binascii_Error:
             raise InvalidSignatureError('invalid base64 encoding of message signature')
     if not isinstance(message_sig, bytes) or len(message_sig) != 65:
         raise InvalidSignatureError('message signature must be 65 bytes')
@@ -377,7 +378,10 @@ class PrivateKey:
     def decrypt_message(self, message, magic=b'BIE1'):
         '''Decrypt a message encrypted with PublicKey.encrypt_message().'''
         if isinstance(message, str):
-            message = b64decode(message)
+            try:
+                message = b64decode(message, validate=True)
+            except binascii_Error:
+                raise DecryptionError('invalid base64 encoding of encrypted message')
         mlen = len(magic)
         if len(message) < 81 + mlen:
             raise DecryptionError('message too short')
