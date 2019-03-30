@@ -58,6 +58,13 @@ def test_compact_signature_to_der(der_sig, compact_sig):
     assert compact_signature_to_der(compact_sig) == bytes.fromhex(der_sig)
 
 
+def test_compact_signature_to_der_bad():
+    with pytest.raises(InvalidSignatureError):
+        compact_signature_to_der(bytes(63))
+    with pytest.raises(InvalidSignatureError):
+        compact_signature_to_der('a' * 64)
+
+
 class TestPrivateKey:
 
     @pytest.mark.parametrize("bad_key", (
