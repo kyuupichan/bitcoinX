@@ -292,6 +292,15 @@ class PrivateKey:
             return cls(raw[1:33], len(raw) == 34, Coin.from_WIF_byte(raw[0]))
         raise ValueError('invalid WIF private key')
 
+    @classmethod
+    def from_text(cls, txt):
+        '''Construct a PriveKey from text.  It should be either a minikey, hex, or WIF.'''
+        if len(txt) == 64:
+            return cls.from_hex(txt)
+        if is_minikey(txt):
+            return cls.from_minikey(txt)
+        return cls.from_WIF(txt)
+
     def to_WIF(self, *, compressed=None, coin=None):
         '''Return the WIF form of the private key for the given coin.
 
