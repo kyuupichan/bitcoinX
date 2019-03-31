@@ -7,9 +7,11 @@ from bitcoinx.coin import Bitcoin, BitcoinTestnet
 from bitcoinx.keys import *
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
+from bitcoinx import pack_byte, base58_encode_check
 
 
 one = bytes(31) + bytes([1])
+global_privkey = PrivateKey.from_random()
 
 
 WIF_tests = [
@@ -252,7 +254,6 @@ class TestPrivateKey:
         assert len(p.public_key.to_bytes()) == (33 if compressed else 65)
         assert p.to_WIF() == WIF
 
-
     def test_from_WIF_bad(self):
         with pytest.raises(TypeError):
             PrivateKey.from_WIF(b'6')
@@ -261,6 +262,15 @@ class TestPrivateKey:
         with pytest.raises(ValueError):
             PrivateKey.from_WIF('4t9WKfuAB8')
 
+    @pytest.mark.parametrize("value", list(range(256)))
+    def test_from_WIF_bad_suffix_byte(self, value):
+        payload = pack_byte(Bitcoin.WIF_byte) + global_privkey.to_bytes() + pack_byte(value)
+        WIF = base58_encode_check(payload)
+        if value == 0x01:
+            PrivateKey.from_WIF(WIF)
+        else:
+            with pytest.raises(ValueError):
+                PrivateKey.from_WIF(WIF)
 
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
     def test_to_WIF(self, coin, WIF, hex_str, compressed):
