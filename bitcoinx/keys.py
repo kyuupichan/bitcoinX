@@ -216,6 +216,10 @@ class PrivateKey:
         '''Return True if this PrivateKey is equal to another.'''
         return self._secret == other._secret
 
+    def __hash__(self):
+        '''Hashable objects which compare equal must have the same hash value.'''
+        return hash(self._secret)
+
     def __str__(self):
         '''Return a hash of the private key, out of an abundance of caution.
         To get a real string call to_hex() explicitly.'''
@@ -437,6 +441,10 @@ class PublicKey:
     def __eq__(self, other):
         '''Return True if this PublicKey is equal to another.'''
         return self.to_bytes(compressed=True) == other.to_bytes(compressed=True)
+
+    def __hash__(self):
+        '''Hashable objects which compare equal must have the same hash value.'''
+        return hash(self.to_bytes(compressed=True))
 
     def __str__(self):
         return self.to_hex()
