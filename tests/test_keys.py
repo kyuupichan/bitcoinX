@@ -129,6 +129,12 @@ class TestPrivateKey:
         p2 = PrivateKey(os.urandom(32))
         assert p1 != p2
 
+    def test_hashable(self):
+        secret = os.urandom(32)
+        p1 = PrivateKey(secret, True, Bitcoin)
+        p2 = PrivateKey(secret, False, BitcoinTestnet)
+        assert len({p1, p2}) == 1
+
     def test_public_key(self):
         secret = os.urandom(32)
         for coin in (Bitcoin, BitcoinTestnet):
@@ -559,7 +565,6 @@ class TestPublicKey:
         pub = PrivateKey.from_random().public_key
         PublicKey(pub._public_key, False)
 
-
     def test_eq(self):
         secret = os.urandom(32)
         priv = PrivateKey(secret)
@@ -569,6 +574,15 @@ class TestPublicKey:
         assert pub1 == pub2
         assert PrivateKey.from_random().public_key != pub1
 
+    def test_hashable(self):
+        secret = os.urandom(32)
+        p1 = PrivateKey(secret, True, Bitcoin)
+        p2 = PrivateKey(secret, False, BitcoinTestnet)
+        pub1 = p1.public_key
+        pub2 = p2.public_key
+        assert pub1.is_compressed() != pub2.is_compressed()
+        assert pub1.coin() != pub2.coin()
+        assert len({pub1, pub2}) == 1
 
     def test_to_bytes(self):
         priv = PrivateKey(bytes(range(32)))
