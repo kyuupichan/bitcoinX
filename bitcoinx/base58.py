@@ -20,7 +20,7 @@ base58_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 base58_cmap = {c: n for n, c in enumerate(base58_chars)}
 
 
-class Base58Error(Exception):
+class Base58Error(ValueError):
     '''Exception used for Base58 errors.'''
 
 
