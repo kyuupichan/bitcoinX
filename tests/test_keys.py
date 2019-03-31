@@ -109,7 +109,6 @@ class TestPrivateKey:
         assert p3.coin() is Bitcoin
         assert p3.is_compressed()
 
-
     def test_from_arbitrary_bytes(self):
         p = PrivateKey.from_arbitrary_bytes(b'BitcoinSV')
         assert p._secret == bytes(23) + b'BitcoinSV'
@@ -151,18 +150,15 @@ class TestPrivateKey:
         with pytest.raises(RuntimeError):
             priv.public_key
 
-
     def test_to_int(self):
         secret = os.urandom(32)
         p = PrivateKey(secret)
         assert p.to_int() == int.from_bytes(secret, 'big')
 
-
     def test_to_bytes(self):
         secret = os.urandom(32)
         p = PrivateKey(secret)
         assert p.to_bytes() == secret
-
 
     @pytest.mark.parametrize("value", [1, 283758232, 1 << 31, ])
     def test_from_int(self, value):
@@ -171,24 +167,20 @@ class TestPrivateKey:
         assert p.coin() is Bitcoin
         assert p.is_compressed()
 
-
     @pytest.mark.parametrize("value", [0, 0x0, 00])
     def test_from_int_bad(self, value):
         with pytest.raises(ValueError):
             PrivateKey.from_int(value)
-
 
     @pytest.mark.parametrize("value", [-1, 1 << 256])
     def test_from_int_overflow(self, value):
         with pytest.raises(OverflowError):
             PrivateKey.from_int(value)
 
-
     def test_to_hex(self):
         secret = os.urandom(32)
         p = PrivateKey(secret)
         assert p.to_hex() == secret.hex()
-
 
     @pytest.mark.parametrize("value", [1, 283758232, 1 << 31, ])
     def test_from_hex(self, value):
@@ -200,12 +192,28 @@ class TestPrivateKey:
         assert p.coin() is Bitcoin
         assert p.is_compressed()
 
-
-    @pytest.mark.parametrize("hex_str", ['', '00', '2345'])
+    @pytest.mark.parametrize("hex_str", ['', '00', '2345', '  ' + '11' * 30 + '  '])
     def test_from_hex_bad(self, hex_str):
         with pytest.raises(ValueError):
             PrivateKey.from_hex(hex_str)
 
+    def test_from_text(self):
+        priv = PrivateKey.from_random()
+        # Hex
+        priv2 = PrivateKey.from_text(priv.to_hex())
+        assert priv2 == priv
+        # Minikey
+        assert (PrivateKey.from_text('SZEfg4eYxCJoqzumUqP34g')
+                == PrivateKey.from_minikey('SZEfg4eYxCJoqzumUqP34g'))
+        # WIF
+        assert (PrivateKey.from_text('KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617')
+                == PrivateKey.from_WIF('KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617'))
+
+    @pytest.mark.parametrize("text", ['01' * 31, 'SZEfg4eYxCJoqzumUqP34',
+                                      'wdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617'])
+    def test_from_text_bad(self, text):
+        with pytest.raises(ValueError):
+            PrivateKey.from_text(text)
 
     def test_from_random(self):
         secret = int_to_be_bytes(39823453, 32)
