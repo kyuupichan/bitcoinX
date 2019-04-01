@@ -85,3 +85,8 @@ def test_lookup_xver_bytes():
             assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (coin, False)
     with pytest.raises(ValueError):
         Coin.lookup_xver_bytes(bytes.fromhex("043587ff"))
+
+
+def test_P2SH_verbyte():
+    assert Bitcoin.P2SH_verbyte == 0x05
+    assert BitcoinTestnet.P2SH_verbyte == BitcoinScalingTestnet.P2SH_verbyte == 0xc4
