@@ -75,8 +75,8 @@ class Header(object):
 
 class Coin(object):
 
-    def __init__(self, name, genesis_header, required_bits, P2PKH_verbyte, WIF_byte,
-                 xpub_verbytes, xprv_verbytes):
+    def __init__(self, name, genesis_header, required_bits, P2PKH_verbyte, P2SH_verbyte,
+                 WIF_byte, xpub_verbytes, xprv_verbytes):
         self.name = name
         self.genesis_header = bytes.fromhex(genesis_header)
         self.genesis_bits = self.header_bits(self.genesis_header)
@@ -84,6 +84,7 @@ class Coin(object):
         # Signature:  def required_bits(self, headers, chain, height, timestamp=None)
         self.required_bits = required_bits
         self.P2PKH_verbyte = P2PKH_verbyte
+        self.P2SH_verbyte = P2SH_verbyte
         self.WIF_byte = WIF_byte
         self.xpub_verbytes = xpub_verbytes
         self.xprv_verbytes = xprv_verbytes
@@ -137,6 +138,7 @@ Bitcoin = Coin(
     '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c',
     required_bits_mainnet,
     0x00,
+    0x05,
     0x80,
     bytes.fromhex("0488b21e"),
     bytes.fromhex("0488ade4"),
@@ -149,6 +151,7 @@ BitcoinTestnet = Coin(
     '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
     required_bits_testnet,
     0x6f,
+    0xc4,
     0xef,
     bytes.fromhex("043587cf"),
     bytes.fromhex("04358394"),
@@ -160,6 +163,7 @@ BitcoinScalingTestnet = Coin(
     '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
     required_bits_scaling_testnet,
     0x6f,
+    0xc4,
     0xef,
     bytes.fromhex("043587cf"),
     bytes.fromhex("04358394"),
