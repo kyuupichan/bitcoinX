@@ -541,8 +541,8 @@ class PublicKey:
     def to_address(self, *, compressed=None, coin=None):
         '''Return the public key as a bitcoin P2PKH address.'''
         coin = coin or self.coin()
-        data = self.to_bytes(compressed=compressed)
-        return base58_encode_check(pack_byte(coin.P2PKH_verbyte) + hash160(data))
+        return base58_encode_check(pack_byte(coin.P2PKH_verbyte) +
+                                   self.hash160(compressed=compressed))
 
     def add(self, value):
         '''Return a new PublicKey instance formed by adding value*G to this one.
@@ -637,6 +637,14 @@ class PublicKey:
     def encrypt_message_to_base64(self, message, magic=b'BIE1'):
         '''As for encrypt_message, but return the result as a base64 ASCII string.'''
         return b64encode(self.encrypt_message(message, magic)).decode()
+
+    def hash160(self, *, compressed=None):
+        '''Returns a P2PK script.'''
+        return hash160(self.to_bytes(compressed=compressed))
+
+    def complement(self):
+        '''Returns a compressed public key if uncompressed, or vice versa.'''
+        return PublicKey(self._public_key, not self._compressed, self._coin)
 
     def P2PK_script(self, *, compressed=None):
         return Script.P2PK_script(self.to_bytes(compressed=compressed))

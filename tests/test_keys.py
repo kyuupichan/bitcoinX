@@ -1096,3 +1096,24 @@ class TestPublicKey:
                                      hash160(P.to_bytes(compressed=False)),
                                      bytes([0x88, 0xac])))
         assert script_c == P.P2PKH_script()
+
+
+    def test_hash160(self):
+        # From block 1
+        P = PublicKey.from_hex(
+            '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379'
+            '515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee')
+        assert P.hash160().hex() == '119b098e2e980a229e139a9ed01a469e518e6f26'
+        assert P.hash160(compressed=True).hex() == 'f4d294debc9799f1b6e0d15cd696b207ce6df0f9'
+        assert P.hash160(compressed=False).hex() == '119b098e2e980a229e139a9ed01a469e518e6f26'
+
+    def test_complement(self):
+        P = PublicKey.from_hex(
+            '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379'
+            '515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee')
+        P._coin = BitcoinTestnet
+        C = P.complement()
+        assert C.hash160().hex() == 'f4d294debc9799f1b6e0d15cd696b207ce6df0f9'
+        assert C == P
+        assert C is not P
+        assert C.coin() is BitcoinTestnet
