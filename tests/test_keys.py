@@ -999,18 +999,29 @@ class TestPublicKey:
         with pytest.raises(InvalidSignatureError):
             P.verify_message('abcd%', message)
 
-
     def test_verify_message_and_address_coin(self):
         priv = PrivateKey.from_random()
         P = priv.public_key
         msg = b'BitcoinSV'
         msg_sig = priv.sign_message(msg)
 
-        assert P.verify_message_and_address(msg_sig, msg, P.to_address())
-        assert P.verify_message_and_address(msg_sig, msg, P.to_address(), coin=Bitcoin)
-        assert P.verify_message_and_address(msg_sig, msg, P.to_address(coin=BitcoinTestnet),
-                                            coin=BitcoinTestnet)
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address(coin=Bitcoin))
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address(coin=BitcoinTestnet))
 
+    def test_verify_message_and_address_bad(self):
+        priv1 = PrivateKey.from_random()
+        priv2 = PrivateKey.from_random()
+        P1, P2 = priv1.public_key, priv2.public_key
+        msg = b'BitcoinSV'
+        msg_sig = priv1.sign_message(msg)
+
+        assert P1.verify_message_and_address(msg_sig, msg, P1.to_address())
+        assert not P1.verify_message_and_address(msg_sig, msg, P2.to_address())
+        # Wrong address lengths
+        with pytest.raises(ValueError):
+            P1.verify_message_and_address(msg_sig, msg, 'Su7NrqoBvxJWozWr14N19YCV31VJbVTNML9')
+        with pytest.raises(ValueError):
+            P1.verify_message_and_address(msg_sig, msg, '3QJmnh')
 
     @pytest.mark.parametrize("hasher", (double_sha256, sha256))
     def test_verify_message_and_address_hasher(self, hasher):
