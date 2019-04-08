@@ -38,7 +38,7 @@ from .packing import (
     read_le_int32, read_le_uint32, read_varint, read_varbytes, read_le_int64, read_list,
 )
 from .script import (
-    SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ANYONE_CAN_PAY, SIGHASH_FORKID,
+    Script, SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ANYONE_CAN_PAY, SIGHASH_FORKID,
     SIGHASH_BASE_MASK
 )
 
@@ -146,10 +146,10 @@ class TxInput:
     @classmethod
     def read(cls, read):
         return cls(
-            read(32),               # prev_hash
-            read_le_uint32(read),   # prev_idx
-            read_varbytes(read),    # script_sig
-            read_le_uint32(read),   # sequence
+            read(32),                       # prev_hash
+            read_le_uint32(read),           # prev_idx
+            Script(read_varbytes(read)),    # script_sig
+            read_le_uint32(read),           # sequence
         )
 
     def prevout_bytes(self):
@@ -158,7 +158,7 @@ class TxInput:
     def to_bytes_for_signature(self, value, script):
         return b''.join((
             self.prevout_bytes(),
-            pack_varbytes(script),
+            pack_varbytes(bytes(script)),
             pack_le_int64(value),
             pack_le_uint32(self.sequence),
         ))
@@ -167,14 +167,14 @@ class TxInput:
         '''Pass value to get a serialization to be used in transaction signatures.'''
         return b''.join((
             self.prevout_bytes(),
-            pack_varbytes(self.script_sig),
+            pack_varbytes(bytes(self.script_sig)),
             pack_le_uint32(self.sequence),
         ))
 
     def __repr__(self):
         return (
             f'TxInput(prev_hash="{hash_to_hex_str(self.prev_hash)}", prev_idx={self.prev_idx}, '
-            f'script_sig="{self.script_sig.hex()}", sequence={self.sequence})'
+            f'script_sig="{self.script_sig}", sequence={self.sequence})'
         )
 
 
@@ -187,17 +187,17 @@ class TxOutput:
     @classmethod
     def read(cls, read):
         return cls(
-            read_le_int64(read),   # value
-            read_varbytes(read),   # script_pk
+            read_le_int64(read),           # value
+            Script(read_varbytes(read)),   # script_pk
         )
 
     def to_bytes(self):
         return b''.join((
             pack_le_int64(self.value),
-            pack_varbytes(self.script_pk),
+            pack_varbytes(bytes(self.script_pk)),
         ))
 
     def __repr__(self):
         return (
-            f'TxOutput(value={self.value}, script_pk="{self.script_pk.hex()}")'
+            f'TxOutput(value={self.value}, script_pk="{self.script_pk}")'
         )

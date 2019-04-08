@@ -112,7 +112,7 @@ def test_signatures(filename):
     tx, values, pk_scripts = read_json_tx(filename)
 
     for input_index, (value, pk_script, txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
-        signature, pubkey = Script(txin.script_sig).ops()
+        signature, pubkey = txin.script_sig.ops()
         pubkey = PublicKey.from_bytes(pubkey)
         signature_hash = tx.signature_hash(input_index, value, pk_script, sighash=signature[-1])
         assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
