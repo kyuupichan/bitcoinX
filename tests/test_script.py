@@ -300,40 +300,19 @@ class TestScript:
         PC = p.public_key
         PU = PC.complement()
         for P in (PC, PU):
-            script = Script.P2PK_script(P)
+            script = P.P2PK_script()
             data = P.to_bytes()
             assert script == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
-
-    def test_P2PK_script_bad(self):
-        data = os.urandom(33)
-        with pytest.raises(TypeError):
-            Script.P2PK_script(data)
 
     def test_P2PKHK_script(self):
         p = PrivateKey.from_random()
         PC = p.public_key
         PU = PC.complement()
         for P in (PC, PU):
-            script = Script.P2PKH_script(P)
+            script = P.P2PKH_script()
             data = P.hash160()
             assert script == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
                               bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
-
-    def test_P2PKH_script_bad(self):
-        data = os.urandom(20)
-        with pytest.raises(TypeError):
-            Script.P2PKH_script(data)
-
-    def test_P2SH_script(self):
-        data = os.urandom(20)
-        script = Script.P2SH_script(data)
-        assert isinstance(script, Script)
-        assert script == (bytes([OP_HASH160, len(data)]) + data + bytes([OP_EQUAL]))
-
-    def test_P2SH_script_bad(self):
-        data = os.urandom(33)
-        with pytest.raises(ValueError):
-            Script.P2SH_script(data)
 
     @pytest.mark.parametrize("script,asm", (
         # No script

@@ -397,34 +397,8 @@ class Script:
         asm_word_to_bytes = cls.asm_word_to_bytes
         return cls(b''.join(asm_word_to_bytes(word) for word in asm.split()))
 
-    @classmethod
-    def P2PK_script(self, public_key):
-        return _Script_P2PK(public_key)
 
-    @classmethod
-    def P2PKH_script(self, target):
-        return _Script_P2PKH(target)
-
-    @classmethod
-    def P2SH_script(cls, hash160_bytes):
-        if len(hash160_bytes) != 20:
-            raise ValueError('invalid hash160_bytes')
-        return cls(b''.join((b_OP_HASH160, push_item(hash160_bytes), b_OP_EQUAL)))
-
-
-class _Script_P2PK(Script):
-
-    def __init__(self, public_key):
-        if not hasattr(public_key, 'verify_der_signature'):
-            raise TypeError('public_key must be a PublicKey instance')
-        super().__init__(None)
-        self._public_key = public_key
-
-    def _default_script(self):
-        return push_item(self._public_key.to_bytes()) + b_OP_CHECKSIG
-
-
-class _Script_P2PKH(Script):
+class _P2PKH_Script(Script):
 
     def __init__(self, target):
         if not hasattr(target, 'hash160'):
@@ -435,3 +409,13 @@ class _Script_P2PKH(Script):
     def _default_script(self):
         return b''.join((b_OP_DUP_OP_HASH160, push_item(self._target.hash160()),
                          b_OP_EQUALVERIFY_OP_CHECKSIG))
+
+
+class _P2SH_Script(Script):
+
+    def __init__(self, address):
+        super().__init__(None)
+        self.address = address
+
+    def _default_script(self):
+        return b''.join((b_OP_HASH160, push_item(self.address.hash160()), b_OP_EQUAL))
