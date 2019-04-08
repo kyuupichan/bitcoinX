@@ -646,8 +646,10 @@ class PublicKey:
         '''Returns a compressed public key if uncompressed, or vice versa.'''
         return PublicKey(self._public_key, not self._compressed, self._coin)
 
-    def P2PK_script(self, *, compressed=None):
-        return Script.P2PK_script(self.to_bytes(compressed=compressed))
+    def P2PK_script(self):
+        '''Return a Script instance representing the P2PK script.'''
+        return Script.P2PK_script(self)
 
-    def P2PKH_script(self, *, compressed=None):
-        return Script.P2PKH_script(hash160(self.to_bytes(compressed=compressed)))
+    def P2PKH_script(self):
+        '''Return a Script instance representing the P2PKH script.'''
+        return Script.P2PKH_script(self)

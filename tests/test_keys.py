@@ -1078,8 +1078,8 @@ class TestPublicKey:
 
     def test_P2PK_script(self):
         P = PrivateKey.from_random().public_key
-        script_c = P.P2PK_script(compressed=True)
-        script_u = P.P2PK_script(compressed=False)
+        script_c = P.P2PK_script()
+        script_u = P.complement().P2PK_script()
         assert script_c == bytes([33]) + P.to_bytes(compressed=True) + bytes([0xac])
         assert script_u == bytes([65]) + P.to_bytes(compressed=False) + bytes([0xac])
         assert script_c == P.P2PK_script()
@@ -1087,8 +1087,8 @@ class TestPublicKey:
 
     def test_P2PKH_script(self):
         P = PrivateKey.from_random().public_key
-        script_c = P.P2PKH_script(compressed=True)
-        script_u = P.P2PKH_script(compressed=False)
+        script_c = P.P2PKH_script()
+        script_u = P.complement().P2PKH_script()
         assert script_c == b''.join((bytes([0x76, 0xa9, 20]),
                                      hash160(P.to_bytes(compressed=True)),
                                      bytes([0x88, 0xac])))

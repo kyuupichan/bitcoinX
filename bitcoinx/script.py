@@ -271,7 +271,7 @@ class Script:
 
     def __len__(self):
         '''The length of the script, in bytes.'''
-        return len(self._script)
+        return len(bytes(self))
 
     def __bytes__(self):
         '''The script as bytes.'''
@@ -292,7 +292,7 @@ class Script:
         '''A script equals anything with the same bytes representation.'''
         return bytes(self) == bytes(other)
 
-    def _default_bytes(self):
+    def _default_script(self):
         raise NotImplementedError
 
     def ops(self):
@@ -398,20 +398,40 @@ class Script:
         return cls(b''.join(asm_word_to_bytes(word) for word in asm.split()))
 
     @classmethod
-    def P2PK_script(cls, pubkey_bytes):
-        if len(pubkey_bytes) not in (33, 65):
-            raise ValueError('invalid pubkey_bytes')
-        return cls(push_item(pubkey_bytes) + b_OP_CHECKSIG)
+    def P2PK_script(self, public_key):
+        return _Script_P2PK(public_key)
 
     @classmethod
-    def P2PKH_script(cls, hash160_bytes):
-        if len(hash160_bytes) != 20:
-            raise ValueError('invalid hash160_bytes')
-        return cls(b''.join((b_OP_DUP_OP_HASH160, push_item(hash160_bytes),
-                             b_OP_EQUALVERIFY_OP_CHECKSIG)))
+    def P2PKH_script(self, target):
+        return _Script_P2PKH(target)
 
     @classmethod
     def P2SH_script(cls, hash160_bytes):
         if len(hash160_bytes) != 20:
             raise ValueError('invalid hash160_bytes')
         return cls(b''.join((b_OP_HASH160, push_item(hash160_bytes), b_OP_EQUAL)))
+
+
+class _Script_P2PK(Script):
+
+    def __init__(self, public_key):
+        if not hasattr(public_key, 'verify_der_signature'):
+            raise TypeError('public_key must be a PublicKey instance')
+        super().__init__(None)
+        self._public_key = public_key
+
+    def _default_script(self):
+        return push_item(self._public_key.to_bytes()) + b_OP_CHECKSIG
+
+
+class _Script_P2PKH(Script):
+
+    def __init__(self, target):
+        if not hasattr(target, 'hash160'):
+            raise TypeError('target must have a "hash160()" method')
+        super().__init__(None)
+        self._target = target
+
+    def _default_script(self):
+        return b''.join((b_OP_DUP_OP_HASH160, push_item(self._target.hash160()),
+                         b_OP_EQUALVERIFY_OP_CHECKSIG))

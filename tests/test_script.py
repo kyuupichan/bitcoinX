@@ -3,7 +3,7 @@ import os
 import pytest
 
 from bitcoinx.script import *
-from bitcoinx import pack_varint
+from bitcoinx import pack_varint, PrivateKey
 
 
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
@@ -291,27 +291,32 @@ class TestScript:
         assert Script(b'abcd') == other
 
     def test_P2PK_script(self):
-        for n in (33, 65):
-            data = os.urandom(n)
-            script = Script.P2PK_script(data)
-            assert isinstance(script, Script)
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        PU = PC.complement()
+        for P in (PC, PU):
+            script = Script.P2PK_script(P)
+            data = P.to_bytes()
             assert script == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
 
     def test_P2PK_script_bad(self):
-        data = os.urandom(20)
-        with pytest.raises(ValueError):
+        data = os.urandom(33)
+        with pytest.raises(TypeError):
             Script.P2PK_script(data)
 
     def test_P2PKHK_script(self):
-        data = os.urandom(20)
-        script = Script.P2PKH_script(data)
-        assert isinstance(script, Script)
-        assert script == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
-                          bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        PU = PC.complement()
+        for P in (PC, PU):
+            script = Script.P2PKH_script(P)
+            data = P.hash160()
+            assert script == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
+                              bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
 
     def test_P2PKH_script_bad(self):
-        data = os.urandom(33)
-        with pytest.raises(ValueError):
+        data = os.urandom(20)
+        with pytest.raises(TypeError):
             Script.P2PKH_script(data)
 
     def test_P2SH_script(self):
