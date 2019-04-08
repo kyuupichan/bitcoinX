@@ -1017,11 +1017,6 @@ class TestPublicKey:
 
         assert P1.verify_message_and_address(msg_sig, msg, P1.to_address())
         assert not P1.verify_message_and_address(msg_sig, msg, P2.to_address())
-        # Wrong address lengths
-        with pytest.raises(ValueError):
-            P1.verify_message_and_address(msg_sig, msg, 'Su7NrqoBvxJWozWr14N19YCV31VJbVTNML9')
-        with pytest.raises(ValueError):
-            P1.verify_message_and_address(msg_sig, msg, '3QJmnh')
 
     @pytest.mark.parametrize("hasher", (double_sha256, sha256))
     def test_verify_message_and_address_hasher(self, hasher):
