@@ -33,6 +33,7 @@ from .base58 import base58_decode_check, base58_encode_check
 from .coin import Bitcoin, all_coins
 from .packing import pack_byte
 from .script import _P2PKH_Script, _P2SH_Script
+from bitcoinx import cashaddr
 
 
 class Address:
@@ -44,8 +45,14 @@ class Address:
         return hash(str(self))
 
     @classmethod
-    def from_string(self, text, *, coin=None):
+    def from_string(cls, text, *, coin=None):
         '''Construct from an address string.'''
+        if len(text) > 35:
+            try:
+                return cls._from_cashaddr_string(text, coin=coin)
+            except ValueError as e:
+                pass
+
         raw = base58_decode_check(text)
 
         if len(raw) != 21:
@@ -60,6 +67,23 @@ class Address:
                 return P2SH_Address(hash160, coin=coin)
 
         raise ValueError(f'unknown version byte: {verbyte}')
+
+    @classmethod
+    def _from_cashaddr_string(cls, text, *, coin=None):
+        '''Construct from a cashaddress string.'''
+        coin = coin or Bitcoin
+        prefix = coin.cashaddr_prefix
+        if text.upper() == text:
+            prefix = prefix.upper()
+        if not text.startswith(prefix + ':'):
+            text = ':'.join((prefix, text))
+        addr_prefix, kind, hash160 = cashaddr.decode(text)
+        assert prefix == addr_prefix
+
+        if kind == cashaddr.PUBKEY_TYPE:
+            return P2PKH_Address(hash160, coin=coin)
+        else:
+            return P2SH_Address(hash160, coin=coin)
 
     def coin(self):
         return self._coin

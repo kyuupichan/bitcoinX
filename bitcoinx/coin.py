@@ -76,7 +76,7 @@ class Header(object):
 class Coin(object):
 
     def __init__(self, name, genesis_header, required_bits, P2PKH_verbyte, P2SH_verbyte,
-                 WIF_byte, xpub_verbytes, xprv_verbytes):
+                 WIF_byte, xpub_verbytes, xprv_verbytes, cashaddr_prefix):
         self.name = name
         self.genesis_header = bytes.fromhex(genesis_header)
         self.genesis_bits = self.header_bits(self.genesis_header)
@@ -88,6 +88,7 @@ class Coin(object):
         self.WIF_byte = WIF_byte
         self.xpub_verbytes = xpub_verbytes
         self.xprv_verbytes = xprv_verbytes
+        self.cashaddr_prefix = cashaddr_prefix
 
     def bits_to_difficulty(self, bits):
         return Bitcoin.max_target / bits_to_target(bits)
@@ -142,6 +143,7 @@ Bitcoin = Coin(
     0x80,
     bytes.fromhex("0488b21e"),
     bytes.fromhex("0488ade4"),
+    'bitcoincash',
 )
 
 
@@ -155,6 +157,7 @@ BitcoinTestnet = Coin(
     0xef,
     bytes.fromhex("043587cf"),
     bytes.fromhex("04358394"),
+    'bchtest',
 )
 
 BitcoinScalingTestnet = Coin(
@@ -167,6 +170,7 @@ BitcoinScalingTestnet = Coin(
     0xef,
     bytes.fromhex("043587cf"),
     bytes.fromhex("04358394"),
+    'bchtest',
 )
 
 # rt12 -- Scaling testnet has same settings as regular testnet, so will cause conflicts.
