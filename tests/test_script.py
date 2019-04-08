@@ -263,6 +263,33 @@ def test_byte_exports(member):
 
 class TestScript:
 
+    def test_len(self):
+        script = b'abcd'
+        assert len(Script(script)) == len(script)
+
+    def test_bytes(self):
+        script = b'abcd'
+        S = Script(script)
+        assert bytes(S) == script
+        S = Script(None)
+        S._default_script = lambda: script
+        assert bytes(S) is script
+
+    def test_str(self):
+        script = b'abcd'
+        S = Script(script)
+        assert str(S) == script.hex()
+
+    def test_hashable(self):
+        {Script(b'abcd')}
+
+    def test_hash(self):
+        assert hash(Script(b'abcd')) == hash(b'abcd')
+
+    @pytest.mark.parametrize("other", (b'abcd', bytearray(b'abcd'), Script(b'abcd')))
+    def test_eq(self, other):
+        assert Script(b'abcd') == other
+
     def test_P2PK_script(self):
         for n in (33, 65):
             data = os.urandom(n)
@@ -362,7 +389,7 @@ class TestScript:
         data = os.urandom(15)
         script = Script(data)
         assert script.to_bytes() == data
-        assert script.to_bytes() is script
+        assert script.to_bytes() is data
 
     def test_to_hex(self):
         data = os.urandom(15)
@@ -497,7 +524,6 @@ def test_item_to_int(value, encoding):
     (bytes([OP_RESERVED, OP_DUP, OP_NOP, OP_15, OP_HASH160, OP_1NEGATE]) + push_item(b'BitcoinSV'),
      [OP_RESERVED, OP_DUP, OP_NOP, b'\x0f', OP_HASH160, b'\x81', b'BitcoinSV']),
     (b'', []),
-    (4, [b''] * 4),
     (push_item(b'a' * 80), [b'a' * 80]),
     (push_item(b'a' * 256), [b'a' * 256]),
     (push_item(b'a' * 65536), [b'a' * 65536]),

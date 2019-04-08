@@ -262,8 +262,38 @@ def item_to_int(item):
     return le_bytes_to_int(item)
 
 
-class Script(bytes):
+class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
+
+    def __init__(self, script):
+        '''Script can be none if the class imlements the _default_script method.'''
+        self._script = script
+
+    def __len__(self):
+        '''The length of the script, in bytes.'''
+        return len(self._script)
+
+    def __bytes__(self):
+        '''The script as bytes.'''
+        result = self._script
+        if result is None:
+            return self._default_script()
+        return result
+
+    def __str__(self):
+        '''A user-readable script.'''
+        return bytes(self).hex()
+
+    def __hash__(self):
+        '''Hashable.'''
+        return hash(bytes(self))
+
+    def __eq__(self, other):
+        '''A script equals anything with the same bytes representation.'''
+        return bytes(self) == bytes(other)
+
+    def _default_bytes(self):
+        raise NotImplementedError
 
     def ops(self):
         '''A generator.  Yields script operations (does not check their validity) as integers, and
@@ -272,10 +302,11 @@ class Script(bytes):
         Raises TruncatedScriptError if the script was truncated.
         '''
         n = 0
-        limit = len(self)
+        script = bytes(self)
+        limit = len(script)
 
         while n < limit:
-            op = self[n]
+            op = script[n]
             n += 1
             if op > OP_16:
                 yield op
@@ -284,15 +315,15 @@ class Script(bytes):
                     if op < OP_PUSHDATA1:
                         dlen = op
                     elif op == OP_PUSHDATA1:
-                        dlen = self[n]
+                        dlen = script[n]
                         n += 1
                     elif op == OP_PUSHDATA2:
-                        dlen, = unpack_le_uint16(self[n: n + 2])
+                        dlen, = unpack_le_uint16(script[n: n + 2])
                         n += 2
                     else:
-                        dlen, = unpack_le_uint32(self[n: n + 4])
+                        dlen, = unpack_le_uint32(script[n: n + 4])
                         n += 4
-                    data = self[n: n + dlen]
+                    data = script[n: n + dlen]
                     n += dlen
                     assert len(data) == dlen
                     yield data
@@ -330,7 +361,7 @@ class Script(bytes):
 
     def to_bytes(self):
         '''Return the script as a bytes() object.'''
-        return self
+        return bytes(self)
 
     @classmethod
     def from_hex(cls, hex_str):
@@ -339,7 +370,7 @@ class Script(bytes):
 
     def to_hex(self):
         '''Return the script as a hexadecimal string.'''
-        return self.hex()
+        return bytes(self).hex()
 
     @classmethod
     def asm_word_to_bytes(cls, word):
