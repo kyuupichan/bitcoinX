@@ -30,12 +30,11 @@ __all__ = (
 
 import attr
 from io import BytesIO
-from itertools import chain
 
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
-    pack_le_int32, pack_le_uint32, pack_varint, pack_varbytes, pack_le_int64, pack_list,
-    read_le_int32, read_le_uint32, read_varint, read_varbytes, read_le_int64, read_list,
+    pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list,
+    read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list,
 )
 from .script import (
     Script, SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ANYONE_CAN_PAY, SIGHASH_FORKID,
