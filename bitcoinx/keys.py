@@ -542,8 +542,7 @@ class PublicKey:
     def to_address(self, *, compressed=None, coin=None):
         '''Return the public key as a bitcoin P2PKH address.'''
         coin = coin or self._coin
-        return base58_encode_check(pack_byte(coin.P2PKH_verbyte) +
-                                   self.hash160(compressed=compressed))
+        return P2PKH_Address(self.hash160(compressed=compressed), coin=coin)
 
     def add(self, value):
         '''Return a new PublicKey instance formed by adding value*G to this one.
@@ -606,9 +605,12 @@ class PublicKey:
             public_key = cls.from_signed_message(message_sig, message, hasher)
         except InvalidSignatureError:
             return False
-        hash160 = base58_decode_check(address)[1:]
-        if len(hash160) != 20:
-            raise ValueError('invalid address')
+        if isinstance(address, P2PKH_Address):
+            hash160 = address.hash160()
+        elif isinstance(address, str):
+            hash160 = base58_decode_check(address)[1:]
+        else:
+            raise TypeError('address must be a string or address object')
         return (public_key.verify_message(message_sig, message, hasher) and
                 any(hash160 == public_key.hash160(compressed=compressed)
                     for compressed in (True, False)))
@@ -659,7 +661,6 @@ class PublicKey:
     def P2PKH_script(self):
         '''Return a Script instance representing the P2PKH script.'''
         return _P2PKH_Script(self)
-
 
 
 class _P2PK_Script(Script):
