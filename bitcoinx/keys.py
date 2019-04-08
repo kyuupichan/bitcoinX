@@ -594,17 +594,22 @@ class PublicKey:
         return self.verify_recoverable_signature(recoverable_sig, message, hasher)
 
     @classmethod
-    def verify_message_and_address(cls, message_sig, message, address, *,
-                                   hasher=double_sha256, coin=None):
+    def verify_message_and_address(cls, message_sig, message, address, *, hasher=double_sha256):
         '''As for verify_message, but also test it was signed by a private key of the given
         address.
+
+        The network of the address is ignored; only its hash160 is extracted and compared
+        against the two possibilities for the public key extracted from the signature.
         '''
         try:
             public_key = cls.from_signed_message(message_sig, message, hasher)
         except InvalidSignatureError:
             return False
+        hash160 = base58_decode_check(address)[1:]
+        if len(hash160) != 20:
+            raise ValueError('invalid address')
         return (public_key.verify_message(message_sig, message, hasher) and
-                any(address == public_key.to_address(compressed=compressed, coin=coin)
+                any(hash160 == public_key.hash160(compressed=compressed)
                     for compressed in (True, False)))
 
     def verify_der_signature(self, der_sig, message, hasher=sha256):
