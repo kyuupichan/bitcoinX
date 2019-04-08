@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from bitcoinx import Bitcoin, BitcoinTestnet, int_to_be_bytes
+from bitcoinx import Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes
 from bitcoinx.address import *
 from bitcoinx.script import _P2PKH_Script, _P2SH_Script
 
@@ -23,6 +23,19 @@ class TestAddress:
         assert address.coin() is coin
         assert address == equal
 
+    def test_from_string_coin(self):
+        assert Address.from_string('1111111111111111111114oLvT2', coin=Bitcoin) == \
+            '1111111111111111111114oLvT2'
+        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=BitcoinTestnet) == \
+            'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=
+                                   BitcoinScalingTestnet) == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+        with pytest.raises(ValueError):
+            Address.from_string('1111111111111111111114oLvT2', coin=BitcoinTestnet)
+        with pytest.raises(ValueError):
+            Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=Bitcoin)
+
+
     def test_from_string_bad(self):
         # Too short
         with pytest.raises(ValueError):
@@ -30,6 +43,30 @@ class TestAddress:
         # Unknown version byte
         with pytest.raises(ValueError):
             Address.from_string('4d3RrygbPdAtMuFnDmzsN8T5fYKVUjFu7m')
+
+    @pytest.mark.parametrize("string,kind,coin,equal", (
+        ('qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', P2PKH_Address, Bitcoin,
+         '1CQGN9WnzdYeFhT2YDS4xkm94PVzwFByC8'),
+        ('pqcnpyfktqzkm9su04empn3ju8e2k4j74q2zzn7h0f', P2SH_Address, Bitcoin,
+         '36B7DTHvi58L3rq9Ni3jRVxBkeJa3R5EC1'),
+        ('PQCNPYFKTQZKM9SU04EMPN3JU8E2K4J74Q2ZZN7H0F', P2SH_Address, Bitcoin,
+         '36B7DTHvi58L3rq9Ni3jRVxBkeJa3R5EC1'),
+    ))
+    def test_cashaddr(self, string, kind, coin, equal):
+        address = Address.from_string(string)
+        assert isinstance(address, kind)
+        assert address.coin() is coin
+        assert address == equal
+
+    def test_cashaddr_bad(self):
+        with pytest.raises(ValueError):
+            address = Address.from_string('bitcoinCash:isamaurysbitcoinandtherealbcash')
+        with pytest.raises(ValueError):
+            Address.from_string('bcash:qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9')
+        with pytest.raises(ValueError):
+            Address.from_string('zvqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxhap8z55')
+        with pytest.raises(ValueError):
+            Address.from_string('qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', coin=BitcoinTestnet)
 
 
 class TestP2PKH_Address:
