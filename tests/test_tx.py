@@ -115,4 +115,4 @@ def test_signatures(filename):
         signature, pubkey = Script(txin.script_sig).ops()
         pubkey = PublicKey.from_bytes(pubkey)
         signature_hash = tx.signature_hash(input_index, value, pk_script, sighash=signature[-1])
-        assert pubkey.verify_signature(signature[:-1], signature_hash, None)
+        assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
