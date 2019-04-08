@@ -286,6 +286,11 @@ class TestScript:
     def test_hash(self):
         assert hash(Script(b'abcd')) == hash(b'abcd')
 
+    def test_default_script(self):
+        S = Script(None)
+        with pytest.raises(NotImplementedError):
+            bytes(S)
+
     @pytest.mark.parametrize("other", (b'abcd', bytearray(b'abcd'), Script(b'abcd')))
     def test_eq(self, other):
         assert Script(b'abcd') == other
