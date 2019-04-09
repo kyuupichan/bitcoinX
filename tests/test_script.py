@@ -503,6 +503,9 @@ class TestScript:
         (Script() << b'foo' << OP_IF << OP_2DROP, (bytes([OP_PUSHDATA1, OP_IF, OP_2DROP]),
                                                    [b'foo'])),
         (Script(b'\xff'), (bytes([0xff]), [])),
+        (Script(b'\x00'), (b'L', [b''])),
+        # A truncated script
+        (Script(b'\x01'), (pack_byte(OP_0), [])),
     ))
     def test_to_template(self, script, answer):
         result = script.to_template()
@@ -537,6 +540,87 @@ class TestScript:
 
         s2 = Script().push_many(items)
         assert s2.to_template() == answer
+
+    def test_classify_P2PKH(self):
+        script_hex = '76a914a6dbba870185ab6689f386a40522ae6cb5c7b61a88ac'
+        s = Script.from_hex(script_hex)
+        sc = s.classify()
+        assert s == sc
+        assert isinstance(sc, P2PKH_Script)
+
+        prefix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
+        s2 = Script.from_hex(prefix.hex() + script_hex)
+        sc2 = s2.classify()
+        assert s2 == sc2
+        assert s2 != s
+        assert isinstance(sc2, P2PKH_Script)
+
+    def test_classify_P2SH(self):
+        script_hex = 'a9143e4501f9f212cb6813b3815edbc7013d6a3f0f1087'
+        s = Script.from_hex(script_hex)
+        sc = s.classify()
+        assert s == sc
+        assert isinstance(sc, P2SH_Script)
+
+        suffix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
+        s2 = Script.from_hex(script_hex + suffix.hex())
+        sc2 = s2.classify()
+        assert s2 == sc2
+        assert s2 != s
+        assert isinstance(sc2, P2SH_Script)
+
+    def test_classify_P2PK(self):
+        script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4ac'
+        s = Script.from_hex(script_hex)
+        sc = s.classify()
+        assert s == sc
+        assert isinstance(sc, P2PK_Script)
+        assert (sc.public_key.to_hex() ==
+                '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4')
+
+        suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
+        s2 = Script.from_hex(script_hex + suffix.hex())
+        sc2 = s2.classify()
+        assert s2 == sc2
+        assert sc2.public_key == sc.public_key
+        assert s2 != s
+        assert isinstance(sc2, P2PK_Script)
+
+    def test_classify_OP_RETURN(self):
+        s = Script(pack_byte(OP_RETURN))
+        sc = s.classify()
+        assert sc == s
+        assert isinstance(sc, OP_RETURN_Script)
+
+        s = Script(pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
+        sc = s.classify()
+        assert sc == s
+        assert isinstance(sc, OP_RETURN_Script)
+
+        # Truncated OP_RETURN script
+        s = Script(pack_byte(OP_RETURN) + pack_byte(1))
+        sc = s.classify()
+        assert sc == s
+        assert isinstance(sc, OP_RETURN_Script)
+
+    def test_classify_unknown(self):
+        # Modified final pubkey byte; not a curve point
+        script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b3ac'
+        s = Script.from_hex(script_hex)
+        sc = s.classify()
+        assert sc is s
+
+        # Truncated script
+        script_hex = '210363f7'
+        s = Script.from_hex(script_hex)
+        sc = s.classify()
+        assert sc is s
+
+        # Unknown script
+        script_hex = pack_byte(OP_TRUE).hex()
+        s = Script.from_hex(script_hex)
+        sc = s.classify()
+        assert sc is s
 
 
 class TestP2PK_Script:
