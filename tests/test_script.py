@@ -1,6 +1,7 @@
 import os
 
 import pytest
+import random
 
 from bitcoinx.script import *
 from bitcoinx.script import _P2PKH_Script
@@ -263,6 +264,9 @@ assert isinstance(P2PKH_script, _P2PKH_Script)
 
 class TestScript:
 
+    def test_construtor(self):
+        assert Script() == b''
+
     def test_len(self):
         script = b'abcd'
         assert len(Script(script)) == len(script)
@@ -487,6 +491,60 @@ class TestScript:
     def test_asm_both_ways(self, asm):
         script = Script.from_asm(asm)
         assert script.to_asm() == asm
+
+    @pytest.mark.parametrize("script,answer", (
+        (Script(), (b'', [])),
+        (Script() << OP_IF << OP_ELSE, (bytes([OP_IF, OP_ELSE]), [])),
+        (Script() << 10 << OP_IF << b'data', (b'LcL', [pack_byte(10), b'data'])),
+        (Script() << OP_NOP << OP_NOP << OP_EQUAL << OP_NOP, (bytes([OP_EQUAL]), [])),
+        (Script() << b'foo' << b'bar' << OP_DROP, (b'L', [b'foo'])),
+        (Script() << b'foo' << OP_DROP << b'bar' << OP_DROP, (b'', [])),
+        (Script() << b'foo' << b'bar' << OP_DROP << OP_DROP, (b'', [])),
+        (Script() << b'foo' << b'bar' << OP_2DROP, (b'', [])),
+        (Script() << b'foo' << b'bar' << 12 << OP_2DROP, (b'L', [b'foo'])),
+        (Script() << b'foo' << b'bar' << OP_NOP << OP_2DROP, (b'', [])),
+        (Script() << OP_DROP << b'foo' << b'bar', (b'uLL', [b'foo', b'bar'])),
+        (Script() << b'foo' << OP_2DROP << b'bar', (b'LmL', [b'foo', b'bar'])),
+        (Script() << OP_IF << OP_DROP, (bytes([OP_IF, OP_DROP]), [])),
+        (Script() << OP_IF << b'foo' << OP_2DROP, (bytes([OP_IF, OP_PUSHDATA1, OP_2DROP]),
+                                                   [b'foo'])),
+        (Script() << b'foo' << OP_IF << OP_2DROP, (bytes([OP_PUSHDATA1, OP_IF, OP_2DROP]),
+                                                   [b'foo'])),
+        (Script(b'\xff'), (bytes([0xff]), [])),
+    ))
+    def test_to_template(self, script, answer):
+        result = script.to_template()
+        assert result == answer
+
+    def test_to_template_complex(self):
+        N = 10
+        # Put some random operations on the stack
+        items = [os.urandom(10) for n in range(N)]
+        ops = [Ops(x) for x in range(OP_VER, OP_NOP10)]
+        ops.remove(OP_DROP)
+        ops.remove(OP_2DROP)
+        items.extend(random.choice(ops) for n in range(N))
+        random.shuffle(items)
+
+        s1 = Script().push_many(items)
+        answer = s1.to_template()
+
+        # Now add some random nops at random points
+        for n in range(N):
+            p = random.randrange(0, 3)
+            pos = random.randrange(0, len(items))
+            if p == 0:
+                items.insert(pos, OP_NOP)
+            elif p == 1:
+                items.insert(pos, os.urandom(10))
+                items.insert(pos + 1, OP_DROP)
+            else:
+                items.insert(pos, os.urandom(10))
+                items.insert(pos + 1, os.urandom(10))
+                items.insert(pos + 2, OP_2DROP)
+
+        s2 = Script().push_many(items)
+        assert s2.to_template() == answer
 
 
 @pytest.mark.parametrize("item,answer", (
