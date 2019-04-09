@@ -194,7 +194,6 @@ class Ops(IntEnum):
 
 globals().update((f'b_{name}', pack_byte(value)) for name, value in Ops.__members__.items())
 globals().update(Ops.__members__)
-__all__ += tuple(f'b_{name}' for name in Ops.__members__.keys())
 __all__ += tuple(Ops.__members__.keys())
 
 
