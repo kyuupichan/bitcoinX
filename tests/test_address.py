@@ -4,7 +4,7 @@ import pytest
 
 from bitcoinx import Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes
 from bitcoinx.address import *
-from bitcoinx.script import _P2PKH_Script, _P2SH_Script
+from bitcoinx.script import P2PKH_Script, P2SH_Script
 
 
 class TestAddress:
@@ -101,7 +101,7 @@ class TestP2PKH_Address:
         assert address == '1LXnPYpHTwQeWfBVnQZ4yDP23b57NwoyrP'
         S = address.to_script()
         assert S == bytes.fromhex('76a914d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c088ac')
-        assert isinstance(S, _P2PKH_Script)
+        assert isinstance(S, P2PKH_Script)
 
     def test_hashable(self):
         {P2PKH_Address(bytes(20))}
@@ -148,7 +148,7 @@ class TestP2SH_Address:
         assert address == '3LAP2V4pNJhZ11gwAFUZsDnvXDcyeeaQM5'
         S = address.to_script()
         assert S == bytes.fromhex('a914ca9f1c4998bf46f66af34d949d8a8f189b6675b587')
-        assert isinstance(S, _P2SH_Script)
+        assert isinstance(S, P2SH_Script)
 
     def test_hashable(self):
         {P2SH_Address(bytes(20))}

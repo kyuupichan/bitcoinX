@@ -37,14 +37,14 @@ from os import urandom
 
 from electrumsv_secp256k1 import ffi, lib, create_context
 
-from .address import P2PKH_Address, _P2PKH_Script
+from .address import P2PKH_Address
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
 from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes
 from .packing import pack_byte, pack_varbytes
-from .script import Script, push_item, b_OP_CHECKSIG
+from .script import P2PKH_Script, P2PK_Script
 from .util import cachedproperty
 
 
@@ -656,20 +656,8 @@ class PublicKey:
 
     def P2PK_script(self):
         '''Return a Script instance representing the P2PK script.'''
-        return _P2PK_Script(self)
+        return P2PK_Script(self)
 
     def P2PKH_script(self):
         '''Return a Script instance representing the P2PKH script.'''
-        return _P2PKH_Script(self)
-
-
-class _P2PK_Script(Script):
-
-    def __init__(self, public_key):
-        if not isinstance(public_key, PublicKey):
-            raise TypeError('public_key must be a PublicKey instance')
-        super().__init__(None)
-        self._public_key = public_key
-
-    def _default_script(self):
-        return push_item(self._public_key.to_bytes()) + b_OP_CHECKSIG
+        return P2PKH_Script(self)

@@ -4,7 +4,7 @@ import pytest
 import random
 
 from bitcoinx.script import *
-from bitcoinx.script import _P2PKH_Script
+from bitcoinx.script import P2PKH_Script
 from bitcoinx import pack_varint, PrivateKey, pack_byte
 
 
@@ -259,7 +259,7 @@ def test_Ops_members():
 
 P2PKH_script = PrivateKey.from_random().public_key.P2PKH_script()
 assert P2PKH_script._script is None
-assert isinstance(P2PKH_script, _P2PKH_Script)
+assert isinstance(P2PKH_script, P2PKH_Script)
 
 
 class TestScript:
@@ -328,7 +328,7 @@ class TestScript:
     def test_lshift_does_bytes_conversion(self):
         result = P2PKH_script << OP_CHECKSIG
         raw = P2PKH_script.to_bytes()
-        assert not isinstance(result, _P2PKH_Script)
+        assert not isinstance(result, P2PKH_Script)
         assert result == raw + bytes([OP_CHECKSIG])
         assert P2PKH_script << P2PKH_script == raw * 2
 
@@ -352,7 +352,7 @@ class TestScript:
     def test_push_many_does_bytes_conversion(self):
         raw = P2PKH_script.to_bytes()
         result = P2PKH_script.push_many([OP_CHECKSIG])
-        assert not isinstance(result, _P2PKH_Script)
+        assert not isinstance(result, P2PKH_Script)
         assert result == raw + bytes([OP_CHECKSIG])
 
     @pytest.mark.parametrize("other", (b'abcd', bytearray(b'abcd')))
