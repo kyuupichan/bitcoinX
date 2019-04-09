@@ -262,12 +262,40 @@ def item_to_int(item):
     return le_bytes_to_int(item)
 
 
+def _to_bytes(item):
+    '''Convert something (an OP_, an integer, or raw data) to a scriptlet.'''
+    if isinstance(item, Ops):
+        return pack_byte(item)
+    if isinstance(item, (bytes, bytearray)):
+        return push_item(item)
+    if isinstance(item, int):
+        return push_int(item)
+    if isinstance(item, Script):
+        return bytes(item)
+    raise TypeError(f"cannot convert append {item} to a scriptlet")
+
+
 class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
 
     def __init__(self, script):
         '''Script can be none if the class imlements the _default_script method.'''
         self._script = script
+
+    def __lshift__(self, item):
+        '''Return a new script with other appended.
+
+        Item can be bytes or an integer (which are pushed on the stack), an opcode
+        such as OP_CHECKSIG, or another Script.
+        '''
+        return Script(bytes(self) + _to_bytes(item))
+
+    def push_many(self, items):
+        '''Return a new script with items, an iterable, appended.
+
+        More efficient than << with 3 items or more, about same with 2.
+        '''
+        return Script(bytes(self) + b''.join(_to_bytes(item) for item in items))
 
     def __len__(self):
         '''The length of the script, in bytes.'''

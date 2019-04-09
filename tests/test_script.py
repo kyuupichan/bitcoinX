@@ -3,6 +3,7 @@ import os
 import pytest
 
 from bitcoinx.script import *
+from bitcoinx.script import _P2PKH_Script
 from bitcoinx import pack_varint, PrivateKey
 
 
@@ -261,11 +262,19 @@ def test_byte_exports(member):
     assert globals()[f'b_{member}'] == bytes([globals()[member]])
 
 
+P2PKH_script = PrivateKey.from_random().public_key.P2PKH_script()
+assert P2PKH_script._script is None
+assert isinstance(P2PKH_script, _P2PKH_Script)
+
+
 class TestScript:
 
     def test_len(self):
         script = b'abcd'
         assert len(Script(script)) == len(script)
+
+    def test_len_does_bytes_conversion(self):
+        assert len(P2PKH_script) == 25
 
     def test_bytes(self):
         script = b'abcd'
@@ -280,20 +289,80 @@ class TestScript:
         S = Script(script)
         assert str(S) == script.hex()
 
+    def test_str_does_bytes_conversion(self):
+        str(P2PKH_script)
+
     def test_hashable(self):
-        {Script(b'abcd')}
+        {P2PKH_script, Script(b'ab')}
 
     def test_hash(self):
-        assert hash(Script(b'abcd')) == hash(b'abcd')
+        assert hash(P2PKH_script) == hash(P2PKH_script.to_bytes())
 
     def test_default_script(self):
         S = Script(None)
         with pytest.raises(NotImplementedError):
             bytes(S)
 
-    @pytest.mark.parametrize("other", (b'abcd', bytearray(b'abcd'), Script(b'abcd')))
+    @pytest.mark.parametrize("script,item,answer", (
+        ('0203', OP_CHECKSIG, '0203ac'),
+        ('', OP_HASH160, 'a9'),
+        ('ab', 0, 'ab00'),
+        ('ab', 1, 'ab51'),
+        ('ab', 16, 'ab60'),
+        ('ab', 17, 'ab0111'),
+        ('ab', -1, 'ab4f'),
+        ('ab', -2, 'ab0182'),
+        ('', bytearray(b'BitcoinSV'), '09426974636f696e5356'),
+        ('', b'', '00'),
+        ('8844aa', b'0' * 100, '8844aa4c64' + '30' * 100),
+        ('88', Script.from_hex('77'), '8877'),
+    ))
+    def test_lshift(self, script, item, answer):
+        script = Script.from_hex(script)
+        script = script << item
+        assert script.to_hex() == answer
+
+    @pytest.mark.parametrize("item", ("text", [1, 2], (3, 4), {"a"}))
+    def test_lshift_bad(self, item):
+        with pytest.raises(TypeError):
+            Script(b'') << item
+
+    def test_lshift_does_bytes_conversion(self):
+        result = P2PKH_script << OP_CHECKSIG
+        raw = P2PKH_script.to_bytes()
+        assert not isinstance(result, _P2PKH_Script)
+        assert result == raw + bytes([OP_CHECKSIG])
+        assert P2PKH_script << P2PKH_script == raw * 2
+
+    @pytest.mark.parametrize("items", (
+        (OP_EQUALVERIFY, OP_CHECKSIG),
+        (b'data', OP_EQUAL, OP_ADD, 45, -1, b'more data'),
+    ))
+    def test_push_many(self, items):
+        script = Script(os.urandom(10))
+        result = script.push_many(items)
+        answer = script
+        for item in items:
+            answer = answer << item
+        assert result == answer
+
+    def test_push_many_with_iterable(self):
+        items = (OP_EQUALVERIFY, OP_CHECKSIG)
+        script = Script(b'')
+        assert script.push_many(items) == script.push_many(item for item in items)
+
+    def test_push_many_does_bytes_conversion(self):
+        raw = P2PKH_script.to_bytes()
+        result = P2PKH_script.push_many([OP_CHECKSIG])
+        assert not isinstance(result, _P2PKH_Script)
+        assert result == raw + bytes([OP_CHECKSIG])
+
+    @pytest.mark.parametrize("other", (b'abcd', bytearray(b'abcd')))
     def test_eq(self, other):
         assert Script(b'abcd') == other
+
+    def test_ops_does_bytes_conversion(self):
+        list(P2PKH_script.ops())
 
     def test_P2PK_script(self):
         p = PrivateKey.from_random()
@@ -384,6 +453,9 @@ class TestScript:
         data = os.urandom(15)
         script = Script(data)
         assert script.to_hex() == data.hex()
+
+    def test_to_hex_does_bytes_conversion(self):
+        P2PKH_script.to_hex()
 
     def test_from_hex(self):
         data = os.urandom(20)
