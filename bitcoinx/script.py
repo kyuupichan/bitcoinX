@@ -28,7 +28,7 @@
 
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
-    'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script',
+    'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'OP_RETURN_Script',
     'ScriptError', 'TruncatedScriptError',
 )
 
@@ -430,29 +430,32 @@ class Script:
         evaluation of the script are dropped.
 
         Data pushes that are deterministically dropped are not retained.
+        If the script is truncated an OP_0 opcode is appended.
         '''
         result = []
-        dropped_pushes = []
 
-        for op in self.ops():
-            if op in {OP_NOP, OP_DROP, OP_2DROP}:
-                # Strip OP_NOP
-                if op == OP_NOP:
-                    continue
+        try:
+            for op in self.ops():
+                if op in {OP_NOP, OP_DROP, OP_2DROP}:
+                    # Strip OP_NOP
+                    if op == OP_NOP:
+                        continue
 
-                # Remove (data, OP_DROP)
-                if op == OP_DROP and result and isinstance(result[-1], bytes):
-                    result.pop()
-                    continue
+                    # Remove (data, OP_DROP)
+                    if op == OP_DROP and result and isinstance(result[-1], bytes):
+                        result.pop()
+                        continue
 
-                # Remove (data, data, OP_2DROP)
-                if (op == OP_2DROP and len(result) >= 2 and
-                        isinstance(result[-1], bytes) and isinstance(result[-2], bytes)):
-                    result.pop()
-                    result.pop()
-                    continue
+                    # Remove (data, data, OP_2DROP)
+                    if (op == OP_2DROP and len(result) >= 2 and
+                            isinstance(result[-1], bytes) and isinstance(result[-2], bytes)):
+                        result.pop()
+                        result.pop()
+                        continue
 
-            result.append(op)
+                result.append(op)
+        except TruncatedScriptError:
+            result.append(OP_0)
 
         return result
 
@@ -462,12 +465,29 @@ class Script:
         template: a byte string indicating the pertinent script operations.
                   Useful for rapid pattern matching.
         items:    items pushed on the stack as part of the template.
+
+        If the script is truncated an OP_0 opcode is appended (with no data item).
         '''
         stripped_ops = self._stripped_ops()
 
         template = bytes(OP_PUSHDATA1 if isinstance(op, bytes) else op for op in stripped_ops)
         items = [op for op in stripped_ops if isinstance(op, bytes)]
         return template, items
+
+    def classify(self):
+        template, items = self.to_template()
+
+        constructor = self.TEMPLATES.get(template)
+        if constructor:
+            try:
+                return constructor(bytes(self), *items)
+            except ValueError:
+                pass
+
+        if template.startswith(b_OP_RETURN):
+            return OP_RETURN_Script(bytes(self))
+
+        return self
 
 
 class _Hash160_Script(Script):
@@ -529,3 +549,17 @@ class P2PK_Script(Script):
     def from_template(cls, script, pubkey_bytes):
         from .keys import PublicKey
         return cls(PublicKey.from_bytes(pubkey_bytes), script)
+
+
+class OP_RETURN_Script(Script):
+    '''This class indicates the script is an OP_RETURN script.'''
+
+
+Script.TEMPLATES = {
+    bytes((OP_PUSHDATA1, OP_CHECKSIG)):
+    P2PK_Script.from_template,
+    bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)):
+    P2PKH_Script.from_template,
+    bytes((OP_HASH160, OP_PUSHDATA1, OP_EQUAL)):
+    P2SH_Script.from_template,
+}
