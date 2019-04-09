@@ -28,7 +28,8 @@
 
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
-    'Script', 'ScriptError', 'TruncatedScriptError',
+    'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script',
+    'ScriptError', 'TruncatedScriptError',
 )
 
 
@@ -469,37 +470,62 @@ class Script:
         return template, items
 
 
-class P2PKH_Script(Script):
+class _Hash160_Script(Script):
 
-    def __init__(self, target):
-        if not hasattr(target, 'hash160'):
-            raise TypeError('target must have a "hash160()" method')
-        super().__init__(None)
-        self._target = target
+    def __init__(self, item, script=None):
+        func = getattr(item, 'hash160', None)
+        if func:
+            hash160 = func()
+        else:
+            hash160 = item
+        if not isinstance(hash160, bytes) or len(hash160) != 20:
+            exc = ValueError if isinstance(hash160, bytes) else TypeError
+            raise exc('item must be 20 bytes')
+        super().__init__(script)
+        self._hash160 = hash160
+
+    def hash160(self):
+        return self._hash160
+
+    @classmethod
+    def from_template(cls, script, hash160):
+        return cls(hash160, script)
+
+
+class P2PKH_Script(_Hash160_Script):
 
     def _default_script(self):
-        return b''.join((b_OP_DUP_OP_HASH160, push_item(self._target.hash160()),
+        return b''.join((b_OP_DUP_OP_HASH160, push_item(self._hash160),
                          b_OP_EQUALVERIFY_OP_CHECKSIG))
 
+    def to_address(self, *, coin=None):
+        from .address import P2PKH_Address
+        return P2PKH_Address(self._hash160, coin=coin)
 
-class P2SH_Script(Script):
 
-    def __init__(self, address):
-        super().__init__(None)
-        self.address = address
+class P2SH_Script(_Hash160_Script):
 
     def _default_script(self):
-        return b''.join((b_OP_HASH160, push_item(self.address.hash160()), b_OP_EQUAL))
+        return b''.join((b_OP_HASH160, push_item(self._hash160), b_OP_EQUAL))
 
+    def to_address(self, *, coin=None):
+        from .address import P2SH_Address
+        return P2SH_Address(self._hash160, coin=coin)
 
 
 class P2PK_Script(Script):
 
-    def __init__(self, public_key):
-        if not hasattr(public_key, 'verify_der_signature'):
+    def __init__(self, public_key, script=None):
+        from .keys import PublicKey
+        if not isinstance(public_key, PublicKey):
             raise TypeError('public_key must be a PublicKey instance')
-        super().__init__(None)
-        self._public_key = public_key
+        super().__init__(script)
+        self.public_key = public_key
 
     def _default_script(self):
-        return push_item(self._public_key.to_bytes()) + b_OP_CHECKSIG
+        return push_item(self.public_key.to_bytes()) + b_OP_CHECKSIG
+
+    @classmethod
+    def from_template(cls, script, pubkey_bytes):
+        from .keys import PublicKey
+        return cls(PublicKey.from_bytes(pubkey_bytes), script)
