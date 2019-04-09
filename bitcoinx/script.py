@@ -277,7 +277,7 @@ def _to_bytes(item):
 class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
 
-    def __init__(self, script):
+    def __init__(self, script=b''):
         '''Script can be none if the class imlements the _default_script method.'''
         self._script = script
 
@@ -423,6 +423,50 @@ class Script:
         '''Convert an ASM string to a script.'''
         asm_word_to_bytes = cls.asm_word_to_bytes
         return cls(b''.join(asm_word_to_bytes(word) for word in asm.split()))
+
+    def _stripped_ops(self):
+        '''As for ops() except the result is a list, and operations that do not affect
+        evaluation of the script are dropped.
+
+        Data pushes that are deterministically dropped are not retained.
+        '''
+        result = []
+        dropped_pushes = []
+
+        for op in self.ops():
+            if op in {OP_NOP, OP_DROP, OP_2DROP}:
+                # Strip OP_NOP
+                if op == OP_NOP:
+                    continue
+
+                # Remove (data, OP_DROP)
+                if op == OP_DROP and result and isinstance(result[-1], bytes):
+                    result.pop()
+                    continue
+
+                # Remove (data, data, OP_2DROP)
+                if (op == OP_2DROP and len(result) >= 2 and
+                        isinstance(result[-1], bytes) and isinstance(result[-2], bytes)):
+                    result.pop()
+                    result.pop()
+                    continue
+
+            result.append(op)
+
+        return result
+
+    def to_template(self):
+        '''Return a pair (template, items).
+
+        template: a byte string indicating the pertinent script operations.
+                  Useful for rapid pattern matching.
+        items:    items pushed on the stack as part of the template.
+        '''
+        stripped_ops = self._stripped_ops()
+
+        template = bytes(OP_PUSHDATA1 if isinstance(op, bytes) else op for op in stripped_ops)
+        items = [op for op in stripped_ops if isinstance(op, bytes)]
+        return template, items
 
 
 class _P2PKH_Script(Script):
