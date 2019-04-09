@@ -4,7 +4,7 @@ import pytest
 
 from bitcoinx.script import *
 from bitcoinx.script import _P2PKH_Script
-from bitcoinx import pack_varint, PrivateKey
+from bitcoinx import pack_varint, PrivateKey, pack_byte
 
 
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
@@ -256,12 +256,6 @@ def test_Ops_members():
     assert Ops['OP_NOP10'].value == 185
 
 
-
-@pytest.mark.parametrize("member", Ops.__members__)
-def test_byte_exports(member):
-    assert globals()[f'b_{member}'] == bytes([globals()[member]])
-
-
 P2PKH_script = PrivateKey.from_random().public_key.P2PKH_script()
 assert P2PKH_script._script is None
 assert isinstance(P2PKH_script, _P2PKH_Script)
@@ -385,26 +379,26 @@ class TestScript:
 
     @pytest.mark.parametrize("script,asm", (
         # No script
-        (b_OP_0, '0'),
-        (b_OP_1, '1'),
-        (b_OP_2, '2'),
-        (b_OP_3, '3'),
-        (b_OP_4, '4'),
-        (b_OP_5, '5'),
-        (b_OP_6, '6'),
-        (b_OP_7, '7'),
-        (b_OP_8, '8'),
-        (b_OP_9, '9'),
-        (b_OP_10, '10'),
-        (b_OP_11, '11'),
-        (b_OP_12, '12'),
-        (b_OP_13, '13'),
-        (b_OP_14, '14'),
-        (b_OP_15, '15'),
-        (b_OP_16, '16'),
-        (b_OP_1NEGATE, '-1'),
-        (b_OP_6 + b_OP_1NEGATE, '6 -1'),
-        (b_OP_16 + bytes([1, 16, 2, 16, 0, OP_PUSHDATA1, 1, 16]), '16 16 16 16'),
+        (pack_byte(OP_0), '0'),
+        (pack_byte(OP_1), '1'),
+        (pack_byte(OP_2), '2'),
+        (pack_byte(OP_3), '3'),
+        (pack_byte(OP_4), '4'),
+        (pack_byte(OP_5), '5'),
+        (pack_byte(OP_6), '6'),
+        (pack_byte(OP_7), '7'),
+        (pack_byte(OP_8), '8'),
+        (pack_byte(OP_9), '9'),
+        (pack_byte(OP_10), '10'),
+        (pack_byte(OP_11), '11'),
+        (pack_byte(OP_12), '12'),
+        (pack_byte(OP_13), '13'),
+        (pack_byte(OP_14), '14'),
+        (pack_byte(OP_15), '15'),
+        (pack_byte(OP_16), '16'),
+        (pack_byte(OP_1NEGATE), '-1'),
+        (bytes([OP_6, OP_1NEGATE]), '6 -1'),
+        (bytes([OP_16, 1, 16, 2, 16, 0, OP_PUSHDATA1, 1, 16]), '16 16 16 16'),
         (bytes([1, 17, 2, 17, 0, OP_PUSHDATA1, 1, 17]), '17 17 17'),
         (bytes([1, 128, 1, 127, 1, 128, 1, 255, 2, 127, 0, 2, 128, 0, 2, 255, 0, 2, 0, 1]),
          '0 127 0 -127 127 128 255 256'),
@@ -463,9 +457,9 @@ class TestScript:
         assert script.to_bytes() == data
 
     @pytest.mark.parametrize("word,item", (
-        ("OP_VERIF", b_OP_VERIF),
-        ("OP_NOP", b_OP_NOP),
-        ("OP_0", b_OP_0),
+        ("OP_VERIF", pack_byte(OP_VERIF)),
+        ("OP_NOP", pack_byte(OP_NOP)),
+        ("OP_0", pack_byte(OP_0)),
         ("97", b'\x01a'),
         ("6162636465", b'\5abcde'),
     ))
@@ -496,27 +490,27 @@ class TestScript:
 
 
 @pytest.mark.parametrize("item,answer", (
-    (b'', b_OP_0),
+    (b'', pack_byte(OP_0)),
     (b'\x00', bytes([1, 0])),
-    (b'\x01', b_OP_1),
-    (b'\x02', b_OP_2),
-    (b'\x03', b_OP_3),
-    (b'\x04', b_OP_4),
-    (b'\x05', b_OP_5),
-    (b'\x06', b_OP_6),
-    (b'\x07', b_OP_7),
-    (b'\x08', b_OP_8),
-    (b'\x09', b_OP_9),
-    (b'\x0a', b_OP_10),
-    (b'\x0b', b_OP_11),
-    (b'\x0c', b_OP_12),
-    (b'\x0d', b_OP_13),
-    (b'\x0e', b_OP_14),
-    (b'\x0f', b_OP_15),
-    (b'\x10', b_OP_16),
+    (b'\x01', pack_byte(OP_1)),
+    (b'\x02', pack_byte(OP_2)),
+    (b'\x03', pack_byte(OP_3)),
+    (b'\x04', pack_byte(OP_4)),
+    (b'\x05', pack_byte(OP_5)),
+    (b'\x06', pack_byte(OP_6)),
+    (b'\x07', pack_byte(OP_7)),
+    (b'\x08', pack_byte(OP_8)),
+    (b'\x09', pack_byte(OP_9)),
+    (b'\x0a', pack_byte(OP_10)),
+    (b'\x0b', pack_byte(OP_11)),
+    (b'\x0c', pack_byte(OP_12)),
+    (b'\x0d', pack_byte(OP_13)),
+    (b'\x0e', pack_byte(OP_14)),
+    (b'\x0f', pack_byte(OP_15)),
+    (b'\x10', pack_byte(OP_16)),
     (b'\x11', bytes([1, 0x11])),
     (b'\x80', bytes([1, 0x80])),
-    (b'\x81', b_OP_1NEGATE),
+    (b'\x81', pack_byte(OP_1NEGATE)),
     (b'\x82', bytes([1, 0x82])),
     (b'\xff', bytes([1, 0xff])),
     (b'abcd', bytes([4]) +  b'abcd'),
@@ -536,24 +530,24 @@ def test_push_item(item, answer):
 
 
 @pytest.mark.parametrize("items,answer", (
-    ([b''], b_OP_0 + b_OP_DROP),
-    ([b'', b''], b_OP_0 * 2 + b_OP_2DROP),
-    ([b'', b'\x04', b''], b_OP_0 + b_OP_4 + b_OP_0 + b_OP_2DROP + b_OP_DROP),
+    ([b''], pack_byte(OP_0) + pack_byte(OP_DROP)),
+    ([b'', b''], pack_byte(OP_0) * 2 + pack_byte(OP_2DROP)),
+    ([b'', b'\x04', b''], bytes((OP_0, OP_4, OP_0, OP_2DROP, OP_DROP))),
 ), ids=parameter_id)
 def test_push_and_drop_items(items, answer):
     assert push_and_drop_items(items) == answer
 
 
 @pytest.mark.parametrize("value,encoding", (
-    (-1, b_OP_1NEGATE),
+    (-1, pack_byte(OP_1NEGATE)),
     (-2, bytes([1, 0x82])),
     (-127, bytes([1, 0xff])),
     (-128, bytes([2, 128, 0x80])),
-    (0, b_OP_0),
-    (1, b_OP_1),
-    (2, b_OP_2),
-    (15, b_OP_15),
-    (16, b_OP_16),
+    (0, pack_byte(OP_0)),
+    (1, pack_byte(OP_1)),
+    (2, pack_byte(OP_2)),
+    (15, pack_byte(OP_15)),
+    (16, pack_byte(OP_16)),
     (17, bytes([1, 17])),
 ), ids=parameter_id)
 def test_push_int(value, encoding):
