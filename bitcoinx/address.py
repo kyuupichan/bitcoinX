@@ -32,7 +32,7 @@ __all__ = (
 from .base58 import base58_decode_check, base58_encode_check
 from .coin import Bitcoin, all_coins
 from .packing import pack_byte
-from .script import _P2PKH_Script, _P2SH_Script
+from .script import P2PKH_Script, P2SH_Script
 from bitcoinx import cashaddr
 
 
@@ -102,9 +102,9 @@ def _validate_hash160(hash160):
 
 class P2PKH_Address(Address):
 
-    def __init__(self, hash160, *, coin=Bitcoin):
+    def __init__(self, hash160, *, coin=None):
         self._hash160 = _validate_hash160(hash160)
-        self._coin = coin
+        self._coin = coin or Bitcoin
 
     def hash160(self):
         return self._hash160
@@ -114,14 +114,14 @@ class P2PKH_Address(Address):
         return base58_encode_check(pack_byte(coin.P2PKH_verbyte) + self._hash160)
 
     def to_script(self):
-        return _P2PKH_Script(self)
+        return P2PKH_Script(self)
 
 
 class P2SH_Address(Address):
 
-    def __init__(self, hash160, *, coin=Bitcoin):
+    def __init__(self, hash160, *, coin=None):
         self._hash160 = _validate_hash160(hash160)
-        self._coin = coin
+        self._coin = coin or Bitcoin
 
     def hash160(self):
         return self._hash160
@@ -131,4 +131,4 @@ class P2SH_Address(Address):
         return base58_encode_check(pack_byte(coin.P2SH_verbyte) + self._hash160)
 
     def to_script(self):
-        return _P2SH_Script(self)
+        return P2SH_Script(self)

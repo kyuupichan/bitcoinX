@@ -469,7 +469,7 @@ class Script:
         return template, items
 
 
-class _P2PKH_Script(Script):
+class P2PKH_Script(Script):
 
     def __init__(self, target):
         if not hasattr(target, 'hash160'):
@@ -482,7 +482,7 @@ class _P2PKH_Script(Script):
                          b_OP_EQUALVERIFY_OP_CHECKSIG))
 
 
-class _P2SH_Script(Script):
+class P2SH_Script(Script):
 
     def __init__(self, address):
         super().__init__(None)
@@ -490,3 +490,16 @@ class _P2SH_Script(Script):
 
     def _default_script(self):
         return b''.join((b_OP_HASH160, push_item(self.address.hash160()), b_OP_EQUAL))
+
+
+
+class P2PK_Script(Script):
+
+    def __init__(self, public_key):
+        if not hasattr(public_key, 'verify_der_signature'):
+            raise TypeError('public_key must be a PublicKey instance')
+        super().__init__(None)
+        self._public_key = public_key
+
+    def _default_script(self):
+        return push_item(self._public_key.to_bytes()) + b_OP_CHECKSIG
