@@ -4,8 +4,9 @@ import pytest
 import random
 
 from bitcoinx.script import *
-from bitcoinx.script import P2PKH_Script
-from bitcoinx import pack_varint, PrivateKey, pack_byte
+from bitcoinx import (
+    pack_varint, PrivateKey, pack_byte, BitcoinTestnet, P2PKH_Script, P2PKH_Address, P2SH_Address,
+)
 
 
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
@@ -362,15 +363,6 @@ class TestScript:
     def test_ops_does_bytes_conversion(self):
         list(P2PKH_script.ops())
 
-    def test_P2PK_script(self):
-        p = PrivateKey.from_random()
-        PC = p.public_key
-        PU = PC.complement()
-        for P in (PC, PU):
-            script = P.P2PK_script()
-            data = P.to_bytes()
-            assert script == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
-
     def test_P2PKHK_script(self):
         p = PrivateKey.from_random()
         PC = p.public_key
@@ -545,6 +537,98 @@ class TestScript:
 
         s2 = Script().push_many(items)
         assert s2.to_template() == answer
+
+
+class TestP2PK_Script:
+
+    def test_constructor(self):
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        PU = PC.complement()
+        for P in (PC, PU):
+            script = P2PK_Script(P)
+            data = P.to_bytes()
+            assert script == bytes([len(data)]) + data + bytes([OP_CHECKSIG])
+        script = P2PK_Script(P, b'foobar')
+        assert script == b'foobar'
+
+    def test_constructor_bad(self):
+        with pytest.raises(TypeError):
+            P2PK_Script(bytes.fromhex('036d6caac248af96f6afa7f904f550253a0f3ef3f5a'
+                                      'a2fe6838a95b216691468e2'))
+
+    def test_from_template(self):
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        script = P2PK_Script.from_template(b'foobar', PC.to_bytes())
+        assert script.public_key == PC
+        assert script == b'foobar'
+
+
+class TestP2PKH_Script:
+
+    def test_constructor(self):
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        script_PC = P2PKH_Script(PC)
+        hash160 = PC.hash160()
+        script_hash160 = P2PKH_Script(hash160)
+        address = P2PKH_Address(hash160)
+        script_address = P2PKH_Script(address)
+        assert script_PC == script_hash160 == script_address
+        assert (script_PC.hash160() == script_hash160.hash160() ==
+                script_address.hash160() == hash160)
+
+    def test_constructor_bad(self):
+        with pytest.raises(TypeError):
+            P2PKH_Script(bytearray(20))
+        with pytest.raises(ValueError):
+            P2PKH_Script(bytes(21))
+
+    def test_to_address(self):
+        hash160 = os.urandom(20)
+        assert P2PKH_Script(hash160).to_address() == P2PKH_Address(hash160)
+        assert P2PKH_Script(hash160).to_address(coin=BitcoinTestnet) != P2PKH_Address(hash160)
+        assert (P2PKH_Script(hash160).to_address(coin=BitcoinTestnet) ==
+                P2PKH_Address(hash160, coin=BitcoinTestnet))
+
+    def test_from_template(self):
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        script = P2PKH_Script.from_template(b'foobar', PC.hash160())
+        assert script.hash160() == PC.hash160()
+        assert script == b'foobar'
+
+
+class TestP2SH_Script:
+
+    def test_constructor(self):
+        hash160 = os.urandom(20)
+        script_hash160 = P2SH_Script(hash160)
+        address = P2SH_Address(hash160)
+        script_address = P2SH_Script(address)
+        assert script_hash160 == script_address
+        assert script_hash160.hash160() == script_address.hash160() == hash160
+
+    def test_constructor_bad(self):
+        with pytest.raises(TypeError):
+            P2SH_Script(bytearray(20))
+        with pytest.raises(ValueError):
+            P2SH_Script(bytes(21))
+
+    def test_to_address(self):
+        hash160 = os.urandom(20)
+        assert P2SH_Script(hash160).to_address() == P2SH_Address(hash160)
+        assert P2SH_Script(hash160).to_address(coin=BitcoinTestnet) != P2SH_Address(hash160)
+        assert (P2SH_Script(hash160).to_address(coin=BitcoinTestnet) ==
+                P2SH_Address(hash160, coin=BitcoinTestnet))
+
+    def test_from_template(self):
+        p = PrivateKey.from_random()
+        PC = p.public_key
+        script = P2SH_Script.from_template(b'foobar', PC.hash160())
+        assert script.hash160() == PC.hash160()
+        assert script == b'foobar'
 
 
 @pytest.mark.parametrize("item,answer", (

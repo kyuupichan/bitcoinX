@@ -1018,6 +1018,9 @@ class TestPublicKey:
         assert P1.verify_message_and_address(msg_sig, msg, P1.to_address())
         assert not P1.verify_message_and_address(msg_sig, msg, P2.to_address())
 
+        with pytest.raises(TypeError):
+            P1.verify_message_and_address(msg_sig, msg, b'foobar')
+
     @pytest.mark.parametrize("hasher", (double_sha256, sha256))
     def test_verify_message_and_address_hasher(self, hasher):
         priv = PrivateKey.from_random()
