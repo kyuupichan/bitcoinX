@@ -482,3 +482,6 @@ class Headers(object):
         '''Returns the required bits for a new header at the given height with the
         given timestamp.  Testnet uses the timestamp; mainnet does not.'''
         return self.coin.required_bits(self, chain, height, timestamp)
+
+    def flush(self):
+        self._storage.flush()
