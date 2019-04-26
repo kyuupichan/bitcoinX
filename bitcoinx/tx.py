@@ -200,3 +200,12 @@ class TxOutput:
         return (
             f'TxOutput(value={self.value}, script_pk="{self.script_pk}")'
         )
+
+
+@attr.s(slots=True, repr=False)
+class TxInputAnnotated:
+    '''A bitcoin transaction input.'''
+    tx_input = attr.ib()    # A TxInput instance
+    value = attr.ib()
+    script_pk = attr.ib()
+    public_key = attr.ib()

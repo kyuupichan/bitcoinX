@@ -15,6 +15,7 @@ pack_cases = [
     ('pack_le_uint64', 3615905184676284416, b'\x00\x88\x1f\x8a\x9bF.2'),
     ('pack_be_uint16', 12345, b'09'),
     ('pack_be_uint32', 123456789, b'\x07[\xcd\x15'),
+    ('pack_be_uint64', 1234567890123456, bytes(reversed(pack_le_uint64(1234567890123456)))),
     ('pack_byte', 144, b'\x90'),
     ('pack_port', 8333, b' \x8d'),
     ('pack_varint', 0, b'\x00'),

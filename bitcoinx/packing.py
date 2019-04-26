@@ -27,7 +27,7 @@
 __all__ = (
     'pack_le_int32', 'pack_le_int64',
     'pack_le_uint16', 'pack_le_uint32', 'pack_le_uint64',
-    'pack_be_uint16', 'pack_be_uint32',
+    'pack_be_uint16', 'pack_be_uint32', 'pack_be_uint64',
     'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes', 'pack_list',
     'unpack_le_int32', 'unpack_le_int32_from',
     'unpack_le_int64', 'unpack_le_int64_from',
@@ -36,6 +36,7 @@ __all__ = (
     'unpack_le_uint64', 'unpack_le_uint64_from',
     'unpack_be_uint16', 'unpack_be_uint16_from',
     'unpack_be_uint32', 'unpack_be_uint32_from',
+    'unpack_be_uint64', 'unpack_be_uint64_from',
     'unpack_byte', 'unpack_port', 'unpack_header',
     'read_le_int32', 'read_le_int64',
     'read_le_uint16', 'read_le_uint32', 'read_le_uint64',
@@ -54,6 +55,7 @@ struct_le_I = Struct('<I')
 struct_le_Q = Struct('<Q')
 struct_be_H = Struct('>H')
 struct_be_I = Struct('>I')
+struct_be_Q = Struct('>Q')
 structB = Struct('B')
 struct_header = Struct('<i 32s 32s 3I')
 
@@ -64,6 +66,7 @@ pack_le_uint32 = struct_le_I.pack
 pack_le_uint64 = struct_le_Q.pack
 pack_be_uint16 = struct_be_H.pack
 pack_be_uint32 = struct_be_I.pack
+pack_be_uint64 = struct_be_Q.pack
 pack_byte = structB.pack
 
 unpack_le_int32 = struct_le_i.unpack
@@ -80,6 +83,8 @@ unpack_be_uint16 = struct_be_H.unpack
 unpack_be_uint16_from = struct_be_H.unpack_from
 unpack_be_uint32 = struct_be_I.unpack
 unpack_be_uint32_from = struct_be_I.unpack_from
+unpack_be_uint64 = struct_be_Q.unpack
+unpack_be_uint64_from = struct_be_Q.unpack_from
 unpack_byte = structB.unpack
 unpack_header = struct_header.unpack
 
@@ -151,6 +156,11 @@ def read_be_uint16(read):
 def read_be_uint32(read):
     result, = unpack_be_uint32(read(4))
     return result
+
+
+def read_be_uint64(read):
+    result, = unpack_be_uint64(read(8))
+    return resul
 
 
 def read_varint(read):
