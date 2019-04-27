@@ -474,10 +474,10 @@ class Script:
         items = [op for op in stripped_ops if isinstance(op, bytes)]
         return template, items
 
-    def classify(self):
+    def classify(self, templates):
         template, items = self.to_template()
 
-        constructor = self.TEMPLATES.get(template)
+        constructor = templates.get(template)
         if constructor:
             try:
                 return constructor(bytes(self), *items)
@@ -488,6 +488,9 @@ class Script:
             return OP_RETURN_Script(bytes(self))
 
         return self
+
+    def classify_script_pk(self):
+        return self.classify(self.TEMPLATES_PK)
 
 
 class _Hash160_Script(Script):
@@ -555,7 +558,7 @@ class OP_RETURN_Script(Script):
     '''This class indicates the script is an OP_RETURN script.'''
 
 
-Script.TEMPLATES = {
+Script.TEMPLATES_PK = {
     bytes((OP_PUSHDATA1, OP_CHECKSIG)):
     P2PK_Script.from_template,
     bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)):
