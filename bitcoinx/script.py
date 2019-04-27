@@ -34,6 +34,7 @@ __all__ = (
 
 
 from enum import IntEnum
+import re
 
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
@@ -475,17 +476,21 @@ class Script:
         return template, items
 
     def classify(self, templates):
-        template, items = self.to_template()
+        our_template, items = self.to_template()
 
-        constructor = templates.get(template)
-        if constructor:
+        for template, constructor in templates:
+            if isinstance(template, bytes):
+                if template != our_template:
+                    continue
+            else:
+                match = template.match(our_template)
+                if not match:
+                    continue
+
             try:
                 return constructor(bytes(self), *items)
             except ValueError:
                 pass
-
-        if template.startswith(b_OP_RETURN):
-            return OP_RETURN_Script(bytes(self))
 
         return self
 
@@ -557,12 +562,18 @@ class P2PK_Script(Script):
 class OP_RETURN_Script(Script):
     '''This class indicates the script is an OP_RETURN script.'''
 
+    @classmethod
+    def from_template(cls, script, *items):
+        return cls(bytes(script))
 
-Script.TEMPLATES_PK = {
-    bytes((OP_PUSHDATA1, OP_CHECKSIG)):
-    P2PK_Script.from_template,
-    bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)):
-    P2PKH_Script.from_template,
-    bytes((OP_HASH160, OP_PUSHDATA1, OP_EQUAL)):
-    P2SH_Script.from_template,
-}
+
+Script.TEMPLATES_PK = (
+    (bytes((OP_PUSHDATA1, OP_CHECKSIG)),
+     P2PK_Script.from_template),
+    (bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)),
+     P2PKH_Script.from_template),
+    (bytes((OP_HASH160, OP_PUSHDATA1, OP_EQUAL)),
+     P2SH_Script.from_template),
+    (re.compile(b_OP_RETURN),
+     OP_RETURN_Script.from_template),
+)
