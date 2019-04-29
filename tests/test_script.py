@@ -5,7 +5,7 @@ import random
 
 from bitcoinx.script import *
 from bitcoinx import (
-    pack_varint, PrivateKey, pack_byte, BitcoinTestnet,
+    pack_varint, PrivateKey, pack_byte, BitcoinTestnet, PublicKey,
     P2PKH_Script, P2PKH_Address, P2SH_Address,
     P2PKH_ScriptSig, P2PK_ScriptSig
 )
@@ -601,6 +601,22 @@ class TestScript:
         assert s2 != s
         assert isinstance(sc2, P2PK_Script)
 
+    def test_classify_P2MultiSig(self):
+        script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'
+                      '3fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef2052ae')
+        s = Script.from_hex(script_hex)
+        sc = s.classify_script_pk()
+        assert isinstance(sc, P2MultiSig_Script)
+        assert len(sc.public_keys) == 2
+        assert sc.threshold == 2
+
+        # Confirm suffix fails to match
+        s = Script.from_hex(script_hex + 'a0')
+        assert s.classify_script_pk() is s
+        # Confirm prefix fails to match
+        s = Script.from_hex('a0' + script_hex)
+        assert s.classify_script_pk() is s
+
     def test_classify_OP_RETURN(self):
         s = Script(pack_byte(OP_RETURN))
         sc = s.classify_script_pk()
@@ -764,6 +780,127 @@ class TestP2SH_Script:
         script = P2SH_Script.from_template(b'foobar', PC.hash160())
         assert script.hash160() == PC.hash160()
         assert script == b'foobar'
+
+
+MS_PUBKEYS = tuple(PrivateKey.from_random().public_key for n in range(5))
+
+class TestP2MultiSig_Script:
+
+    @pytest.mark.parametrize("threshold, count",
+                             [(m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)]
+    )
+    def test_constructor(self, threshold, count):
+        script_pk = P2MultiSig_Script(MS_PUBKEYS[:count], threshold)
+        assert bytes(script_pk) == b''.join((
+            push_int(threshold),
+            b''.join(push_item(public_key.to_bytes()) for public_key in MS_PUBKEYS[:count]),
+            push_int(count),
+            pack_byte(OP_CHECKMULTISIG),
+        ))
+
+    def test_constructor_copies(self):
+        public_keys = list(MS_PUBKEYS[:2])
+        script = P2MultiSig_Script(public_keys, 2)
+        assert script.public_keys is not public_keys
+
+    def test_constructor_bad(self):
+        with pytest.raises(TypeError):
+            P2MultiSig_Script(MS_PUBKEYS + [b''], 2)
+        with pytest.raises(ValueError):
+            P2MultiSig_Script(MS_PUBKEYS, 0)
+        with pytest.raises(ValueError):
+            P2MultiSig_Script(MS_PUBKEYS, len(MS_PUBKEYS) + 1)
+
+    @pytest.mark.parametrize("threshold, count",
+                             [(m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)]
+    )
+    def test_from_template(self, threshold, count):
+        good_script = P2MultiSig_Script(MS_PUBKEYS[:count], threshold)
+        public_keys = [public_key.to_bytes() for public_key in MS_PUBKEYS[:count]]
+        script = P2MultiSig_Script.from_template(bytes(good_script), pack_byte(threshold),
+                                                 *public_keys, pack_byte(count))
+        assert script.public_keys == MS_PUBKEYS[:count]
+        assert script.threshold == threshold
+        assert script == good_script
+
+    def test_from_template_bad(self):
+        public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
+        with pytest.raises(ValueError):
+            script = P2MultiSig_Script.from_template(pack_byte(1), public_keys, pack_byte(1))
+        with pytest.raises(ValueError):
+            script = P2MultiSig_Script.from_template(pack_byte(1), public_keys, pack_byte(3))
+
+MS_SIGS = tuple(bytes.fromhex(sig_hex) for sig_hex in (
+    '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c',
+    '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976d102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f2049'
+))
+
+
+class TestP2PK_ScriptSig:
+
+    def test_constructor(self):
+        for sig in MS_SIGS:
+            scriptsig = P2PK_ScriptSig(sig)
+            assert bytes(scriptsig) == push_item(sig)
+
+    def test_from_template(self):
+        sig = MS_SIGS[0]
+        assert P2PK_ScriptSig.from_template(None, sig) == P2PK_ScriptSig(sig)
+
+SIG_PUBKEY_PAIRS = [
+    (bytes.fromhex('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
+                   '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f1'),
+     PublicKey.from_hex('040bf47f1c24d1b5a597312422091a324a3d57d0123c9ba853ac9dc1eb81d954bc056'
+                        'a18a33d9e7cefd2bf10434ec3f1a39d3c3ede6f2bb3cf21730df38fa0a05d'), ),
+]
+
+
+class TestP2PKH_ScriptSig:
+
+    @pytest.mark.parametrize("sig, public_key", SIG_PUBKEY_PAIRS)
+    def test_constructor(self, sig, public_key):
+        scriptsig = P2PKH_ScriptSig(sig, public_key)
+        assert bytes(scriptsig) == push_item(sig) + push_item(public_key.to_bytes())
+        assert scriptsig.der_sig == sig
+        assert scriptsig.public_key == public_key
+
+    @pytest.mark.parametrize("sig, public_key", SIG_PUBKEY_PAIRS)
+    def test_from_template(self, sig, public_key):
+        assert (P2PKH_ScriptSig.from_template(None, sig, public_key.to_bytes()) ==
+                P2PKH_ScriptSig(sig, public_key))
+
+
+class TestP2MultiSig_ScriptSig:
+
+    def test_constructor(self):
+        scriptsig = P2MultiSig_ScriptSig(MS_SIGS)
+        assert bytes(scriptsig) == pack_byte(OP_0) + b''.join(push_item(sig) for sig in MS_SIGS)
+
+    def test_constructor_copies(self):
+        script = P2MultiSig_ScriptSig(list(MS_SIGS))
+        assert script.der_sigs is not MS_SIGS
+
+    def test_constructor_bad(self):
+        with pytest.raises(TypeError):
+            P2MultiSig_ScriptSig(MS_PUBKEYS + [2])
+        with pytest.raises(ValueError):
+            P2MultiSig_ScriptSig([])
+        with pytest.raises(ValueError):
+            P2MultiSig_ScriptSig([sig[:-1] for sig in MS_SIGS])
+
+    def test_from_template(self):
+        good_script = P2MultiSig_ScriptSig(MS_SIGS)
+        script = P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_0), *MS_SIGS)
+        assert script.der_sigs == MS_SIGS
+
+    def test_from_template_bad(self):
+        public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
+        with pytest.raises(ValueError):
+           P2MultiSig_ScriptSig.from_template(None)
+        with pytest.raises(ValueError):
+           P2MultiSig_ScriptSig.from_template(pack_byte(OP_0))
+        with pytest.raises(ValueError):
+           P2MultiSig_ScriptSig.from_template(pack_byte(OP_1), *MS_SIGS)
 
 
 @pytest.mark.parametrize("item,answer", (
