@@ -5,7 +5,9 @@ import random
 
 from bitcoinx.script import *
 from bitcoinx import (
-    pack_varint, PrivateKey, pack_byte, BitcoinTestnet, P2PKH_Script, P2PKH_Address, P2SH_Address,
+    pack_varint, PrivateKey, pack_byte, BitcoinTestnet,
+    P2PKH_Script, P2PKH_Address, P2SH_Address,
+    P2PKH_ScriptSig, P2PK_ScriptSig
 )
 
 
@@ -634,6 +636,42 @@ class TestScript:
         s = Script.from_hex(script_hex)
         sc = s.classify_script_pk()
         assert sc is s
+
+    @pytest.mark.parametrize("sig_hex", (
+        'ff',
+        '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
+        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09',
+    ))
+    def test_classify_P2PK_scriptsig(self, sig_hex):
+        script = Script(push_item(bytes.fromhex(sig_hex)))
+        sc = script.classify_script_sig()
+        assert isinstance(sc, P2PK_ScriptSig)
+
+    @pytest.mark.parametrize("sig_hex", (
+        'fe',
+        '302402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
+        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09',
+    ))
+    def test_classify_bad_P2PK_scriptsig(self, sig_hex):
+        script = Script(push_item(bytes.fromhex(sig_hex)))
+        sc = script.classify_script_sig()
+        assert sc is script
+
+    @pytest.mark.parametrize("sig_hex,public_key_hex", (
+        ('ff',
+         '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63'
+         'c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee'),
+        ('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
+         '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f1',
+         '040bf47f1c24d1b5a597312422091a324a3d57d0123c9ba853ac9dc1eb81d954bc056'
+         'a18a33d9e7cefd2bf10434ec3f1a39d3c3ede6f2bb3cf21730df38fa0a05d'),
+    ))
+    def test_classify_P2PKH_scriptsig(self, sig_hex, public_key_hex):
+        script = Script(b''.join(push_item(bytes.fromhex(item))
+                                 for item in (sig_hex, public_key_hex)))
+        sc = script.classify_script_sig()
+        assert isinstance(sc, P2PKH_ScriptSig)
+
 
 
 class TestP2PK_Script:

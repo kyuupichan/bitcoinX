@@ -29,6 +29,7 @@
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
     'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'OP_RETURN_Script',
+    'P2PK_ScriptSig', 'P2PKH_ScriptSig',
     'ScriptError', 'TruncatedScriptError',
 )
 
@@ -276,6 +277,18 @@ def _to_bytes(item):
     raise TypeError(f"cannot convert append {item} to a scriptlet")
 
 
+def raise_on_invalid_sig(der_sig):
+    from .keys import der_signature_to_compact
+    if der_sig != b'\xff':
+        der_signature_to_compact(der_sig)
+
+
+def raise_on_invalid_public_key(public_key):
+    from .keys import PublicKey
+    if not isinstance(public_key, PublicKey):
+        raise TypeError('public_key must be a PublicKey instance')
+
+
 class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
 
@@ -498,6 +511,9 @@ class Script:
     def classify_script_pk(self):
         return self.classify(self.TEMPLATES_PK)
 
+    def classify_script_sig(self):
+        return self.classify(self.TEMPLATES_SIG)
+
 
 class _Hash160_Script(Script):
 
@@ -545,9 +561,7 @@ class P2SH_Script(_Hash160_Script):
 class P2PK_Script(Script):
 
     def __init__(self, public_key, script=None):
-        from .keys import PublicKey
-        if not isinstance(public_key, PublicKey):
-            raise TypeError('public_key must be a PublicKey instance')
+        raise_on_invalid_public_key(public_key)
         super().__init__(script)
         self.public_key = public_key
 
@@ -568,13 +582,56 @@ class OP_RETURN_Script(Script):
         return cls(bytes(script))
 
 
+class P2PKH_ScriptSig(Script):
+
+    def __init__(self, der_sig, public_key, script=None):
+        raise_on_invalid_sig(der_sig)
+        raise_on_invalid_public_key(public_key)
+        # FIXME: should be require the sig to be for the given public key?
+        super().__init__(script)
+        self.der_sig = der_sig
+        self.public_key = public_key
+
+    def __default_script(self):
+        return push_item(self.der_sig) + push_item(self.public_key.to_bytes())
+
+    @classmethod
+    def from_template(cls, script, der_sig, pubkey_bytes):
+        from .keys import PublicKey
+        return cls(der_sig, PublicKey.from_bytes(pubkey_bytes), script)
+
+
+class P2PK_ScriptSig(Script):
+
+    def __init__(self, der_sig, script=None):
+        raise_on_invalid_sig(der_sig)
+        super().__init__(script)
+        self.der_sig = der_sig
+
+    def __default_script(self):
+        return push_item(self.der_sig)
+
+    @classmethod
+    def from_template(cls, script, der_sig):
+        return cls(der_sig, script)
+
+
+
 Script.TEMPLATES_PK = (
-    (bytes((OP_PUSHDATA1, OP_CHECKSIG)),
-     P2PK_Script.from_template),
     (bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)),
      P2PKH_Script.from_template),
     (bytes((OP_HASH160, OP_PUSHDATA1, OP_EQUAL)),
      P2SH_Script.from_template),
+    (bytes((OP_PUSHDATA1, OP_CHECKSIG)),
+     P2PK_Script.from_template),
     (re.compile(b_OP_RETURN),
      OP_RETURN_Script.from_template),
+)
+
+
+Script.TEMPLATES_SIG = (
+    (bytes((OP_PUSHDATA1, OP_PUSHDATA1)),
+     P2PKH_ScriptSig.from_template),
+    (bytes((OP_PUSHDATA1,)),
+     P2PK_ScriptSig.from_template),
 )
