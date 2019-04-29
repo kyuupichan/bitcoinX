@@ -356,9 +356,22 @@ class TestScript:
         assert not isinstance(result, P2PKH_Script)
         assert result == raw + bytes([OP_CHECKSIG])
 
-    @pytest.mark.parametrize("other", (b'abcd', bytearray(b'abcd')))
+    @pytest.mark.parametrize("other", (
+        Script(b'abcd'),
+        b'abcd',
+        bytearray(b'abcd'),
+        memoryview(b'abcd'),
+        memoryview(bytearray(b'abcd')),
+    ))
     def test_eq(self, other):
         assert Script(b'abcd') == other
+
+    @pytest.mark.parametrize("other", (
+        "abcd",
+        2,
+    ))
+    def test_not_eq(self, other):
+        assert Script(b'abcd') != other
 
     def test_ops_does_bytes_conversion(self):
         list(P2PKH_script.ops())
