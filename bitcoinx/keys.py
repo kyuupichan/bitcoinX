@@ -58,7 +58,7 @@ EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED
 SIGNED_MESSAGE_PREFIX = pack_varbytes('Bitcoin Signed Message:\n'.encode())
 
 
-class KeyException(Exception):
+class KeyException(ValueError):
     pass
 
 
