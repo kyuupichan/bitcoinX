@@ -67,7 +67,8 @@ def test_repr():
 
 def read_signature_hashes(filename):
     with open(os.path.join(data_dir, filename)) as f:
-        return [bytes.fromhex(line) for line in f]
+        contents = f.read().strip()
+    return [bytes.fromhex(line) for line in contents.splitlines()]
 
 
 tx_testcases = ['503fd37f.txn']
