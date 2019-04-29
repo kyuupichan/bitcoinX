@@ -28,9 +28,9 @@
 
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
-    'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'OP_RETURN_Script',
-    'P2PK_ScriptSig', 'P2PKH_ScriptSig',
-    'ScriptError', 'TruncatedScriptError',
+    'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'P2MultiSig_Script',
+    'P2PK_ScriptSig', 'P2PKH_ScriptSig', 'P2MultiSig_ScriptSig',
+    'OP_RETURN_Script', 'ScriptError', 'TruncatedScriptError',
 )
 
 
@@ -503,7 +503,7 @@ class Script:
 
             try:
                 return constructor(bytes(self), *items)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         return self
@@ -574,6 +574,38 @@ class P2PK_Script(Script):
         return cls(PublicKey.from_bytes(pubkey_bytes), script)
 
 
+class P2MultiSig_Script(Script):
+
+    def __init__(self, public_keys, threshold, script=None):
+        for public_key in public_keys:
+            raise_on_invalid_public_key(public_key)
+        n = len(public_keys)
+        if not 1 <= threshold <= n:
+            raise ValueError(f'threshold {threshold} is invalid with {n} public keys')
+        super().__init__(script)
+        self.public_keys = tuple(public_keys)
+        self.threshold = threshold
+
+    def _default_script(self):
+        parts = [push_int(self.threshold)]
+        parts.extend(push_item(public_key.to_bytes()) for public_key in self.public_keys)
+        parts.append(push_int(len(self.public_keys)))
+        parts.append(b_OP_CHECKMULTISIG)
+        return b''.join(parts)
+
+    @classmethod
+    def from_template(cls, script, *items):
+        from .keys import PublicKey
+
+        threshold, *public_keys, count = items
+        public_keys = [PublicKey.from_bytes(public_key) for public_key in public_keys]
+        n = len(public_keys)
+        count = item_to_int(count)
+        if count != n:
+            raise ValueError(f'received {n} public keys but {count} as their count')
+        return cls(public_keys, item_to_int(threshold), script)
+
+
 class OP_RETURN_Script(Script):
     '''This class indicates the script is an OP_RETURN script.'''
 
@@ -592,7 +624,7 @@ class P2PKH_ScriptSig(Script):
         self.der_sig = der_sig
         self.public_key = public_key
 
-    def __default_script(self):
+    def _default_script(self):
         return push_item(self.der_sig) + push_item(self.public_key.to_bytes())
 
     @classmethod
@@ -608,13 +640,34 @@ class P2PK_ScriptSig(Script):
         super().__init__(script)
         self.der_sig = der_sig
 
-    def __default_script(self):
+    def _default_script(self):
         return push_item(self.der_sig)
 
     @classmethod
     def from_template(cls, script, der_sig):
         return cls(der_sig, script)
 
+
+class P2MultiSig_ScriptSig(Script):
+
+    def __init__(self, der_sigs, script=None):
+        if not der_sigs:
+            raise ValueError('no signatures provided')
+        for der_sig in der_sigs:
+            raise_on_invalid_sig(der_sig)
+        super().__init__(script)
+        self.der_sigs = tuple(der_sigs)
+
+    def _default_script(self):
+        parts = [b_OP_0]
+        parts.extend(push_item(der_sig) for der_sig in self.der_sigs)
+        return b''.join(parts)
+
+    @classmethod
+    def from_template(cls, script, *items):
+        if not items or items[0] != b_OP_0:
+            raise ValueError('scriptsig must begin with OP_0')
+        return cls(items[1:], script)
 
 
 Script.TEMPLATES_PK = (
@@ -626,6 +679,8 @@ Script.TEMPLATES_PK = (
      P2PK_Script.from_template),
     (re.compile(b_OP_RETURN),
      OP_RETURN_Script.from_template),
+    (re.compile(b_OP_PUSHDATA1 + b'{3,}' + b_OP_CHECKMULTISIG + b'$'),
+     P2MultiSig_Script.from_template),
 )
 
 
@@ -634,4 +689,6 @@ Script.TEMPLATES_SIG = (
      P2PKH_ScriptSig.from_template),
     (bytes((OP_PUSHDATA1,)),
      P2PK_ScriptSig.from_template),
+    (re.compile(b_OP_PUSHDATA1 + b'{2,}'),
+     P2MultiSig_Script.from_template),
 )
