@@ -215,7 +215,7 @@ class PrivateKey:
 
     def __eq__(self, other):
         '''Return True if this PrivateKey is equal to another.'''
-        return self._secret == other._secret
+        return isinstance(other, PrivateKey) and self._secret == other._secret
 
     def __hash__(self):
         '''Hashable objects which compare equal must have the same hash value.'''
@@ -450,7 +450,8 @@ class PublicKey:
 
     def __eq__(self, other):
         '''Return True if this PublicKey is equal to another.'''
-        return self.to_bytes(compressed=True) == other.to_bytes(compressed=True)
+        return (isinstance(other, PublicKey) and
+                self.to_bytes(compressed=True) == other.to_bytes(compressed=True))
 
     def __hash__(self):
         '''Hashable objects which compare equal must have the same hash value.'''

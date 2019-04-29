@@ -129,6 +129,9 @@ class TestPrivateKey:
         assert p1 == p2
         p2 = PrivateKey(os.urandom(32))
         assert p1 != p2
+        # Non-PrivateKeys
+        assert p1 != 0
+        assert p1 != 'foo'
 
     def test_hashable(self):
         secret = os.urandom(32)
@@ -591,6 +594,9 @@ class TestPublicKey:
         assert pub1 is not pub2
         assert pub1 == pub2
         assert PrivateKey.from_random().public_key != pub1
+        # Other types
+        assert pub1 != 0
+        assert pub1 != 'foo'
 
     def test_hashable(self):
         secret = os.urandom(32)
