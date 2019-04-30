@@ -36,10 +36,9 @@ from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list,
     read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list,
 )
-from .script import (
-    Script, SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ANYONE_CAN_PAY, SIGHASH_FORKID,
-    SIGHASH_BASE_MASK
-)
+from .script import Script
+from .signature import SigHash
+
 
 ZERO = bytes(32)
 MINUS_1 = 4294967295
@@ -97,24 +96,27 @@ class Tx:
         preimage = b''.join(txout.to_bytes() for txout in self.outputs)
         return double_sha256(preimage)
 
-    def signature_hash(self, input_index, value, script, *, sighash=SIGHASH_ALL | SIGHASH_FORKID):
+    def signature_hash(self, input_index, value, script, *, sighash=None):
         if not 0 <= input_index < len(self.inputs):
             raise IndexError(f'invalid input index: {input_index}')
         if value < 0:
             raise ValueError(f'value cannot be negative: {value}')
+        if sighash is None:
+            sighash = SigHash(SigHash.ALL | SigHash.FORKID)
+        if not isinstance(sighash, SigHash):
+            raise TypeError('sighash must be a SigHash instance')
 
         txin = self.inputs[input_index]
         hash_prevouts = hash_sequence = hash_outputs = ZERO
 
-        sighash_base = sighash & SIGHASH_BASE_MASK
-        sighash_not_single_none = sighash_base not in (SIGHASH_SINGLE, SIGHASH_NONE)
-        if not (sighash & SIGHASH_ANYONE_CAN_PAY):
+        sighash_not_single_none = sighash.base not in (SigHash.SINGLE, SigHash.NONE)
+        if not sighash.anyone_can_pay:
             hash_prevouts = self._hash_prevouts()
             if sighash_not_single_none:
                 hash_sequence = self._hash_sequence()
         if sighash_not_single_none:
             hash_outputs = self._hash_outputs()
-        elif (sighash_base == SIGHASH_SINGLE and input_index < len(self.outputs)):
+        elif (sighash.base == SigHash.SINGLE and input_index < len(self.outputs)):
             hash_outputs = double_sha256(self.outputs[input_index].to_bytes())
 
         preimage = b''.join((

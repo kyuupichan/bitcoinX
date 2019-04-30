@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from bitcoinx import Script, PublicKey
+from bitcoinx import Script, PublicKey, SigHash
 from bitcoinx.tx import *
 
 
@@ -89,8 +89,8 @@ def test_signature_hash(filename):
     n = 0
     for input_index, (value, pk_script, txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
         for sighash in range(256):
-            print(n)
-            signature_hash = tx.signature_hash(input_index, value, pk_script, sighash=sighash)
+            signature_hash = tx.signature_hash(input_index, value, pk_script,
+                                               sighash=SigHash(sighash))
             assert signature_hash == correct_hashes[n]
             n += 1
 
@@ -115,5 +115,6 @@ def test_signatures(filename):
     for input_index, (value, pk_script, txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
         signature, pubkey = txin.script_sig.ops()
         pubkey = PublicKey.from_bytes(pubkey)
-        signature_hash = tx.signature_hash(input_index, value, pk_script, sighash=signature[-1])
+        signature_hash = tx.signature_hash(input_index, value, pk_script,
+                                           sighash=SigHash(signature[-1]))
         assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
