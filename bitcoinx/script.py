@@ -653,8 +653,8 @@ class P2MultiSig_ScriptSig(Script):
 
     @classmethod
     def from_template(cls, script, *items):
-        if not items or items[0] != b_OP_0:
-            raise ValueError('scriptsig must begin with OP_0')
+        if not items or items[0] != b'':
+            raise ValueError('scriptsig must have at least 2 items with the first empty')
         return cls(items[1:], script)
 
 
@@ -678,5 +678,5 @@ Script.TEMPLATES_SIG = (
     (bytes((OP_PUSHDATA1,)),
      P2PK_ScriptSig.from_template),
     (re.compile(b_OP_PUSHDATA1 + b'{2,}'),
-     P2MultiSig_Script.from_template),
+     P2MultiSig_ScriptSig.from_template),
 )

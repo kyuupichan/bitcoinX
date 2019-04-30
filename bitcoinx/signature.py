@@ -194,6 +194,15 @@ class ScriptSignature:
         return hash(self._raw)
 
     @classmethod
+    def from_hex(cls, hex_str):
+        '''Instantiate from a hexadecimal string.'''
+        return cls(bytes.fromhex(hex_str))
+
+    def to_hex(self):
+        '''Return the script signature as a hexadecimal string.'''
+        return self._raw.hex()
+
+    @classmethod
     def from_der_sig(cls, der_sig, sighash):
         return cls(der_sig + pack_byte(sighash))
 

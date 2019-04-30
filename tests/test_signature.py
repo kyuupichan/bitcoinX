@@ -69,9 +69,14 @@ class TestScriptSignature:
         assert ScriptSignature(b'\xff') == ScriptSignature(b'\xff')
         assert ScriptSignature(b'\xff') == bytearray(b'\xff')
         assert ScriptSignature(b'\xff') == memoryview(b'\xff')
+        assert ScriptSignature(b'\xff') != 2.5
 
     def test_hashable(self):
         {ScriptSignature(b'\xff')}
+
+    def test_hex(self):
+        s = ScriptSignature.from_hex('ff')
+        assert s.to_hex() == 'ff'
 
     def test_from_der_sig(self):
         der_sig = serialization_testcases[0][0]
