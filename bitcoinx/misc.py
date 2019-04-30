@@ -27,10 +27,14 @@
 
 __all__ = (
     'be_bytes_to_int', 'le_bytes_to_int',
-    'int_to_be_bytes', 'int_to_le_bytes',
+    'int_to_be_bytes', 'int_to_le_bytes', 'CONTEXT'
 )
 
 from functools import partial
+
+from electrumsv_secp256k1 import create_context
+
+CONTEXT = create_context()
 
 
 # Converts big-endian bytes to an integer

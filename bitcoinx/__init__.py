@@ -8,6 +8,7 @@ from .keys import *
 from .misc import *
 from .packing import *
 from .script import *
+from .signature import *
 from .tx import *
 from .work import *
 
@@ -25,6 +26,7 @@ __all__ = sum((
     misc.__all__,
     packing.__all__,
     script.__all__,
+    signature.__all__,
     tx.__all__,
     work.__all__,
 ), ())

@@ -25,48 +25,39 @@
 
 '''Public and Private keys of various kinds.'''
 
-__all__ = (
-    'PrivateKey', 'PublicKey', 'CURVE_ORDER',
-    'KeyException', 'InvalidSignatureError', 'DecryptionError',
-    'der_signature_to_compact', 'compact_signature_to_der',
-)
+__all__ = ('PrivateKey', 'PublicKey', 'CURVE_ORDER', 'DecryptionError', )
+
 
 from base64 import b64decode, b64encode
 from binascii import Error as binascii_Error
 from os import urandom
 
-from electrumsv_secp256k1 import ffi, lib, create_context
+from electrumsv_secp256k1 import ffi, lib
 
 from .address import P2PKH_Address
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
 from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
-from .misc import be_bytes_to_int, int_to_be_bytes
+from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT
 from .packing import pack_byte, pack_varbytes
+from .signature import (
+    sign_der, sign_recoverable, verify_der_signature, verify_recoverable_signature,
+    public_key_from_recoverable_signature, to_message_signature, to_recoverable_signature,
+    InvalidSignatureError,
+)
 from .script import P2PKH_Script, P2PK_Script
 from .util import cachedproperty
 
 
 KEY_SIZE = 32
 CURVE_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
-CONTEXT = create_context()
-CDATA_SIG_LENGTH = 64
-MAX_SIG_LENGTH = 72
 EC_COMPRESSED = lib.SECP256K1_EC_COMPRESSED
 EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED
 SIGNED_MESSAGE_PREFIX = pack_varbytes('Bitcoin Signed Message:\n'.encode())
 
 
-class KeyException(ValueError):
-    pass
-
-
-class InvalidSignatureError(KeyException):
-    pass
-
-
-class DecryptionError(KeyException):
+class DecryptionError(ValueError):
     pass
 
 
@@ -85,95 +76,10 @@ def _message_hash(message, hasher):
     return msg_hash
 
 
-def _serialize_der(signature):
-    '''Return a DER-serialized signature; bytes of length at most 72.'''
-    size = ffi.new('size_t *', MAX_SIG_LENGTH)
-    data = ffi.new(f'unsigned char [{MAX_SIG_LENGTH}]')
-    result = lib.secp256k1_ecdsa_signature_serialize_der(CONTEXT, data, size, signature)
-    # Failure should never happen - MAX_SIG_LENGTH bytes is always enough
-    assert result
-    return bytes(ffi.buffer(data, size[0]))
-
-
-def _serialize_recoverable(recover_sig, context):
-    '''Return a 65-byte compact serialized signature.'''
-    output = ffi.new(f'unsigned char [{CDATA_SIG_LENGTH}]')
-    recid = ffi.new('int *')
-
-    lib.secp256k1_ecdsa_recoverable_signature_serialize_compact(
-        context, output, recid, recover_sig)
-
-    # recid is 0, 1, 2 or 3.
-    return bytes(ffi.buffer(output, CDATA_SIG_LENGTH)) + bytes([recid[0]])
-
-
-def _deserialize_recoverable_sig(recover_sig_bytes):
-    if len(recover_sig_bytes) != 65:
-        raise InvalidSignatureError('invalid recoverable signature')
-    recoverable_sig = ffi.new('secp256k1_ecdsa_recoverable_signature *')
-    recid = recover_sig_bytes[-1]
-    if not 0 <= recid <= 3:
-        raise InvalidSignatureError('invalid recoverable signature')
-    if not lib.secp256k1_ecdsa_recoverable_signature_parse_compact(
-            CONTEXT, recoverable_sig, recover_sig_bytes, recid):
-        raise InvalidSignatureError('invalid recoverable signature')
-    return recoverable_sig
-
-
-def _message_sig_to_recoverable_sig(message_sig):
-    '''Return a recoverable signature from a message signature.'''
-    if isinstance(message_sig, str):
-        try:
-            message_sig = b64decode(message_sig, validate=True)
-        except binascii_Error:
-            raise InvalidSignatureError('invalid base64 encoding of message signature')
-    if not isinstance(message_sig, bytes) or len(message_sig) != 65:
-        raise InvalidSignatureError('message signature must be 65 bytes')
-    if not 27 <= message_sig[0] < 35:
-        raise InvalidSignatureError('invalid message signature format')
-    return message_sig[1:] + pack_byte((message_sig[0] - 27) & 3)
-
-
-def _recoverable_sig_to_message_sig(recoverable_sig, compressed):
-    leading_byte = 27 + (4 if compressed else 0) + recoverable_sig[-1]
-    return pack_byte(leading_byte) + recoverable_sig[:64]
-
-
-def _recoverable_sig_to_cdata_sig(recoverable_sig):
-    cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
-    rec_sig = _deserialize_recoverable_sig(recoverable_sig)
-    # Always succeeds
-    lib.secp256k1_ecdsa_recoverable_signature_convert(CONTEXT, cdata_sig, rec_sig)
-    return cdata_sig
-
-
-def _der_sig_to_cdata_sig(der_sig):
-    cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
-    if not lib.secp256k1_ecdsa_signature_parse_der(CONTEXT, cdata_sig, der_sig, len(der_sig)):
-        raise InvalidSignatureError('invalid DER-encoded signature')
-    return cdata_sig
-
-
 def _normalize_message(message):
     if isinstance(message, str):
         message = message.encode()
     return SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
-
-
-def der_signature_to_compact(der_sig):
-    '''Returns 64 bytes representing r and s as concatenated 32-byte big-endian numbers.'''
-    cdata_sig = _der_sig_to_cdata_sig(der_sig)
-    compact_sig = ffi.new('unsigned char [64]')
-    lib.secp256k1_ecdsa_signature_serialize_compact(CONTEXT, compact_sig, cdata_sig)
-    return bytes(ffi.buffer(compact_sig))
-
-
-def compact_signature_to_der(compact_sig):
-    if not (isinstance(compact_sig, bytes) and len(compact_sig) == 64):
-        raise InvalidSignatureError('compact signature must be 64 bytes')
-    cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
-    lib.secp256k1_ecdsa_signature_parse_compact(CONTEXT, cdata_sig, compact_sig)
-    return _serialize_der(cdata_sig)
 
 
 class PrivateKey:
@@ -334,24 +240,17 @@ class PrivateKey:
         If the message is already hashed, set hasher to None.
         '''
         msg_hash = _message_hash(message, hasher)
-        signature = ffi.new('secp256k1_ecdsa_signature *')
-        if not lib.secp256k1_ecdsa_sign(CONTEXT, signature, msg_hash, self._secret,
-                                        ffi.NULL, ffi.NULL):
-            raise ValueError('invalid private key')
-        return _serialize_der(signature)
+        return sign_der(msg_hash, self._secret)
 
     def sign_recoverable(self, message, hasher=sha256):
-        '''Sign a message (more correctly its hash) and return a byte of metadata so that the
-        public key can be immediately recovered from the signature.
+        '''Sign a message (more correctly its hash) and return a 65-byte recoverable signature.
+        This is a 64-byte compact signature with a recovery ID byte appended; and from
+        which the public key can be immediately recovered.
 
         If the message is already hashed, set hasher to None.
         '''
         msg_hash = _message_hash(message, hasher)
-        signature = ffi.new('secp256k1_ecdsa_recoverable_signature *')
-        if not lib.secp256k1_ecdsa_sign_recoverable(CONTEXT, signature, msg_hash, self._secret,
-                                                    ffi.NULL, ffi.NULL):
-            raise ValueError('invalid private key')
-        return _serialize_recoverable(signature, CONTEXT)
+        return sign_recoverable(msg_hash, self._secret)
 
     def sign_message(self, message, hasher=double_sha256):
         '''Sign a message compatibly with bitcoind (and ElectrumSV).
@@ -369,7 +268,7 @@ class PrivateKey:
         recoverable_sig = self.sign_recoverable(message, hasher)
         # Compressed appears to be legacy and the signature is valid whether True or
         # False; in any case only the first byte (recid) of the signature changes.
-        return _recoverable_sig_to_message_sig(recoverable_sig, compressed=self._compressed)
+        return to_message_signature(recoverable_sig, compressed=self._compressed)
 
     def sign_message_to_base64(self, message, hasher=double_sha256):
         '''As for sign_message, but return the result as a base64 ASCII string.'''
@@ -495,10 +394,7 @@ class PublicKey:
         '''Constuct a PublicKey from a recoverable signature and message (hash) that was
         signed.'''
         msg_hash = _message_hash(message, hasher)
-        recoverable_sig = _deserialize_recoverable_sig(recoverable_sig)
-        public_key = ffi.new('secp256k1_pubkey *')
-        if not lib.secp256k1_ecdsa_recover(CONTEXT, public_key, recoverable_sig, msg_hash):
-            raise InvalidSignatureError('invalid recoverable signature')
+        public_key = public_key_from_recoverable_signature(recoverable_sig, msg_hash)
         return cls(public_key, True)
 
     @classmethod
@@ -514,7 +410,7 @@ class PublicKey:
         if hasher is None:
             raise ValueError('hasher cannot be None')
         message = _normalize_message(message)
-        recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
+        recoverable_sig = to_recoverable_signature(message_sig)
         return cls.from_recoverable_signature(recoverable_sig, message, hasher)
 
     def to_hex(self, *, compressed=None):
@@ -591,7 +487,7 @@ class PublicKey:
         if hasher is None:
             raise ValueError('hasher cannot be None')
         message = _normalize_message(message)
-        recoverable_sig = _message_sig_to_recoverable_sig(message_sig)
+        recoverable_sig = to_recoverable_signature(message_sig)
         return self.verify_recoverable_signature(recoverable_sig, message, hasher)
 
     @classmethod
@@ -618,15 +514,13 @@ class PublicKey:
 
     def verify_der_signature(self, der_sig, message, hasher=sha256):
         '''Verify a der-encoded signature.  Return True if good otherwise False.'''
-        cdata_sig = _der_sig_to_cdata_sig(der_sig)
         msg_hash = _message_hash(message, hasher)
-        return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self._public_key))
+        return verify_der_signature(der_sig, msg_hash, self._public_key)
 
     def verify_recoverable_signature(self, recoverable_sig, message, hasher=sha256):
         '''Verify a recoverable signature.  Return True if good otherwise False.'''
-        cdata_sig = _recoverable_sig_to_cdata_sig(recoverable_sig)
         msg_hash = _message_hash(message, hasher)
-        return bool(lib.secp256k1_ecdsa_verify(CONTEXT, cdata_sig, msg_hash, self._public_key))
+        return verify_recoverable_signature(recoverable_sig, msg_hash, self._public_key)
 
     def encrypt_message(self, message, magic=b'BIE1'):
         '''Encrypt a message using ECIES.  The message can be bytes or a string.
