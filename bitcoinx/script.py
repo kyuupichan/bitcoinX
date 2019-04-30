@@ -278,7 +278,7 @@ def _to_bytes(item):
 
 
 def raise_on_invalid_sig(der_sig):
-    from .keys import der_signature_to_compact
+    from .signature import der_signature_to_compact
     if der_sig != b'\xff':
         der_signature_to_compact(der_sig)
 
