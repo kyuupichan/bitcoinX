@@ -319,8 +319,8 @@ class Script:
 
     def __eq__(self, other):
         '''A script equals anything buffer-like with the same bytes representation.'''
-        return (isinstance(other, (Script, bytes, bytearray, memoryview))
-                and bytes(self) == bytes(other))
+        return (isinstance(other, (bytes, bytearray, memoryview))
+                or hasattr(other, '__bytes__')) and bytes(self) == bytes(other)
 
     def _default_script(self):
         raise NotImplementedError
