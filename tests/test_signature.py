@@ -1,6 +1,6 @@
 import pytest
 
-from bitcoinx import pack_byte, be_bytes_to_int
+from bitcoinx import pack_byte, be_bytes_to_int, Script
 from bitcoinx.signature import *
 
 
@@ -62,6 +62,16 @@ class TestScriptSignature:
     def test_constructor_bad(self):
         with pytest.raises(InvalidSignatureError):
             ScriptSignature(b'\x30')
+
+    def test_eq(self):
+        assert ScriptSignature(b'\xff') == b'\xff'
+        assert ScriptSignature(b'\xff') == Script(b'\xff')
+        assert ScriptSignature(b'\xff') == ScriptSignature(b'\xff')
+        assert ScriptSignature(b'\xff') == bytearray(b'\xff')
+        assert ScriptSignature(b'\xff') == memoryview(b'\xff')
+
+    def test_hashable(self):
+        {ScriptSignature(b'\xff')}
 
     def test_from_der_sig(self):
         der_sig = serialization_testcases[0][0]

@@ -185,6 +185,14 @@ class ScriptSignature:
             der_signature_to_compact(raw[:-1])
         self._raw = raw
 
+    def __eq__(self, other):
+        '''A signature equals anything buffer-like with the same bytes representation.'''
+        return (isinstance(other, (bytes, bytearray, memoryview))
+                or hasattr(other, '__bytes__')) and self._raw == bytes(other)
+
+    def __hash__(self):
+        return hash(self._raw)
+
     @classmethod
     def from_der_sig(cls, der_sig, sighash):
         return cls(der_sig + pack_byte(sighash))
