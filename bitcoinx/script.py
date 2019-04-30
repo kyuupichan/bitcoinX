@@ -29,7 +29,7 @@
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
     'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'P2MultiSig_Script',
-    'P2PK_ScriptSig', 'P2PKH_ScriptSig', 'P2MultiSig_ScriptSig',
+    'P2PK_ScriptSig', 'P2PKH_ScriptSig', 'P2MultiSig_ScriptSig', 'P2SHMultiSig_ScriptSig',
     'OP_RETURN_Script', 'ScriptError', 'TruncatedScriptError',
 )
 
@@ -490,7 +490,7 @@ class Script:
 
             try:
                 return constructor(bytes(self), *items)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
                 pass
 
         return self
@@ -570,7 +570,7 @@ class P2MultiSig_Script(Script):
         if not 1 <= threshold <= n:
             raise ValueError(f'threshold {threshold} is invalid with {n} public keys')
         super().__init__(script)
-        self.public_keys = tuple(public_keys)
+        self.public_keys = public_keys.copy()
         self.threshold = threshold
 
     def _default_script(self):
@@ -658,6 +658,31 @@ class P2MultiSig_ScriptSig(Script):
         return cls(items[1:], script)
 
 
+class P2SHMultiSig_ScriptSig(Script):
+
+    def __init__(self, multisig_script_sig, nested_script, script=None):
+        if not isinstance(multisig_script_sig, P2MultiSig_ScriptSig):
+            raise TypeError('need a P2MultiSig_ScriptSig')
+        if not isinstance(nested_script, P2MultiSig_Script):
+            raise TypeError('need a P2MultiSig_Script')
+        if len(multisig_script_sig.script_sigs) > len(nested_script.public_keys):
+            raise ValueError('more signatures than public keys')
+        self.multisig_script_sig = multisig_script_sig
+        self.nested_script = nested_script
+        super().__init__(script)
+
+    def _default_script(self):
+        return bytes(self.multisig_script) + push_item(self.nested_script)
+
+    @classmethod
+    def from_template(cls, script, *items):
+        if len(items) < 3:
+            raise ValueError('requires at least 3 items')
+        nested_script = Script(items[-1]).classify_script_pk()
+        multisig_script_sig = P2MultiSig_ScriptSig(items[1:-1])
+        return cls(multisig_script_sig, nested_script)
+
+
 Script.TEMPLATES_PK = (
     (bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)),
      P2PKH_Script.from_template),
@@ -677,6 +702,8 @@ Script.TEMPLATES_SIG = (
      P2PKH_ScriptSig.from_template),
     (bytes((OP_PUSHDATA1,)),
      P2PK_ScriptSig.from_template),
+    (re.compile(b_OP_PUSHDATA1 + b'{3,}'),
+     P2SHMultiSig_ScriptSig.from_template),
     (re.compile(b_OP_PUSHDATA1 + b'{2,}'),
      P2MultiSig_ScriptSig.from_template),
 )
