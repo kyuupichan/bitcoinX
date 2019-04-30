@@ -264,6 +264,12 @@ P2PKH_script = PrivateKey.from_random().public_key.P2PKH_script()
 assert P2PKH_script._script is None
 assert isinstance(P2PKH_script, P2PKH_Script)
 
+multisig_scriptsig = (
+    '004830450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a4'
+    '5a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41483045022100928b6b9b5e0d063f'
+    'ff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976d102203f4aeac2959cf4f91742720c0c77b66c4883'
+    '34d56e45486aecf46599af1f204941'
+)
 
 class TestScript:
 
@@ -666,7 +672,7 @@ class TestScript:
     @pytest.mark.parametrize("sig_hex", (
         'fe',
         '302402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
-        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09',
+        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0941',
     ))
     def test_classify_bad_P2PK_scriptsig(self, sig_hex):
         script = Script(push_item(bytes.fromhex(sig_hex)))
@@ -688,6 +694,21 @@ class TestScript:
         sc = script.classify_script_sig()
         assert isinstance(sc, P2PKH_ScriptSig)
 
+    @pytest.mark.parametrize("sig_hex, sigs", (
+        (multisig_scriptsig,
+         [ScriptSignature.from_hex(hex_str) for hex_str in (
+             '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
+             '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
+             '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
+             'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
+         )],
+        ),
+    ))
+    def test_classify_P2Multisig_scriptsig(self, sig_hex, sigs):
+        script = Script(bytes.fromhex(sig_hex))
+        sc = script.classify_script_sig()
+        assert isinstance(sc, P2MultiSig_ScriptSig)
+        assert sc.script_sigs == sigs
 
 
 class TestP2PK_Script:
@@ -873,37 +894,32 @@ class TestP2PKH_ScriptSig:
 
 class TestP2MultiSig_ScriptSig:
 
-    def test_constructor(self):
-        scriptsig = P2MultiSig_ScriptSig(MS_SIGS)
-        assert bytes(scriptsig) == pack_byte(OP_0) + b''.join(push_item(sig) for sig in MS_SIGS)
-
     def test_constructor_copies(self):
         script_sigs = [ScriptSignature(script_sig) for script_sig in MS_SIGS]
         script = P2MultiSig_ScriptSig(script_sigs)
         assert script.script_sigs is not script_sigs
+        assert script.script_sigs == script_sigs
 
     def test_constructor_bad(self):
+        script_sigs = [ScriptSignature(script_sig) for script_sig in MS_SIGS]
         with pytest.raises(TypeError):
-            P2MultiSig_ScriptSig(MS_PUBKEYS + [2])
+            P2MultiSig_ScriptSig(script_sigs[:-1] + [2])
         with pytest.raises(ValueError):
             P2MultiSig_ScriptSig([])
-        with pytest.raises(ValueError):
-            P2MultiSig_ScriptSig([sig[:-1] for sig in MS_SIGS])
 
-    def test_from_template(self):
-        good_script = P2MultiSig_ScriptSig(MS_SIGS)
-        script = P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_0), *MS_SIGS)
-        for ms_sig, script_sig in zip(MS_SIGS, script.script_sigs):
-            assert ms_sig == bytes(script_sig)
+    def test_default_script(self):
+        s = Script(bytes.fromhex(multisig_scriptsig)).classify_script_sig()
+        assert s._default_script().hex() == multisig_scriptsig
+
+    # From_template tested in classify_script_sig() above
 
     def test_from_template_bad(self):
-        public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
         with pytest.raises(ValueError):
            P2MultiSig_ScriptSig.from_template(None)
         with pytest.raises(ValueError):
-           P2MultiSig_ScriptSig.from_template(pack_byte(OP_0))
+            P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_0))
         with pytest.raises(ValueError):
-           P2MultiSig_ScriptSig.from_template(pack_byte(OP_1), *MS_SIGS)
+            P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_1), *MS_SIGS)
 
 
 @pytest.mark.parametrize("item,answer", (
