@@ -26,7 +26,8 @@
 '''Signatures of various kinds.'''
 
 __all__ = (
-    'der_signature_to_compact', 'compact_signature_to_der', 'InvalidSignatureError'
+    'ScriptSignature', 'SigHash',
+    'der_signature_to_compact', 'compact_signature_to_der', 'InvalidSignatureError',
 )
 
 from base64 import b64decode
@@ -34,12 +35,13 @@ from binascii import Error as binascii_Error
 
 from electrumsv_secp256k1 import ffi, lib
 
-from .misc import CONTEXT
+from .misc import CONTEXT, be_bytes_to_int
 from .packing import pack_byte
 
 
 CDATA_SIG_LENGTH = 64
 MAX_SIG_LENGTH = 72
+MISSING_SIG = b'\xff'
 
 
 class InvalidSignatureError(ValueError):
@@ -160,3 +162,75 @@ def to_recoverable_signature(message_sig):
 def to_message_signature(recoverable_sig, compressed):
     leading_byte = 27 + (4 if compressed else 0) + recoverable_sig[-1]
     return pack_byte(leading_byte) + recoverable_sig[:64]
+
+
+class SigHash(int):
+
+    @property
+    def base(self):
+        return SigHash(self & 0x1f)
+
+    @property
+    def anyone_can_pay(self):
+        '''Returns True if ANYONE_CAN_PAY is set.'''
+        return bool(self & SigHash.ANYONE_CAN_PAY)
+
+
+class ScriptSignature:
+
+    def __init__(self, raw):
+        '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG.'''
+        if raw != MISSING_SIG:
+            # Validate the DER encoding
+            der_signature_to_compact(raw[:-1])
+        self._raw = raw
+
+    @classmethod
+    def from_der_sig(cls, der_sig, sighash):
+        return cls(der_sig + pack_byte(sighash))
+
+    @classmethod
+    def missing_sig(cls):
+        return cls(MISSING_SIG)
+
+    def __bytes__(self):
+        return self._raw
+
+    def to_bytes(self):
+        return self._raw
+
+    @property
+    def is_missing(self):
+        return self._raw == MISSING_SIG
+
+    def to_compact(self):
+        '''The 32-byte r and s values concatenated.'''
+        return der_signature_to_compact(self.der_signature)
+
+    def r_value(self):
+        '''The r value as an integer.'''
+        return be_bytes_to_int(self.to_compact()[:32])
+
+    def s_value(self):
+        '''The s value as an integer.'''
+        return be_bytes_to_int(self.to_compact()[32:])
+
+    @property
+    def der_signature(self):
+        if self._raw == MISSING_SIG:
+            raise InvalidSignatureError('signature is missing')
+        return self._raw[:-1]
+
+    @property
+    def sighash(self):
+        if self._raw == MISSING_SIG:
+            raise InvalidSignatureError('signature is missing')
+        return SigHash(self._raw[-1])
+
+
+# Sighash values
+SigHash.ALL = SigHash(0x01)
+SigHash.NONE = SigHash(0x02)
+SigHash.SINGLE = SigHash(0x03)
+SigHash.FORKID = SigHash(0x40)
+SigHash.ANYONE_CAN_PAY = SigHash(0x80)

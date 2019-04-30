@@ -52,14 +52,6 @@ class TruncatedScriptError(ScriptError):
     pass
 
 
-SIGHASH_ALL = 0x01
-SIGHASH_NONE = 0x02
-SIGHASH_SINGLE = 0x03
-SIGHASH_BASE_MASK = 0x1f
-SIGHASH_FORKID = 0x40
-SIGHASH_ANYONE_CAN_PAY = 0x080
-
-
 class Ops(IntEnum):
     OP_0 = 0x00
     OP_FALSE = OP_0
