@@ -271,6 +271,14 @@ multisig_scriptsig = (
     '34d56e45486aecf46599af1f204941'
 )
 
+p2sh_multisig_scriptsig = (
+    '004830450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a4'
+    '5a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41483045022100928b6b9b5e0d063f'
+    'ff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976d102203f4aeac2959cf4f91742720c0c77b66c4883'
+    '34d56e45486aecf46599af1f204941475221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b'
+    '8af5f9bfd5a89c2103fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef2052ae'
+)
+
 class TestScript:
 
     def test_construtor(self):
@@ -704,11 +712,32 @@ class TestScript:
          )],
         ),
     ))
-    def test_classify_P2Multisig_scriptsig(self, sig_hex, sigs):
+    def test_classify_P2MultiSig_ScriptSig(self, sig_hex, sigs):
         script = Script(bytes.fromhex(sig_hex))
         sc = script.classify_script_sig()
         assert isinstance(sc, P2MultiSig_ScriptSig)
         assert sc.script_sigs == sigs
+
+    @pytest.mark.parametrize("sig_hex,sigs,public_keys", (
+        (p2sh_multisig_scriptsig,
+         [ScriptSignature.from_hex(hex_str) for hex_str in (
+             '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
+             '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
+             '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
+             'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
+         )],
+         [PublicKey.from_hex(hex_str) for hex_str in (
+             '022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c',
+             '03fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef20',
+         )],
+        ),
+    ))
+    def test_classify_P2SHMultiSig_ScriptSig(self, sig_hex, sigs, public_keys):
+        script = Script(bytes.fromhex(sig_hex))
+        sc = script.classify_script_sig()
+        assert isinstance(sc, P2SHMultiSig_ScriptSig)
+        assert sc.multisig_script_sig.script_sigs == sigs
+        assert sc.nested_script.public_keys == public_keys
 
 
 class TestP2PK_Script:
@@ -803,7 +832,7 @@ class TestP2SH_Script:
         assert script == b'foobar'
 
 
-MS_PUBKEYS = tuple(PrivateKey.from_random().public_key for n in range(5))
+MS_PUBKEYS = [PrivateKey.from_random().public_key for n in range(5)]
 
 class TestP2MultiSig_Script:
 
