@@ -104,8 +104,10 @@ def test_signature_hash_bad():
         tx.signature_hash(2, 5, b'')
     with pytest.raises(ValueError):
         tx.signature_hash(0, -1, b'')
+    with pytest.raises(TypeError):
+        tx.signature_hash(0, 0, b'', sighash=1)
     tx.signature_hash(0, 0, b'')
-    tx.signature_hash(1, 0, b'')
+    tx.signature_hash(1, 0, b'', sighash=SigHash(1))
 
 
 @pytest.mark.parametrize("filename", tx_testcases)

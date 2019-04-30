@@ -75,7 +75,7 @@ class TestScriptSignature:
 
     def test_from_der_sig(self):
         der_sig = serialization_testcases[0][0]
-        s = ScriptSignature(der_sig + pack_byte(SigHash.ALL | SigHash.FORKID))
+        s = ScriptSignature.from_der_sig(der_sig, SigHash.ALL | SigHash.FORKID)
         assert s.der_signature == der_sig
         assert s.sighash == SigHash.ALL | SigHash.FORKID
 
