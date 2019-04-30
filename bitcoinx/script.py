@@ -42,6 +42,7 @@ from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32,
     unpack_le_uint16, unpack_le_uint32,
 )
+from .signature import ScriptSignature
 
 
 class ScriptError(Exception):
@@ -267,12 +268,6 @@ def _to_bytes(item):
     if isinstance(item, Script):
         return bytes(item)
     raise TypeError(f"cannot convert append {item} to a scriptlet")
-
-
-def raise_on_invalid_sig(der_sig):
-    from .signature import der_signature_to_compact
-    if der_sig != b'\xff':
-        der_signature_to_compact(der_sig)
 
 
 def raise_on_invalid_public_key(public_key):
@@ -608,51 +603,52 @@ class OP_RETURN_Script(Script):
 
 class P2PKH_ScriptSig(Script):
 
-    def __init__(self, der_sig, public_key, script=None):
-        raise_on_invalid_sig(der_sig)
+    def __init__(self, script_sig, public_key, script=None):
+        if not isinstance(script_sig, ScriptSignature):
+            script_sig = ScriptSignature(script_sig)
         raise_on_invalid_public_key(public_key)
         # FIXME: should be require the sig to be for the given public key?
         super().__init__(script)
-        self.der_sig = der_sig
+        self.script_sig = script_sig
         self.public_key = public_key
 
     def _default_script(self):
-        return push_item(self.der_sig) + push_item(self.public_key.to_bytes())
+        return push_item(self.script_sig.to_bytes()) + push_item(self.public_key.to_bytes())
 
     @classmethod
-    def from_template(cls, script, der_sig, pubkey_bytes):
+    def from_template(cls, script, script_sig, pubkey_bytes):
         from .keys import PublicKey
-        return cls(der_sig, PublicKey.from_bytes(pubkey_bytes), script)
+        return cls(script_sig, PublicKey.from_bytes(pubkey_bytes), script)
 
 
 class P2PK_ScriptSig(Script):
 
-    def __init__(self, der_sig, script=None):
-        raise_on_invalid_sig(der_sig)
+    def __init__(self, script_sig, script=None):
+        if not isinstance(script_sig, ScriptSignature):
+            script_sig = ScriptSignature(script_sig)
         super().__init__(script)
-        self.der_sig = der_sig
+        self.script_sig = script_sig
 
     def _default_script(self):
-        return push_item(self.der_sig)
+        return push_item(self.script_sig.to_bytes())
 
     @classmethod
-    def from_template(cls, script, der_sig):
-        return cls(der_sig, script)
+    def from_template(cls, script, script_sig):
+        return cls(script_sig, script)
 
 
 class P2MultiSig_ScriptSig(Script):
 
-    def __init__(self, der_sigs, script=None):
-        if not der_sigs:
+    def __init__(self, script_sigs, script=None):
+        if not script_sigs:
             raise ValueError('no signatures provided')
-        for der_sig in der_sigs:
-            raise_on_invalid_sig(der_sig)
+        self.script_sigs = [script_sig if isinstance(script_sig, ScriptSignature)
+                            else ScriptSignature(script_sig) for script_sig in script_sigs]
         super().__init__(script)
-        self.der_sigs = tuple(der_sigs)
 
     def _default_script(self):
         parts = [b_OP_0]
-        parts.extend(push_item(der_sig) for der_sig in self.der_sigs)
+        parts.extend(push_item(script_sig.to_bytes()) for script_sig in self.script_sigs)
         return b''.join(parts)
 
     @classmethod
