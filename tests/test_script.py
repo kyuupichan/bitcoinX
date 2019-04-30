@@ -6,8 +6,8 @@ import random
 from bitcoinx.script import *
 from bitcoinx import (
     pack_varint, PrivateKey, pack_byte, BitcoinTestnet, PublicKey,
-    P2PKH_Script, P2PKH_Address, P2SH_Address,
-    P2PKH_ScriptSig, P2PK_ScriptSig
+    P2PKH_Script, P2PKH_Address, P2SH_Address, P2PKH_ScriptSig, P2PK_ScriptSig,
+    ScriptSignature
 )
 
 
@@ -656,7 +656,7 @@ class TestScript:
     @pytest.mark.parametrize("sig_hex", (
         'ff',
         '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
-        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09',
+        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0941',
     ))
     def test_classify_P2PK_scriptsig(self, sig_hex):
         script = Script(push_item(bytes.fromhex(sig_hex)))
@@ -678,7 +678,7 @@ class TestScript:
          '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63'
          'c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee'),
         ('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
-         '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f1',
+         '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f141',
          '040bf47f1c24d1b5a597312422091a324a3d57d0123c9ba853ac9dc1eb81d954bc056'
          'a18a33d9e7cefd2bf10434ec3f1a39d3c3ede6f2bb3cf21730df38fa0a05d'),
     ))
@@ -831,8 +831,8 @@ class TestP2MultiSig_Script:
             script = P2MultiSig_Script.from_template(pack_byte(1), public_keys, pack_byte(3))
 
 MS_SIGS = tuple(bytes.fromhex(sig_hex) for sig_hex in (
-    '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c',
-    '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976d102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f2049'
+    '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
+    '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976d102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941'
 ))
 
 
@@ -849,7 +849,7 @@ class TestP2PK_ScriptSig:
 
 SIG_PUBKEY_PAIRS = [
     (bytes.fromhex('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
-                   '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f1'),
+                   '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f101'),
      PublicKey.from_hex('040bf47f1c24d1b5a597312422091a324a3d57d0123c9ba853ac9dc1eb81d954bc056'
                         'a18a33d9e7cefd2bf10434ec3f1a39d3c3ede6f2bb3cf21730df38fa0a05d'), ),
 ]
@@ -861,7 +861,8 @@ class TestP2PKH_ScriptSig:
     def test_constructor(self, sig, public_key):
         scriptsig = P2PKH_ScriptSig(sig, public_key)
         assert bytes(scriptsig) == push_item(sig) + push_item(public_key.to_bytes())
-        assert scriptsig.der_sig == sig
+        assert bytes(scriptsig.script_sig) == sig
+        assert scriptsig.script_sig.sighash == sig[-1]
         assert scriptsig.public_key == public_key
 
     @pytest.mark.parametrize("sig, public_key", SIG_PUBKEY_PAIRS)
@@ -877,8 +878,9 @@ class TestP2MultiSig_ScriptSig:
         assert bytes(scriptsig) == pack_byte(OP_0) + b''.join(push_item(sig) for sig in MS_SIGS)
 
     def test_constructor_copies(self):
-        script = P2MultiSig_ScriptSig(list(MS_SIGS))
-        assert script.der_sigs is not MS_SIGS
+        script_sigs = [ScriptSignature(script_sig) for script_sig in MS_SIGS]
+        script = P2MultiSig_ScriptSig(script_sigs)
+        assert script.script_sigs is not script_sigs
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
@@ -891,7 +893,8 @@ class TestP2MultiSig_ScriptSig:
     def test_from_template(self):
         good_script = P2MultiSig_ScriptSig(MS_SIGS)
         script = P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_0), *MS_SIGS)
-        assert script.der_sigs == MS_SIGS
+        for ms_sig, script_sig in zip(MS_SIGS, script.script_sigs):
+            assert ms_sig == bytes(script_sig)
 
     def test_from_template_bad(self):
         public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
