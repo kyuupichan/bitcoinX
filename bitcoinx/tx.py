@@ -133,19 +133,28 @@ class Tx:
         return double_sha256(preimage)
 
     def are_inputs_final(self):
-        '''Return True if all inputs are final.  Transactions cannot be mined unless final.'''
+        '''Return True if all inputs are final.'''
         return all(txin.is_final() for txin in self.inputs)
 
     def is_final_for_block(self, block_height, timestamp):
-        # BIP113 introduced the consensus rule that the timestamp is the MTP of the
-        # previous block; the median timestamp of the 11 blocks with heights
-        # [block_height-11, block_height-1].  The previous consensus rule was to use the
-        # block's timestamp.
+        '''Return True if a transaction is final for the given height and timestamp.
+
+        Transactions cannot be mined unless final.  BIP113 introduced the consensus rule
+        that the timestamp is the MTP of the previous block; the median timestamp of the
+        11 blocks with heights [block_height-11, block_height-1].  The previous consensus
+        rule was to use the block's timestamp.
+        '''
         return (
             self.locktime == 0 or
             self.locktime < (block_height if self.locktime < LOCKTIME_THRESHOLD else timestamp) or
             self.are_inputs_final()
         )
+
+    def is_complete(self):
+        '''Return if all inputs are sufficiently signed.  In general this is impossible to know
+        without the scripts of each output being spent.  So this works best if the inputs
+        are annotated, otherwise it is a best-guess.'''
+        return all(txin.is_complete() for txin in self.inputs)
 
 
 @attr.s(slots=True, repr=False)
@@ -190,6 +199,12 @@ class TxInput:
     def is_final(self):
         return self.sequence == 0xffffffff
 
+    def is_complete(self):
+        '''Return True if fully signed.  In general this is impossible to know without the script
+        of the output being spent; instead a best-guess is made.
+        '''
+        return self.script_sig.is_complete()
+
     def __repr__(self):
         return (
             f'TxInput(prev_hash="{hash_to_hex_str(self.prev_hash)}", prev_idx={self.prev_idx}, '
@@ -220,12 +235,3 @@ class TxOutput:
         return (
             f'TxOutput(value={self.value}, script_pk="{self.script_pk}")'
         )
-
-
-@attr.s(slots=True, repr=False)
-class TxInputAnnotated:
-    '''A bitcoin transaction input.'''
-    tx_input = attr.ib()    # A TxInput instance
-    value = attr.ib()
-    script_pk = attr.ib()
-    public_key = attr.ib()
