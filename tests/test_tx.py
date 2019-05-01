@@ -162,6 +162,15 @@ class TestTx:
             tx.inputs[0].sequence = 0xfffffffe
         assert tx.is_final_for_block(height, timestamp) == answer
 
+    def test_is_complete(self):
+        tx = read_tx('b59de025.txn')
+        assert tx.is_complete()
+        # Replace the
+        txin = tx.inputs[2]
+        items = list(txin.script_sig.ops())
+        items[0] = b'\xff'
+        txin.script_sig = Script().push_many(items)
+        assert not tx.is_complete()
 
 class TestTxInput:
 
