@@ -42,6 +42,7 @@ from .signature import SigHash
 
 ZERO = bytes(32)
 MINUS_1 = 4294967295
+LOCKTIME_THRESHOLD = 500_000_000
 
 
 @attr.s(slots=True)
@@ -131,6 +132,21 @@ class Tx:
 
         return double_sha256(preimage)
 
+    def are_inputs_final(self):
+        '''Return True if all inputs are final.  Transactions cannot be mined unless final.'''
+        return all(txin.is_final() for txin in self.inputs)
+
+    def is_final_for_block(self, block_height, timestamp):
+        # BIP113 introduced the consensus rule that the timestamp is the MTP of the
+        # previous block; the median timestamp of the 11 blocks with heights
+        # [block_height-11, block_height-1].  The previous consensus rule was to use the
+        # block's timestamp.
+        return (
+            self.locktime == 0 or
+            self.locktime < (block_height if self.locktime < LOCKTIME_THRESHOLD else timestamp) or
+            self.are_inputs_final()
+        )
+
 
 @attr.s(slots=True, repr=False)
 class TxInput:
@@ -165,12 +181,14 @@ class TxInput:
         ))
 
     def to_bytes(self):
-        '''Pass value to get a serialization to be used in transaction signatures.'''
         return b''.join((
             self.prevout_bytes(),
             pack_varbytes(bytes(self.script_sig)),
             pack_le_uint32(self.sequence),
         ))
+
+    def is_final(self):
+        return self.sequence == 0xffffffff
 
     def __repr__(self):
         return (
