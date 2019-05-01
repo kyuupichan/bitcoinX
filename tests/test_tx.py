@@ -6,6 +6,7 @@ import pytest
 
 from bitcoinx import Script, PublicKey, SigHash
 from bitcoinx.tx import *
+from bitcoinx.tx import LOCKTIME_THRESHOLD
 
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
@@ -46,13 +47,6 @@ def test_to_bytes_to_hex():
     tx = Tx.from_hex(tx_hex)
     assert tx.to_bytes() == bytes.fromhex(tx_hex)
     assert tx.to_hex() == tx_hex
-
-
-def test_is_coinbase():
-    tx = read_tx('afda808f.txn')
-    assert len(tx.inputs) == 1
-    assert tx.inputs[0].is_coinbase()
-    assert tx.is_coinbase()
 
 
 def test_repr():
@@ -120,3 +114,69 @@ def test_signatures(filename):
         signature_hash = tx.signature_hash(input_index, value, pk_script,
                                            sighash=SigHash(signature[-1]))
         assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
+
+
+class TestTx:
+
+    def test_is_coinbase(self):
+        tx = read_tx('afda808f.txn')
+        assert tx.is_coinbase()
+
+    def test_are_inputs_final(self):
+        tx = read_tx('b59de025.txn')
+        assert tx.are_inputs_final()
+        tx.inputs[4].sequence += 1
+        assert not tx.are_inputs_final()
+
+    @pytest.mark.parametrize("locktime,inputs_final,height,timestamp,answer", (
+        # Locktime 0 is always final
+        (0, False, 0, 0, True),
+        (0, False, 1, 1, True),
+        (0, True, 0, 0, True),
+        (0, True, 1, 1, True),
+        # Locktime 1 is final only from block height 2
+        (1, False, 0, 0, False),
+        (1, False, 1, 0, False),
+        (1, False, 2, 0, True),
+        # If all inputs a final a tx is always final
+        (1, True, 0, 0, True),
+        (1, True, 1, 0, True),
+        (1, True, 2, 0, True),
+        # If < LOCKTIME_THRESHOLD, it's height-based
+        (LOCKTIME_THRESHOLD - 1, False, LOCKTIME_THRESHOLD - 1, 0, False),
+        (LOCKTIME_THRESHOLD - 1, False, LOCKTIME_THRESHOLD, 0, True),
+        (LOCKTIME_THRESHOLD - 1, True, LOCKTIME_THRESHOLD - 1, 0, True),
+        (LOCKTIME_THRESHOLD - 1, True, LOCKTIME_THRESHOLD, 0, True),
+        # If >= LOCKTIME_THRESHOLD, it's time-based
+        (LOCKTIME_THRESHOLD, False, LOCKTIME_THRESHOLD + 1, 0, False),
+        (LOCKTIME_THRESHOLD, False, 0, LOCKTIME_THRESHOLD, False),
+        (LOCKTIME_THRESHOLD, False, 0, LOCKTIME_THRESHOLD + 1, True),
+        (LOCKTIME_THRESHOLD, True, LOCKTIME_THRESHOLD + 1, 0, True),
+        (LOCKTIME_THRESHOLD, True, 0, LOCKTIME_THRESHOLD, True),
+        (LOCKTIME_THRESHOLD, True, 0, LOCKTIME_THRESHOLD + 1, True),
+    ))
+    def test_is_final_for_block(self, locktime, inputs_final, height, timestamp, answer):
+        tx = read_tx('b59de025.txn')
+        tx.locktime = locktime
+        if not inputs_final:
+            tx.inputs[0].sequence = 0xfffffffe
+        assert tx.is_final_for_block(height, timestamp) == answer
+
+
+class TestTxInput:
+
+    def test_is_coinbase(self):
+        txin = TxInput(bytes(32), 0xffffffff, b'', 0xffffffff)
+        assert txin.is_coinbase()
+        txin.prev_idx = 0
+        assert not txin.is_coinbase()
+        txin.prev_idx = 0xffffffff
+        assert txin.is_coinbase()
+        txin.prev_hash = bytes(31) + b'\1'
+        assert not txin.is_coinbase()
+
+    def test_is_final(self):
+        txin = TxInput(bytes(32), 0xffffffff, b'', 0xffffffff)
+        assert txin.is_final()
+        txin.sequence -= 1
+        assert not txin.is_final()
