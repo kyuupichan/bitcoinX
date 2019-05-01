@@ -216,9 +216,8 @@ class ScriptSignature:
     def to_bytes(self):
         return self._raw
 
-    @property
-    def is_missing(self):
-        return self._raw == MISSING_SIG
+    def is_present(self):
+        return self._raw != MISSING_SIG
 
     def to_compact(self):
         '''The 32-byte r and s values concatenated.'''
