@@ -570,175 +570,6 @@ class TestScript:
         s2 = Script().push_many(items)
         assert s2.to_template() == answer
 
-    def test_classify_P2PKH(self):
-        script_hex = '76a914a6dbba870185ab6689f386a40522ae6cb5c7b61a88ac'
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert s == sc
-        assert isinstance(sc, P2PKH_Script)
-
-        prefix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
-        s2 = Script.from_hex(prefix.hex() + script_hex)
-        sc2 = s2.classify_script_pk()
-        assert s2 == sc2
-        assert s2 != s
-        assert isinstance(sc2, P2PKH_Script)
-
-    def test_classify_P2SH(self):
-        script_hex = 'a9143e4501f9f212cb6813b3815edbc7013d6a3f0f1087'
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert s == sc
-        assert isinstance(sc, P2SH_Script)
-
-        suffix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
-        s2 = Script.from_hex(script_hex + suffix.hex())
-        sc2 = s2.classify_script_pk()
-        assert s2 == sc2
-        assert s2 != s
-        assert isinstance(sc2, P2SH_Script)
-
-    def test_classify_P2PK(self):
-        script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4ac'
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert s == sc
-        assert isinstance(sc, P2PK_Script)
-        assert (sc.public_key.to_hex() ==
-                '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4')
-
-        suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
-        s2 = Script.from_hex(script_hex + suffix.hex())
-        sc2 = s2.classify_script_pk()
-        assert s2 == sc2
-        assert sc2.public_key == sc.public_key
-        assert s2 != s
-        assert isinstance(sc2, P2PK_Script)
-
-    def test_classify_P2MultiSig(self):
-        script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'
-                      '3fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef2052ae')
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert isinstance(sc, P2MultiSig_Script)
-        assert len(sc.public_keys) == 2
-        assert sc.threshold == 2
-
-        # Confirm suffix fails to match
-        s = Script.from_hex(script_hex + 'a0')
-        assert s.classify_script_pk() is s
-        # Confirm prefix fails to match
-        s = Script.from_hex('a0' + script_hex)
-        assert s.classify_script_pk() is s
-
-    def test_classify_OP_RETURN(self):
-        s = Script(pack_byte(OP_RETURN))
-        sc = s.classify_script_pk()
-        assert sc == s
-        assert isinstance(sc, OP_RETURN_Script)
-
-        s = Script(pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
-        sc = s.classify_script_pk()
-        assert sc == s
-        assert isinstance(sc, OP_RETURN_Script)
-
-        # Truncated OP_RETURN script
-        s = Script(pack_byte(OP_RETURN) + pack_byte(1))
-        sc = s.classify_script_pk()
-        assert sc == s
-        assert isinstance(sc, OP_RETURN_Script)
-
-    def test_classify_unknown(self):
-        # Modified final pubkey byte; not a curve point
-        script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b3ac'
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert sc is s
-
-        # Truncated script
-        script_hex = '210363f7'
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert sc is s
-
-        # Unknown script
-        script_hex = pack_byte(OP_TRUE).hex()
-        s = Script.from_hex(script_hex)
-        sc = s.classify_script_pk()
-        assert sc is s
-
-    @pytest.mark.parametrize("sig_hex", (
-        'ff',
-        '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
-        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0941',
-    ))
-    def test_classify_P2PK_scriptsig(self, sig_hex):
-        script = Script(push_item(bytes.fromhex(sig_hex)))
-        sc = script.classify_script_sig()
-        assert isinstance(sc, P2PK_ScriptSig)
-
-    @pytest.mark.parametrize("sig_hex", (
-        'fe',
-        '302402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
-        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0941',
-    ))
-    def test_classify_bad_P2PK_scriptsig(self, sig_hex):
-        script = Script(push_item(bytes.fromhex(sig_hex)))
-        sc = script.classify_script_sig()
-        assert sc is script
-
-    @pytest.mark.parametrize("sig_hex,public_key_hex", (
-        ('ff',
-         '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63'
-         'c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee'),
-        ('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
-         '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f141',
-         '040bf47f1c24d1b5a597312422091a324a3d57d0123c9ba853ac9dc1eb81d954bc056'
-         'a18a33d9e7cefd2bf10434ec3f1a39d3c3ede6f2bb3cf21730df38fa0a05d'),
-    ))
-    def test_classify_P2PKH_scriptsig(self, sig_hex, public_key_hex):
-        script = Script(b''.join(push_item(bytes.fromhex(item))
-                                 for item in (sig_hex, public_key_hex)))
-        sc = script.classify_script_sig()
-        assert isinstance(sc, P2PKH_ScriptSig)
-
-    @pytest.mark.parametrize("sig_hex, sigs", (
-        (multisig_scriptsig,
-         [ScriptSignature.from_hex(hex_str) for hex_str in (
-             '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
-             '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
-             '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
-             'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
-         )],
-        ),
-    ))
-    def test_classify_P2MultiSig_ScriptSig(self, sig_hex, sigs):
-        script = Script(bytes.fromhex(sig_hex))
-        sc = script.classify_script_sig()
-        assert isinstance(sc, P2MultiSig_ScriptSig)
-        assert sc.script_sigs == sigs
-
-    @pytest.mark.parametrize("sig_hex,sigs,public_keys", (
-        (p2sh_multisig_scriptsig,
-         [ScriptSignature.from_hex(hex_str) for hex_str in (
-             '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
-             '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
-             '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
-             'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
-         )],
-         [PublicKey.from_hex(hex_str) for hex_str in (
-             '022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c',
-             '03fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef20',
-         )],
-        ),
-    ))
-    def test_classify_P2SHMultiSig_ScriptSig(self, sig_hex, sigs, public_keys):
-        script = Script(bytes.fromhex(sig_hex))
-        sc = script.classify_script_sig()
-        assert isinstance(sc, P2SHMultiSig_ScriptSig)
-        assert sc.multisig_script_sig.script_sigs == sigs
-        assert sc.nested_script.public_keys == public_keys
-
 
 class TestP2PK_Script:
 
@@ -937,7 +768,7 @@ class TestP2MultiSig_ScriptSig:
             P2MultiSig_ScriptSig([])
 
     def test_default_script(self):
-        s = Script(bytes.fromhex(multisig_scriptsig)).classify_script_sig()
+        s = classify_script_sig(Script(bytes.fromhex(multisig_scriptsig)))
         assert s._default_script().hex() == multisig_scriptsig
 
     # From_template tested in classify_script_sig() above
@@ -949,6 +780,178 @@ class TestP2MultiSig_ScriptSig:
             P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_0))
         with pytest.raises(ValueError):
             P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_1), *MS_SIGS)
+
+
+class TestClassification:
+
+    def test_P2PKH(self):
+        script_hex = '76a914a6dbba870185ab6689f386a40522ae6cb5c7b61a88ac'
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert s == sc
+        assert isinstance(sc, P2PKH_Script)
+
+        prefix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
+        s2 = Script.from_hex(prefix.hex() + script_hex)
+        sc2 = classify_script_pk(s2)
+        assert s2 == sc2
+        assert s2 != s
+        assert isinstance(sc2, P2PKH_Script)
+
+    def test_P2SH(self):
+        script_hex = 'a9143e4501f9f212cb6813b3815edbc7013d6a3f0f1087'
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert s == sc
+        assert isinstance(sc, P2SH_Script)
+
+        suffix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
+        s2 = Script.from_hex(script_hex + suffix.hex())
+        sc2 = classify_script_pk(s2)
+        assert s2 == sc2
+        assert s2 != s
+        assert isinstance(sc2, P2SH_Script)
+
+    def test_P2PK(self):
+        script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4ac'
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert s == sc
+        assert isinstance(sc, P2PK_Script)
+        assert (sc.public_key.to_hex() ==
+                '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4')
+
+        suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
+        s2 = Script.from_hex(script_hex + suffix.hex())
+        sc2 = classify_script_pk(s2)
+        assert s2 == sc2
+        assert sc2.public_key == sc.public_key
+        assert s2 != s
+        assert isinstance(sc2, P2PK_Script)
+
+    def test_P2MultiSig(self):
+        script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'
+                      '3fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef2052ae')
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert isinstance(sc, P2MultiSig_Script)
+        assert len(sc.public_keys) == 2
+        assert sc.threshold == 2
+
+        # Confirm suffix fails to match
+        s = Script.from_hex(script_hex + 'a0')
+        assert classify_script_pk(s) is s
+        # Confirm prefix fails to match
+        s = Script.from_hex('a0' + script_hex)
+        assert classify_script_pk(s) is s
+
+    def test_OP_RETURN(self):
+        s = Script(pack_byte(OP_RETURN))
+        sc = classify_script_pk(s)
+        assert sc == s
+        assert isinstance(sc, OP_RETURN_Script)
+
+        s = Script(pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
+        sc = classify_script_pk(s)
+        assert sc == s
+        assert isinstance(sc, OP_RETURN_Script)
+
+        # Truncated OP_RETURN script
+        s = Script(pack_byte(OP_RETURN) + pack_byte(1))
+        sc = classify_script_pk(s)
+        assert sc == s
+        assert isinstance(sc, OP_RETURN_Script)
+
+    def test_unknown(self):
+        # Modified final pubkey byte; not a curve point
+        script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b3ac'
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert sc is s
+
+        # Truncated script
+        script_hex = '210363f7'
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert sc is s
+
+        # Unknown script
+        script_hex = pack_byte(OP_TRUE).hex()
+        s = Script.from_hex(script_hex)
+        sc = classify_script_pk(s)
+        assert sc is s
+
+    @pytest.mark.parametrize("sig_hex", (
+        'ff',
+        '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
+        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0941',
+    ))
+    def test_P2PK_scriptsig(self, sig_hex):
+        script = Script(push_item(bytes.fromhex(sig_hex)))
+        sc = classify_script_sig(script)
+        assert isinstance(sc, P2PK_ScriptSig)
+
+    @pytest.mark.parametrize("sig_hex", (
+        'fe',
+        '302402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd4'
+        '10220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0941',
+    ))
+    def test_bad_P2PK_scriptsig(self, sig_hex):
+        script = Script(push_item(bytes.fromhex(sig_hex)))
+        sc = classify_script_sig(script)
+        assert sc is script
+
+    @pytest.mark.parametrize("sig_hex,public_key_hex", (
+        ('ff',
+         '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63'
+         'c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee'),
+        ('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
+         '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f141',
+         '040bf47f1c24d1b5a597312422091a324a3d57d0123c9ba853ac9dc1eb81d954bc056'
+         'a18a33d9e7cefd2bf10434ec3f1a39d3c3ede6f2bb3cf21730df38fa0a05d'),
+    ))
+    def test_P2PKH_scriptsig(self, sig_hex, public_key_hex):
+        script = Script(b''.join(push_item(bytes.fromhex(item))
+                                 for item in (sig_hex, public_key_hex)))
+        sc = classify_script_sig(script)
+        assert isinstance(sc, P2PKH_ScriptSig)
+
+    @pytest.mark.parametrize("sig_hex, sigs", (
+        (multisig_scriptsig,
+         [ScriptSignature.from_hex(hex_str) for hex_str in (
+             '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
+             '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
+             '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
+             'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
+         )],
+        ),
+    ))
+    def test_P2MultiSig_ScriptSig(self, sig_hex, sigs):
+        script = Script(bytes.fromhex(sig_hex))
+        sc = classify_script_sig(script)
+        assert isinstance(sc, P2MultiSig_ScriptSig)
+        assert sc.script_sigs == sigs
+
+    @pytest.mark.parametrize("sig_hex,sigs,public_keys", (
+        (p2sh_multisig_scriptsig,
+         [ScriptSignature.from_hex(hex_str) for hex_str in (
+             '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
+             '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
+             '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
+             'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
+         )],
+         [PublicKey.from_hex(hex_str) for hex_str in (
+             '022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c',
+             '03fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef20',
+         )],
+        ),
+    ))
+    def test_P2SHMultiSig_ScriptSig(self, sig_hex, sigs, public_keys):
+        script = Script(bytes.fromhex(sig_hex))
+        sc = classify_script_sig(script)
+        assert isinstance(sc, P2SHMultiSig_ScriptSig)
+        assert sc.multisig_script_sig.script_sigs == sigs
+        assert sc.nested_script.public_keys == public_keys
 
 
 @pytest.mark.parametrize("item,answer", (

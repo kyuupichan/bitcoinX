@@ -31,6 +31,7 @@ __all__ = (
     'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'P2MultiSig_Script',
     'P2PK_ScriptSig', 'P2PKH_ScriptSig', 'P2MultiSig_ScriptSig', 'P2SHMultiSig_ScriptSig',
     'OP_RETURN_Script', 'ScriptError', 'TruncatedScriptError',
+    'classify_script_sig', 'classify_script_pk'
 )
 
 
@@ -476,31 +477,6 @@ class Script:
         items = [op for op in stripped_ops if isinstance(op, bytes)]
         return template, items
 
-    def classify(self, templates):
-        our_template, items = self.to_template()
-
-        for template, constructor in templates:
-            if isinstance(template, bytes):
-                if template != our_template:
-                    continue
-            else:
-                match = template.match(our_template)
-                if not match:
-                    continue
-
-            try:
-                return constructor(bytes(self), *items)
-            except (ValueError, TypeError) as e:
-                pass
-
-        return self
-
-    def classify_script_pk(self):
-        return self.classify(self.TEMPLATES_PK)
-
-    def classify_script_sig(self):
-        return self.classify(self.TEMPLATES_SIG)
-
 
 class _Hash160_Script(Script):
 
@@ -678,12 +654,12 @@ class P2SHMultiSig_ScriptSig(Script):
     def from_template(cls, script, *items):
         if len(items) < 3:
             raise ValueError('requires at least 3 items')
-        nested_script = Script(items[-1]).classify_script_pk()
+        nested_script = classify_script_pk(Script(items[-1]))
         multisig_script_sig = P2MultiSig_ScriptSig(items[1:-1])
         return cls(multisig_script_sig, nested_script)
 
 
-Script.TEMPLATES_PK = (
+TEMPLATES_PK = (
     (bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)),
      P2PKH_Script.from_template),
     (bytes((OP_HASH160, OP_PUSHDATA1, OP_EQUAL)),
@@ -697,7 +673,7 @@ Script.TEMPLATES_PK = (
 )
 
 
-Script.TEMPLATES_SIG = (
+TEMPLATES_SIG = (
     (bytes((OP_PUSHDATA1, OP_PUSHDATA1)),
      P2PKH_ScriptSig.from_template),
     (bytes((OP_PUSHDATA1,)),
@@ -707,3 +683,31 @@ Script.TEMPLATES_SIG = (
     (re.compile(b_OP_PUSHDATA1 + b'{2,}'),
      P2MultiSig_ScriptSig.from_template),
 )
+
+
+def _classify_script(script, templates):
+    our_template, items = script.to_template()
+
+    for template, constructor in templates:
+        if isinstance(template, bytes):
+            if template != our_template:
+                continue
+        else:
+            match = template.match(our_template)
+            if not match:
+                continue
+
+        try:
+            return constructor(bytes(script), *items)
+        except (ValueError, TypeError) as e:
+            pass
+
+    return script
+
+
+def classify_script_pk(script):
+    return _classify_script(script, TEMPLATES_PK)
+
+
+def classify_script_sig(script):
+    return _classify_script(script, TEMPLATES_SIG)
