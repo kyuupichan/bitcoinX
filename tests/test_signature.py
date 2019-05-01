@@ -55,9 +55,9 @@ class TestScriptSignature:
 
     def test_constructor(self):
         s = ScriptSignature(b'\xff')
-        assert s.is_missing
+        assert not s.is_present()
         s = ScriptSignature(serialization_testcases[0][0] + pack_byte(0x41))
-        assert not s.is_missing
+        assert s.is_present()
 
     def test_constructor_bad(self):
         with pytest.raises(InvalidSignatureError):
@@ -87,7 +87,7 @@ class TestScriptSignature:
     def test_messing_sig(self):
         s = ScriptSignature.missing_sig()
         assert bytes(s) == b'\xff'
-        assert s.is_missing
+        assert not s.is_present()
 
     def test_bytes(self):
         der_sig = serialization_testcases[0][0]
