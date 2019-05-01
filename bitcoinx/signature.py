@@ -41,7 +41,7 @@ from .packing import pack_byte
 
 CDATA_SIG_LENGTH = 64
 MAX_SIG_LENGTH = 72
-MISSING_SIG = b'\xff'
+MISSING_SIG_BYTES = b'\xff'
 
 
 class InvalidSignatureError(ValueError):
@@ -179,8 +179,8 @@ class SigHash(int):
 class ScriptSignature:
 
     def __init__(self, raw):
-        '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG.'''
-        if raw != MISSING_SIG:
+        '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.'''
+        if raw != MISSING_SIG_BYTES:
             # Validate the DER encoding
             der_signature_to_compact(raw[:-1])
         self._raw = raw
@@ -206,10 +206,6 @@ class ScriptSignature:
     def from_der_sig(cls, der_sig, sighash):
         return cls(der_sig + pack_byte(sighash))
 
-    @classmethod
-    def missing_sig(cls):
-        return cls(MISSING_SIG)
-
     def __bytes__(self):
         return self._raw
 
@@ -217,7 +213,7 @@ class ScriptSignature:
         return self._raw
 
     def is_present(self):
-        return self._raw != MISSING_SIG
+        return self._raw != MISSING_SIG_BYTES
 
     def to_compact(self):
         '''The 32-byte r and s values concatenated.'''
@@ -233,13 +229,13 @@ class ScriptSignature:
 
     @property
     def der_signature(self):
-        if self._raw == MISSING_SIG:
+        if self._raw == MISSING_SIG_BYTES:
             raise InvalidSignatureError('signature is missing')
         return self._raw[:-1]
 
     @property
     def sighash(self):
-        if self._raw == MISSING_SIG:
+        if self._raw == MISSING_SIG_BYTES:
             raise InvalidSignatureError('signature is missing')
         return SigHash(self._raw[-1])
 
@@ -250,3 +246,5 @@ SigHash.NONE = SigHash(0x02)
 SigHash.SINGLE = SigHash(0x03)
 SigHash.FORKID = SigHash(0x40)
 SigHash.ANYONE_CAN_PAY = SigHash(0x80)
+
+ScriptSignature.MISSING = ScriptSignature(MISSING_SIG_BYTES)

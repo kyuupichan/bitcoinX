@@ -462,6 +462,13 @@ class Script:
 
         return result
 
+    def is_complete(self):
+        script = classify_script_sig(self)
+        if script is not self:
+            return script.is_complete()
+        # Assume an unrecognised script is complete
+        return True
+
     def to_template(self):
         '''Return a pair (template, items).
 
@@ -591,6 +598,9 @@ class P2PKH_ScriptSig(Script):
     def _default_script(self):
         return push_item(self.script_sig.to_bytes()) + push_item(self.public_key.to_bytes())
 
+    def is_complete(self):
+        return self.script_sig.is_present()
+
     @classmethod
     def from_template(cls, script, script_sig, pubkey_bytes):
         from .keys import PublicKey
@@ -607,6 +617,9 @@ class P2PK_ScriptSig(Script):
 
     def _default_script(self):
         return push_item(self.script_sig.to_bytes())
+
+    def is_complete(self):
+        return self.script_sig.is_present()
 
     @classmethod
     def from_template(cls, script, script_sig):
@@ -626,6 +639,9 @@ class P2MultiSig_ScriptSig(Script):
         parts = [b_OP_0]
         parts.extend(push_item(script_sig.to_bytes()) for script_sig in self.script_sigs)
         return b''.join(parts)
+
+    def is_complete(self):
+        return all(script_sig.is_present() for script_sig in self.script_sigs)
 
     @classmethod
     def from_template(cls, script, *items):
@@ -648,7 +664,10 @@ class P2SHMultiSig_ScriptSig(Script):
         super().__init__(script)
 
     def _default_script(self):
-        return bytes(self.multisig_script) + push_item(self.nested_script)
+        return bytes(self.multisig_script_sig) + push_item(bytes(self.nested_script))
+
+    def is_complete(self):
+        return self.multisig_script_sig.is_complete()
 
     @classmethod
     def from_template(cls, script, *items):
@@ -706,8 +725,12 @@ def _classify_script(script, templates):
 
 
 def classify_script_pk(script):
-    return _classify_script(script, TEMPLATES_PK)
+    if script.__class__ is Script:
+        return _classify_script(script, TEMPLATES_PK)
+    return script
 
 
 def classify_script_sig(script):
-    return _classify_script(script, TEMPLATES_SIG)
+    if script.__class__ is Script:
+        return _classify_script(script, TEMPLATES_SIG)
+    return script

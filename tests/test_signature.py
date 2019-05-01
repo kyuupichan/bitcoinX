@@ -2,6 +2,7 @@ import pytest
 
 from bitcoinx import pack_byte, be_bytes_to_int, Script
 from bitcoinx.signature import *
+from bitcoinx.signature import MISSING_SIG_BYTES
 
 
 def test_exceptions():
@@ -54,7 +55,7 @@ class TestSigHash:
 class TestScriptSignature:
 
     def test_constructor(self):
-        s = ScriptSignature(b'\xff')
+        s = ScriptSignature(MISSING_SIG_BYTES)
         assert not s.is_present()
         s = ScriptSignature(serialization_testcases[0][0] + pack_byte(0x41))
         assert s.is_present()
@@ -64,15 +65,15 @@ class TestScriptSignature:
             ScriptSignature(b'\x30')
 
     def test_eq(self):
-        assert ScriptSignature(b'\xff') == b'\xff'
-        assert ScriptSignature(b'\xff') == Script(b'\xff')
-        assert ScriptSignature(b'\xff') == ScriptSignature(b'\xff')
-        assert ScriptSignature(b'\xff') == bytearray(b'\xff')
-        assert ScriptSignature(b'\xff') == memoryview(b'\xff')
-        assert ScriptSignature(b'\xff') != 2.5
+        assert ScriptSignature(MISSING_SIG_BYTES) == MISSING_SIG_BYTES
+        assert ScriptSignature(MISSING_SIG_BYTES) == Script(MISSING_SIG_BYTES)
+        assert ScriptSignature(MISSING_SIG_BYTES) == ScriptSignature(MISSING_SIG_BYTES)
+        assert ScriptSignature(MISSING_SIG_BYTES) == bytearray(MISSING_SIG_BYTES)
+        assert ScriptSignature(MISSING_SIG_BYTES) == memoryview(MISSING_SIG_BYTES)
+        assert ScriptSignature(MISSING_SIG_BYTES) != 2.5
 
     def test_hashable(self):
-        {ScriptSignature(b'\xff')}
+        {ScriptSignature(MISSING_SIG_BYTES)}
 
     def test_hex(self):
         s = ScriptSignature.from_hex('ff')
@@ -84,9 +85,9 @@ class TestScriptSignature:
         assert s.der_signature == der_sig
         assert s.sighash == SigHash.ALL | SigHash.FORKID
 
-    def test_messing_sig(self):
-        s = ScriptSignature.missing_sig()
-        assert bytes(s) == b'\xff'
+    def test_MISSING(self):
+        s = ScriptSignature.MISSING
+        assert bytes(s) == MISSING_SIG_BYTES
         assert not s.is_present()
 
     def test_bytes(self):
@@ -112,7 +113,7 @@ class TestScriptSignature:
         assert s.s_value() == be_bytes_to_int(compact_sig[32:])
 
     def test_der_signature(self):
-        s = ScriptSignature(b'\xff')
+        s = ScriptSignature(MISSING_SIG_BYTES)
         with pytest.raises(InvalidSignatureError):
             s.der_signature
         der_sig = serialization_testcases[0][0]
@@ -126,6 +127,6 @@ class TestScriptSignature:
         assert s.sighash == sighash
 
     def test_sighash_bad(self):
-        s = ScriptSignature(b'\xff')
+        s = ScriptSignature(MISSING_SIG_BYTES)
         with pytest.raises(InvalidSignatureError):
             s.sighash

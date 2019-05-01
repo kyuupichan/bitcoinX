@@ -570,6 +570,13 @@ class TestScript:
         s2 = Script().push_many(items)
         assert s2.to_template() == answer
 
+    def test_is_complete(self):
+        script = Script() << OP_TRUE
+        assert script.is_complete()
+        # P2PK scriptsig with missing sig
+        script = Script(push_item(bytes(ScriptSignature.MISSING)))
+        assert not script.is_complete()
+
 
 class TestP2PK_Script:
 
@@ -728,6 +735,11 @@ class TestP2PK_ScriptSig:
         sig = MS_SIGS[0]
         assert P2PK_ScriptSig.from_template(None, sig) == P2PK_ScriptSig(sig)
 
+    def test_is_complete(self):
+        assert P2PK_ScriptSig(MS_SIGS[0]).is_complete()
+        assert not P2PK_ScriptSig(ScriptSignature.MISSING).is_complete()
+
+
 SIG_PUBKEY_PAIRS = [
     (bytes.fromhex('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
                    '022042b810f40adc6cb3f186d82394c3b0296d1fcb0211d2d6d20febbd1d515675f101'),
@@ -751,6 +763,11 @@ class TestP2PKH_ScriptSig:
         assert (P2PKH_ScriptSig.from_template(None, sig, public_key.to_bytes()) ==
                 P2PKH_ScriptSig(sig, public_key))
 
+    def test_is_complete(self):
+        sig, pubkey = SIG_PUBKEY_PAIRS[0]
+        assert P2PKH_ScriptSig(sig, pubkey).is_complete()
+        assert not P2PKH_ScriptSig(ScriptSignature.MISSING, pubkey).is_complete()
+
 
 class TestP2MultiSig_ScriptSig:
 
@@ -771,7 +788,7 @@ class TestP2MultiSig_ScriptSig:
         s = classify_script_sig(Script(bytes.fromhex(multisig_scriptsig)))
         assert s._default_script().hex() == multisig_scriptsig
 
-    # From_template tested in classify_script_sig() above
+    # From_template tested in TestClassification
 
     def test_from_template_bad(self):
         with pytest.raises(ValueError):
@@ -780,6 +797,46 @@ class TestP2MultiSig_ScriptSig:
             P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_0))
         with pytest.raises(ValueError):
             P2MultiSig_ScriptSig.from_template(None, pack_byte(OP_1), *MS_SIGS)
+
+    def test_is_complete(self):
+        sig, _pubkey = SIG_PUBKEY_PAIRS[0]
+        assert P2MultiSig_ScriptSig([sig]).is_complete()
+        assert P2MultiSig_ScriptSig([sig, sig]).is_complete()
+        assert not P2MultiSig_ScriptSig([ScriptSignature.MISSING, sig]).is_complete()
+        assert not P2MultiSig_ScriptSig([sig, ScriptSignature.MISSING]).is_complete()
+
+
+class TestP2SHMultiSig_ScriptSig:
+
+    def test_constructor(self):
+        good = classify_script_sig(Script(bytes.fromhex(p2sh_multisig_scriptsig)))
+        P2SHMultiSig_ScriptSig(good.multisig_script_sig, good.nested_script)
+
+    def test_constructor_bad(self):
+        good = classify_script_sig(Script(bytes.fromhex(p2sh_multisig_scriptsig)))
+        with pytest.raises(TypeError):
+            P2SHMultiSig_ScriptSig(good.nested_script, good.nested_script)
+        with pytest.raises(TypeError):
+            P2SHMultiSig_ScriptSig(good.multisig_script_sig, good.multisig_script_sig)
+        good.multisig_script_sig.script_sigs *= 2
+        with pytest.raises(ValueError):
+            P2SHMultiSig_ScriptSig(good.multisig_script_sig, good.nested_script)
+
+    def test_default_script(self):
+        good = classify_script_sig(Script(bytes.fromhex(p2sh_multisig_scriptsig)))
+        assert good._default_script().hex() == p2sh_multisig_scriptsig
+
+    # From_template tested in TestClassification
+
+    def test_from_template_bad(self):
+        with pytest.raises(ValueError):
+           P2MultiSig_ScriptSig.from_template(None, *MS_SIGS[:2])
+
+    def test_is_complete(self):
+        good = classify_script_sig(Script(bytes.fromhex(p2sh_multisig_scriptsig)))
+        assert good.is_complete()
+        good.multisig_script_sig.script_sigs[-1] = ScriptSignature.MISSING
+        assert not good.is_complete()
 
 
 class TestClassification:
