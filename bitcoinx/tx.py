@@ -156,6 +156,17 @@ class Tx:
         are annotated, otherwise it is a best-guess.'''
         return all(txin.is_complete() for txin in self.inputs)
 
+    def hash(self):
+        '''Return the transaction hash if it is complete, otherwise None.'''
+        if self.is_complete():
+            return double_sha256(self.to_bytes())
+        return None
+
+    def hex_hash(self):
+        '''Return the transaction hash as a hex string if it is complete, otherwise None.'''
+        tx_hash = self.hash()
+        return hash_to_hex_str(tx_hash) if tx_hash else None
+
 
 @attr.s(slots=True, repr=False)
 class TxInput:
