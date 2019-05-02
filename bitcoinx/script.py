@@ -31,7 +31,7 @@ __all__ = (
     'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'P2MultiSig_Script',
     'P2PK_ScriptSig', 'P2PKH_ScriptSig', 'P2MultiSig_ScriptSig', 'P2SHMultiSig_ScriptSig',
     'OP_RETURN_Script', 'ScriptError', 'TruncatedScriptError',
-    'classify_script_sig', 'classify_script_pk'
+    'classify_script_sig', 'classify_script_pubkey'
 )
 
 
@@ -673,7 +673,7 @@ class P2SHMultiSig_ScriptSig(Script):
     def from_template(cls, script, *items):
         if len(items) < 3:
             raise ValueError('requires at least 3 items')
-        nested_script = classify_script_pk(Script(items[-1]))
+        nested_script = classify_script_pubkey(Script(items[-1]))
         multisig_script_sig = P2MultiSig_ScriptSig(items[1:-1])
         return cls(multisig_script_sig, nested_script)
 
@@ -724,7 +724,7 @@ def _classify_script(script, templates):
     return script
 
 
-def classify_script_pk(script):
+def classify_script_pubkey(script):
     if script.__class__ is Script:
         return _classify_script(script, TEMPLATES_PK)
     return script
