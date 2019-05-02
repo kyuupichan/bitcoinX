@@ -678,8 +678,8 @@ class TestP2MultiSig_Script:
                              [(m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)]
     )
     def test_constructor(self, threshold, count):
-        script_pk = P2MultiSig_Script(MS_PUBKEYS[:count], threshold)
-        assert bytes(script_pk) == b''.join((
+        script_pubkey = P2MultiSig_Script(MS_PUBKEYS[:count], threshold)
+        assert bytes(script_pubkey) == b''.join((
             push_int(threshold),
             b''.join(push_item(public_key.to_bytes()) for public_key in MS_PUBKEYS[:count]),
             push_int(count),
@@ -844,13 +844,13 @@ class TestClassification:
     def test_P2PKH(self):
         script_hex = '76a914a6dbba870185ab6689f386a40522ae6cb5c7b61a88ac'
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert s == sc
         assert isinstance(sc, P2PKH_Script)
 
         prefix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
         s2 = Script.from_hex(prefix.hex() + script_hex)
-        sc2 = classify_script_pk(s2)
+        sc2 = classify_script_pubkey(s2)
         assert s2 == sc2
         assert s2 != s
         assert isinstance(sc2, P2PKH_Script)
@@ -858,13 +858,13 @@ class TestClassification:
     def test_P2SH(self):
         script_hex = 'a9143e4501f9f212cb6813b3815edbc7013d6a3f0f1087'
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert s == sc
         assert isinstance(sc, P2SH_Script)
 
         suffix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
         s2 = Script.from_hex(script_hex + suffix.hex())
-        sc2 = classify_script_pk(s2)
+        sc2 = classify_script_pubkey(s2)
         assert s2 == sc2
         assert s2 != s
         assert isinstance(sc2, P2SH_Script)
@@ -872,7 +872,7 @@ class TestClassification:
     def test_P2PK(self):
         script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4ac'
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert s == sc
         assert isinstance(sc, P2PK_Script)
         assert (sc.public_key.to_hex() ==
@@ -880,7 +880,7 @@ class TestClassification:
 
         suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
         s2 = Script.from_hex(script_hex + suffix.hex())
-        sc2 = classify_script_pk(s2)
+        sc2 = classify_script_pubkey(s2)
         assert s2 == sc2
         assert sc2.public_key == sc.public_key
         assert s2 != s
@@ -890,32 +890,32 @@ class TestClassification:
         script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'
                       '3fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef2052ae')
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert isinstance(sc, P2MultiSig_Script)
         assert len(sc.public_keys) == 2
         assert sc.threshold == 2
 
         # Confirm suffix fails to match
         s = Script.from_hex(script_hex + 'a0')
-        assert classify_script_pk(s) is s
+        assert classify_script_pubkey(s) is s
         # Confirm prefix fails to match
         s = Script.from_hex('a0' + script_hex)
-        assert classify_script_pk(s) is s
+        assert classify_script_pubkey(s) is s
 
     def test_OP_RETURN(self):
         s = Script(pack_byte(OP_RETURN))
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert sc == s
         assert isinstance(sc, OP_RETURN_Script)
 
         s = Script(pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert sc == s
         assert isinstance(sc, OP_RETURN_Script)
 
         # Truncated OP_RETURN script
         s = Script(pack_byte(OP_RETURN) + pack_byte(1))
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert sc == s
         assert isinstance(sc, OP_RETURN_Script)
 
@@ -923,19 +923,19 @@ class TestClassification:
         # Modified final pubkey byte; not a curve point
         script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b3ac'
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert sc is s
 
         # Truncated script
         script_hex = '210363f7'
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert sc is s
 
         # Unknown script
         script_hex = pack_byte(OP_TRUE).hex()
         s = Script.from_hex(script_hex)
-        sc = classify_script_pk(s)
+        sc = classify_script_pubkey(s)
         assert sc is s
 
     @pytest.mark.parametrize("sig_hex", (

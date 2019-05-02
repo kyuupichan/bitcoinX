@@ -227,22 +227,22 @@ class TxInput:
 class TxOutput:
     '''A bitcoin transaction output.'''
     value = attr.ib()
-    script_pk = attr.ib()
+    script_pubkey = attr.ib()
 
     @classmethod
     def read(cls, read):
         return cls(
             read_le_int64(read),           # value
-            Script(read_varbytes(read)),   # script_pk
+            Script(read_varbytes(read)),   # script_pubkey
         )
 
     def to_bytes(self):
         return b''.join((
             pack_le_int64(self.value),
-            pack_varbytes(bytes(self.script_pk)),
+            pack_varbytes(bytes(self.script_pubkey)),
         ))
 
     def __repr__(self):
         return (
-            f'TxOutput(value={self.value}, script_pk="{self.script_pk}")'
+            f'TxOutput(value={self.value}, script_pubkey="{self.script_pubkey}")'
         )

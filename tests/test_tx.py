@@ -55,7 +55,8 @@ def test_repr():
         'Tx(version=1, inputs=[TxInput(prev_hash="00000000000000000000000000000000000000000000'
         '00000000000000000000", prev_idx=4294967295, script_sig="0319c4082f626d67706f6f6c2e636f6d2'
         'f5473537148110d9e7fcc3cf74ee70c0200", sequence=4294967295)], outputs=[TxOutput(value='
-        '1250005753, script_pk="76a914db1aea84aad494d9f5b253327da23c4e51266c9388ac")], locktime=0)'
+        '1250005753, script_pubkey="76a914db1aea84aad494d9f5b253327da23c4e51266c9388ac")], '
+        'locktime=0)'
     )
 
 
