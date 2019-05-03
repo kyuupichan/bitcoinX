@@ -34,7 +34,7 @@ from os import urandom
 
 from electrumsv_secp256k1 import ffi, lib
 
-from .address import P2PKH_Address
+from .address import P2PKH_Address, P2PK_Output
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
@@ -46,7 +46,6 @@ from .signature import (
     public_key_from_recoverable_signature, to_message_signature, to_recoverable_signature,
     InvalidSignatureError,
 )
-from .script import P2PKH_Script, P2PK_Script
 from .util import cachedproperty
 
 
@@ -551,8 +550,8 @@ class PublicKey:
 
     def P2PK_script(self):
         '''Return a Script instance representing the P2PK script.'''
-        return P2PK_Script(self)
+        return P2PK_Output(self).to_script()
 
     def P2PKH_script(self):
         '''Return a Script instance representing the P2PKH script.'''
-        return P2PKH_Script(self)
+        return self.to_address().to_script()

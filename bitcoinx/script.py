@@ -28,22 +28,17 @@
 
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
-    'Script', 'P2PK_Script', 'P2PKH_Script', 'P2SH_Script', 'P2MultiSig_Script',
-    'P2PK_ScriptSig', 'P2PKH_ScriptSig', 'P2MultiSig_ScriptSig', 'P2SHMultiSig_ScriptSig',
-    'OP_RETURN_Script', 'ScriptError', 'TruncatedScriptError',
-    'classify_script_sig', 'classify_script_pubkey'
+    'Script', 'ScriptError', 'TruncatedScriptError'
 )
 
 
 from enum import IntEnum
-import re
 
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32,
     unpack_le_uint16, unpack_le_uint32,
 )
-from .signature import Signature
 
 
 class ScriptError(Exception):
@@ -194,10 +189,6 @@ globals().update(Ops.__members__)
 __all__ += tuple(Ops.__members__.keys())
 
 
-b_OP_DUP_OP_HASH160 = bytes([OP_DUP, OP_HASH160])
-b_OP_EQUALVERIFY_OP_CHECKSIG = bytes([OP_EQUALVERIFY, OP_CHECKSIG])
-
-
 def push_item(item):
     '''Returns script bytes to push item on the stack.'''
     dlen = len(item)
@@ -271,18 +262,11 @@ def _to_bytes(item):
     raise TypeError(f"cannot convert append {item} to a scriptlet")
 
 
-def raise_on_invalid_public_key(public_key):
-    from .keys import PublicKey
-    if not isinstance(public_key, PublicKey):
-        raise TypeError('public_key must be a PublicKey instance')
-
-
 class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
 
     def __init__(self, script=b''):
-        '''Script can be none if the class imlements the _default_script method.'''
-        self._script = script
+        self._script = bytes(script)
 
     def __lshift__(self, item):
         '''Return a new script with other appended.
@@ -290,41 +274,35 @@ class Script:
         Item can be bytes or an integer (which are pushed on the stack), an opcode
         such as OP_CHECKSIG, or another Script.
         '''
-        return Script(bytes(self) + _to_bytes(item))
+        return Script(self._script + _to_bytes(item))
 
     def push_many(self, items):
         '''Return a new script with items, an iterable, appended.
 
         More efficient than << with 3 items or more, about same with 2.
         '''
-        return Script(bytes(self) + b''.join(_to_bytes(item) for item in items))
+        return Script(self._script + b''.join(_to_bytes(item) for item in items))
 
     def __len__(self):
         '''The length of the script, in bytes.'''
-        return len(bytes(self))
+        return len(self._script)
 
     def __bytes__(self):
         '''The script as bytes.'''
-        result = self._script
-        if result is None:
-            return self._default_script()
-        return result
+        return self._script
 
     def __str__(self):
         '''A user-readable script.'''
-        return bytes(self).hex()
+        return self.to_hex()
 
     def __hash__(self):
         '''Hashable.'''
-        return hash(bytes(self))
+        return hash(self._script)
 
     def __eq__(self, other):
         '''A script equals anything buffer-like with the same bytes representation.'''
         return (isinstance(other, (bytes, bytearray, memoryview))
-                or hasattr(other, '__bytes__')) and bytes(self) == bytes(other)
-
-    def _default_script(self):
-        raise NotImplementedError
+                or hasattr(other, '__bytes__')) and self._script == bytes(other)
 
     def ops(self):
         '''A generator.  Yields script operations (does not check their validity) as integers, and
@@ -333,7 +311,7 @@ class Script:
         Raises TruncatedScriptError if the script was truncated.
         '''
         n = 0
-        script = bytes(self)
+        script = self._script
         limit = len(script)
 
         while n < limit:
@@ -392,7 +370,7 @@ class Script:
 
     def to_bytes(self):
         '''Return the script as a bytes() object.'''
-        return bytes(self)
+        return self._script
 
     @classmethod
     def from_hex(cls, hex_str):
@@ -401,7 +379,7 @@ class Script:
 
     def to_hex(self):
         '''Return the script as a hexadecimal string.'''
-        return bytes(self).hex()
+        return self._script.hex()
 
     @classmethod
     def asm_word_to_bytes(cls, word):
@@ -462,13 +440,6 @@ class Script:
 
         return result
 
-    def is_complete(self):
-        script = classify_script_sig(self)
-        if script is not self:
-            return script.is_complete()
-        # Assume an unrecognised script is complete
-        return True
-
     def to_template(self):
         '''Return a pair (template, items).
 
@@ -483,254 +454,3 @@ class Script:
         template = bytes(OP_PUSHDATA1 if isinstance(op, bytes) else op for op in stripped_ops)
         items = [op for op in stripped_ops if isinstance(op, bytes)]
         return template, items
-
-
-class _Hash160_Script(Script):
-
-    def __init__(self, item, script=None):
-        func = getattr(item, 'hash160', None)
-        if func:
-            hash160 = func()
-        else:
-            hash160 = item
-        if not isinstance(hash160, bytes) or len(hash160) != 20:
-            exc = ValueError if isinstance(hash160, bytes) else TypeError
-            raise exc('item must be 20 bytes')
-        super().__init__(script)
-        self._hash160 = hash160
-
-    def hash160(self):
-        return self._hash160
-
-    @classmethod
-    def from_template(cls, script, hash160):
-        return cls(hash160, script)
-
-
-class P2PKH_Script(_Hash160_Script):
-
-    def _default_script(self):
-        return b''.join((b_OP_DUP_OP_HASH160, push_item(self._hash160),
-                         b_OP_EQUALVERIFY_OP_CHECKSIG))
-
-    def to_address(self, *, coin=None):
-        from .address import P2PKH_Address
-        return P2PKH_Address(self._hash160, coin=coin)
-
-
-class P2SH_Script(_Hash160_Script):
-
-    def _default_script(self):
-        return b''.join((b_OP_HASH160, push_item(self._hash160), b_OP_EQUAL))
-
-    def to_address(self, *, coin=None):
-        from .address import P2SH_Address
-        return P2SH_Address(self._hash160, coin=coin)
-
-
-class P2PK_Script(Script):
-
-    def __init__(self, public_key, script=None):
-        raise_on_invalid_public_key(public_key)
-        super().__init__(script)
-        self.public_key = public_key
-
-    def _default_script(self):
-        return push_item(self.public_key.to_bytes()) + b_OP_CHECKSIG
-
-    @classmethod
-    def from_template(cls, script, pubkey_bytes):
-        from .keys import PublicKey
-        return cls(PublicKey.from_bytes(pubkey_bytes), script)
-
-
-class P2MultiSig_Script(Script):
-
-    def __init__(self, public_keys, threshold, script=None):
-        for public_key in public_keys:
-            raise_on_invalid_public_key(public_key)
-        n = len(public_keys)
-        if not 1 <= threshold <= n:
-            raise ValueError(f'threshold {threshold} is invalid with {n} public keys')
-        super().__init__(script)
-        self.public_keys = public_keys.copy()
-        self.threshold = threshold
-
-    def _default_script(self):
-        parts = [push_int(self.threshold)]
-        parts.extend(push_item(public_key.to_bytes()) for public_key in self.public_keys)
-        parts.append(push_int(len(self.public_keys)))
-        parts.append(b_OP_CHECKMULTISIG)
-        return b''.join(parts)
-
-    @classmethod
-    def from_template(cls, script, *items):
-        from .keys import PublicKey
-
-        threshold, *public_keys, count = items
-        public_keys = [PublicKey.from_bytes(public_key) for public_key in public_keys]
-        n = len(public_keys)
-        count = item_to_int(count)
-        if count != n:
-            raise ValueError(f'received {n} public keys but {count} as their count')
-        return cls(public_keys, item_to_int(threshold), script)
-
-
-class OP_RETURN_Script(Script):
-    '''This class indicates the script is an OP_RETURN script.'''
-
-    @classmethod
-    def from_template(cls, script, *items):
-        return cls(bytes(script))
-
-
-class P2PKH_ScriptSig(Script):
-
-    def __init__(self, script_sig, public_key, script=None):
-        if not isinstance(script_sig, Signature):
-            script_sig = Signature(script_sig)
-        raise_on_invalid_public_key(public_key)
-        # FIXME: should be require the sig to be for the given public key?
-        super().__init__(script)
-        self.script_sig = script_sig
-        self.public_key = public_key
-
-    def _default_script(self):
-        return push_item(self.script_sig.to_bytes()) + push_item(self.public_key.to_bytes())
-
-    def is_complete(self):
-        return self.script_sig.is_present()
-
-    @classmethod
-    def from_template(cls, script, script_sig, pubkey_bytes):
-        from .keys import PublicKey
-        return cls(script_sig, PublicKey.from_bytes(pubkey_bytes), script)
-
-
-class P2PK_ScriptSig(Script):
-
-    def __init__(self, script_sig, script=None):
-        if not isinstance(script_sig, Signature):
-            script_sig = Signature(script_sig)
-        super().__init__(script)
-        self.script_sig = script_sig
-
-    def _default_script(self):
-        return push_item(self.script_sig.to_bytes())
-
-    def is_complete(self):
-        return self.script_sig.is_present()
-
-    @classmethod
-    def from_template(cls, script, script_sig):
-        return cls(script_sig, script)
-
-
-class P2MultiSig_ScriptSig(Script):
-
-    def __init__(self, script_sigs, script=None):
-        if not script_sigs:
-            raise ValueError('no signatures provided')
-        self.script_sigs = [script_sig if isinstance(script_sig, Signature)
-                            else Signature(script_sig) for script_sig in script_sigs]
-        super().__init__(script)
-
-    def _default_script(self):
-        parts = [b_OP_0]
-        parts.extend(push_item(script_sig.to_bytes()) for script_sig in self.script_sigs)
-        return b''.join(parts)
-
-    def is_complete(self):
-        return all(script_sig.is_present() for script_sig in self.script_sigs)
-
-    @classmethod
-    def from_template(cls, script, *items):
-        if not items or items[0] != b'':
-            raise ValueError('scriptsig must have at least 2 items with the first empty')
-        return cls(items[1:], script)
-
-
-class P2SHMultiSig_ScriptSig(Script):
-
-    def __init__(self, multisig_script_sig, nested_script, script=None):
-        if not isinstance(multisig_script_sig, P2MultiSig_ScriptSig):
-            raise TypeError('need a P2MultiSig_ScriptSig')
-        if not isinstance(nested_script, P2MultiSig_Script):
-            raise TypeError('need a P2MultiSig_Script')
-        if len(multisig_script_sig.script_sigs) > len(nested_script.public_keys):
-            raise ValueError('more signatures than public keys')
-        self.multisig_script_sig = multisig_script_sig
-        self.nested_script = nested_script
-        super().__init__(script)
-
-    def _default_script(self):
-        return bytes(self.multisig_script_sig) + push_item(bytes(self.nested_script))
-
-    def is_complete(self):
-        return self.multisig_script_sig.is_complete()
-
-    @classmethod
-    def from_template(cls, script, *items):
-        if len(items) < 3:
-            raise ValueError('requires at least 3 items')
-        nested_script = classify_script_pubkey(Script(items[-1]))
-        multisig_script_sig = P2MultiSig_ScriptSig(items[1:-1])
-        return cls(multisig_script_sig, nested_script)
-
-
-TEMPLATES_PK = (
-    (bytes((OP_DUP, OP_HASH160, OP_PUSHDATA1, OP_EQUALVERIFY, OP_CHECKSIG)),
-     P2PKH_Script.from_template),
-    (bytes((OP_HASH160, OP_PUSHDATA1, OP_EQUAL)),
-     P2SH_Script.from_template),
-    (bytes((OP_PUSHDATA1, OP_CHECKSIG)),
-     P2PK_Script.from_template),
-    (re.compile(b_OP_RETURN),
-     OP_RETURN_Script.from_template),
-    (re.compile(b_OP_PUSHDATA1 + b'{3,}' + b_OP_CHECKMULTISIG + b'$'),
-     P2MultiSig_Script.from_template),
-)
-
-
-TEMPLATES_SIG = (
-    (bytes((OP_PUSHDATA1, OP_PUSHDATA1)),
-     P2PKH_ScriptSig.from_template),
-    (bytes((OP_PUSHDATA1,)),
-     P2PK_ScriptSig.from_template),
-    (re.compile(b_OP_PUSHDATA1 + b'{3,}'),
-     P2SHMultiSig_ScriptSig.from_template),
-    (re.compile(b_OP_PUSHDATA1 + b'{2,}'),
-     P2MultiSig_ScriptSig.from_template),
-)
-
-
-def _classify_script(script, templates):
-    our_template, items = script.to_template()
-
-    for template, constructor in templates:
-        if isinstance(template, bytes):
-            if template != our_template:
-                continue
-        else:
-            match = template.match(our_template)
-            if not match:
-                continue
-
-        try:
-            return constructor(bytes(script), *items)
-        except (ValueError, TypeError) as e:
-            pass
-
-    return script
-
-
-def classify_script_pubkey(script):
-    if script.__class__ is Script:
-        return _classify_script(script, TEMPLATES_PK)
-    return script
-
-
-def classify_script_sig(script):
-    if script.__class__ is Script:
-        return _classify_script(script, TEMPLATES_SIG)
-    return script
