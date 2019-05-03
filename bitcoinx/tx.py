@@ -31,6 +31,7 @@ __all__ = (
 import attr
 from io import BytesIO
 
+from .address import classify_input_script
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list,
@@ -214,7 +215,7 @@ class TxInput:
         '''Return True if fully signed.  In general this is impossible to know without the script
         of the output being spent; instead a best-guess is made.
         '''
-        return self.script_sig.is_complete()
+        return classify_input_script(self.script_sig).is_complete()
 
     def __repr__(self):
         return (
