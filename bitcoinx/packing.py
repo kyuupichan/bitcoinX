@@ -40,7 +40,7 @@ __all__ = (
     'unpack_byte', 'unpack_port', 'unpack_header',
     'read_le_int32', 'read_le_int64',
     'read_le_uint16', 'read_le_uint32', 'read_le_uint64',
-    'read_be_uint16', 'read_be_uint32',
+    'read_be_uint16', 'read_be_uint32', 'read_be_uint64',
     'read_varint', 'read_varbytes', 'read_list',
 )
 
@@ -160,7 +160,7 @@ def read_be_uint32(read):
 
 def read_be_uint64(read):
     result, = unpack_be_uint64(read(8))
-    return resul
+    return result
 
 
 def read_varint(read):
