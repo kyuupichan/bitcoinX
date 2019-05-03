@@ -43,7 +43,7 @@ from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32,
     unpack_le_uint16, unpack_le_uint32,
 )
-from .signature import ScriptSignature
+from .signature import Signature
 
 
 class ScriptError(Exception):
@@ -587,8 +587,8 @@ class OP_RETURN_Script(Script):
 class P2PKH_ScriptSig(Script):
 
     def __init__(self, script_sig, public_key, script=None):
-        if not isinstance(script_sig, ScriptSignature):
-            script_sig = ScriptSignature(script_sig)
+        if not isinstance(script_sig, Signature):
+            script_sig = Signature(script_sig)
         raise_on_invalid_public_key(public_key)
         # FIXME: should be require the sig to be for the given public key?
         super().__init__(script)
@@ -610,8 +610,8 @@ class P2PKH_ScriptSig(Script):
 class P2PK_ScriptSig(Script):
 
     def __init__(self, script_sig, script=None):
-        if not isinstance(script_sig, ScriptSignature):
-            script_sig = ScriptSignature(script_sig)
+        if not isinstance(script_sig, Signature):
+            script_sig = Signature(script_sig)
         super().__init__(script)
         self.script_sig = script_sig
 
@@ -631,8 +631,8 @@ class P2MultiSig_ScriptSig(Script):
     def __init__(self, script_sigs, script=None):
         if not script_sigs:
             raise ValueError('no signatures provided')
-        self.script_sigs = [script_sig if isinstance(script_sig, ScriptSignature)
-                            else ScriptSignature(script_sig) for script_sig in script_sigs]
+        self.script_sigs = [script_sig if isinstance(script_sig, Signature)
+                            else Signature(script_sig) for script_sig in script_sigs]
         super().__init__(script)
 
     def _default_script(self):

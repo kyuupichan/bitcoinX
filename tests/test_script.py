@@ -7,7 +7,7 @@ from bitcoinx.script import *
 from bitcoinx import (
     pack_varint, PrivateKey, pack_byte, BitcoinTestnet, PublicKey,
     P2PKH_Script, P2PKH_Address, P2SH_Address, P2PKH_ScriptSig, P2PK_ScriptSig,
-    ScriptSignature
+    Signature
 )
 
 
@@ -574,7 +574,7 @@ class TestScript:
         script = Script() << OP_TRUE
         assert script.is_complete()
         # P2PK scriptsig with missing sig
-        script = Script(push_item(bytes(ScriptSignature.MISSING)))
+        script = Script(push_item(bytes(Signature.MISSING)))
         assert not script.is_complete()
 
 
@@ -737,7 +737,7 @@ class TestP2PK_ScriptSig:
 
     def test_is_complete(self):
         assert P2PK_ScriptSig(MS_SIGS[0]).is_complete()
-        assert not P2PK_ScriptSig(ScriptSignature.MISSING).is_complete()
+        assert not P2PK_ScriptSig(Signature.MISSING).is_complete()
 
 
 SIG_PUBKEY_PAIRS = [
@@ -766,19 +766,19 @@ class TestP2PKH_ScriptSig:
     def test_is_complete(self):
         sig, pubkey = SIG_PUBKEY_PAIRS[0]
         assert P2PKH_ScriptSig(sig, pubkey).is_complete()
-        assert not P2PKH_ScriptSig(ScriptSignature.MISSING, pubkey).is_complete()
+        assert not P2PKH_ScriptSig(Signature.MISSING, pubkey).is_complete()
 
 
 class TestP2MultiSig_ScriptSig:
 
     def test_constructor_copies(self):
-        script_sigs = [ScriptSignature(script_sig) for script_sig in MS_SIGS]
+        script_sigs = [Signature(script_sig) for script_sig in MS_SIGS]
         script = P2MultiSig_ScriptSig(script_sigs)
         assert script.script_sigs is not script_sigs
         assert script.script_sigs == script_sigs
 
     def test_constructor_bad(self):
-        script_sigs = [ScriptSignature(script_sig) for script_sig in MS_SIGS]
+        script_sigs = [Signature(script_sig) for script_sig in MS_SIGS]
         with pytest.raises(TypeError):
             P2MultiSig_ScriptSig(script_sigs[:-1] + [2])
         with pytest.raises(ValueError):
@@ -802,8 +802,8 @@ class TestP2MultiSig_ScriptSig:
         sig, _pubkey = SIG_PUBKEY_PAIRS[0]
         assert P2MultiSig_ScriptSig([sig]).is_complete()
         assert P2MultiSig_ScriptSig([sig, sig]).is_complete()
-        assert not P2MultiSig_ScriptSig([ScriptSignature.MISSING, sig]).is_complete()
-        assert not P2MultiSig_ScriptSig([sig, ScriptSignature.MISSING]).is_complete()
+        assert not P2MultiSig_ScriptSig([Signature.MISSING, sig]).is_complete()
+        assert not P2MultiSig_ScriptSig([sig, Signature.MISSING]).is_complete()
 
 
 class TestP2SHMultiSig_ScriptSig:
@@ -835,7 +835,7 @@ class TestP2SHMultiSig_ScriptSig:
     def test_is_complete(self):
         good = classify_script_sig(Script(bytes.fromhex(p2sh_multisig_scriptsig)))
         assert good.is_complete()
-        good.multisig_script_sig.script_sigs[-1] = ScriptSignature.MISSING
+        good.multisig_script_sig.script_sigs[-1] = Signature.MISSING
         assert not good.is_complete()
 
 
@@ -975,7 +975,7 @@ class TestClassification:
 
     @pytest.mark.parametrize("sig_hex, sigs", (
         (multisig_scriptsig,
-         [ScriptSignature.from_hex(hex_str) for hex_str in (
+         [Signature.from_hex(hex_str) for hex_str in (
              '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
              '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
              '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
@@ -991,7 +991,7 @@ class TestClassification:
 
     @pytest.mark.parametrize("sig_hex,sigs,public_keys", (
         (p2sh_multisig_scriptsig,
-         [ScriptSignature.from_hex(hex_str) for hex_str in (
+         [Signature.from_hex(hex_str) for hex_str in (
              '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c0'
              '7b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
              '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'

@@ -26,7 +26,7 @@
 '''Signatures of various kinds.'''
 
 __all__ = (
-    'ScriptSignature', 'SigHash',
+    'Signature', 'SigHash',
     'der_signature_to_compact', 'compact_signature_to_der', 'InvalidSignatureError',
 )
 
@@ -176,7 +176,8 @@ class SigHash(int):
         return bool(self & SigHash.ANYONE_CAN_PAY)
 
 
-class ScriptSignature:
+class Signature:
+    '''A bitcoin DER signature, as raw bytes.'''
 
     def __init__(self, raw):
         '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.'''
@@ -247,4 +248,4 @@ SigHash.SINGLE = SigHash(0x03)
 SigHash.FORKID = SigHash(0x40)
 SigHash.ANYONE_CAN_PAY = SigHash(0x80)
 
-ScriptSignature.MISSING = ScriptSignature(MISSING_SIG_BYTES)
+Signature.MISSING = Signature(MISSING_SIG_BYTES)
