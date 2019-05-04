@@ -182,6 +182,11 @@ class TestTx:
         txin.script_sig = Script().push_many(items)
         assert tx.hex_hash() is None
 
+    def test_total_output(self):
+        tx = read_tx('b59de025.txn')
+        print(tx.outputs)
+        assert tx.total_output_value() == 59_999_999_818
+
 
 class TestTxInput:
 

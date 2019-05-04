@@ -42,7 +42,7 @@ from .signature import SigHash
 
 
 ZERO = bytes(32)
-MINUS_1 = 4294967295
+UINT32_MAX = (1 << 32) - 1
 LOCKTIME_THRESHOLD = 500_000_000
 
 
@@ -168,6 +168,10 @@ class Tx:
         tx_hash = self.hash()
         return hash_to_hex_str(tx_hash) if tx_hash else None
 
+    def total_output_value(self):
+        '''Return the sum of the output values.'''
+        return sum(output.value for output in self.outputs)
+
 
 @attr.s(slots=True, repr=False)
 class TxInput:
@@ -179,7 +183,7 @@ class TxInput:
 
     def is_coinbase(self):
         '''Return True iff the input is the single input of a coinbase transaction.'''
-        return self.prev_idx == MINUS_1 and self.prev_hash == ZERO
+        return self.prev_idx == UINT32_MAX and self.prev_hash == ZERO
 
     @classmethod
     def read(cls, read):
