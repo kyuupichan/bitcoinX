@@ -38,6 +38,7 @@ import re
 from bitcoinx import cashaddr
 from .base58 import base58_decode_check, base58_encode_check
 from .coin import Bitcoin, all_coins
+from .hashes import hash160
 from .packing import pack_byte
 from .script import Script, Ops, push_item, push_int, item_to_int
 from .signature import Signature
@@ -118,12 +119,15 @@ class P2PKH_Address(Address):
     def hash160(self):
         return self._hash160
 
-    def to_script(self):
-        return Script(b''.join((
+    def to_script_bytes(self):
+        return b''.join((
             bytes([Ops.OP_DUP, Ops.OP_HASH160]),
             push_item(self._hash160),
             bytes([Ops.OP_EQUALVERIFY, Ops.OP_CHECKSIG]),
-        )))
+        ))
+
+    def to_script(self):
+        return Script(self.to_script_bytes())
 
 
 class P2SH_Address(Address):
@@ -139,9 +143,12 @@ class P2SH_Address(Address):
     def hash160(self):
         return self._hash160
 
+    def to_script_bytes(self):
+        return b''.join((pack_byte(Ops.OP_HASH160), push_item(self._hash160),
+                         pack_byte(Ops.OP_EQUAL)))
+
     def to_script(self):
-        return Script(b''.join((pack_byte(Ops.OP_HASH160), push_item(self._hash160),
-                                pack_byte(Ops.OP_EQUAL))))
+        return Script(self.to_script_bytes())
 
 
 class P2PK_Output:
@@ -155,8 +162,14 @@ class P2PK_Output:
     def __hash__(self):
         return hash(self.public_key) + 1
 
+    def hash160(self):
+        return self.public_key.hash160()
+
+    def to_script_bytes(self):
+        return push_item(self.public_key.to_bytes()) + pack_byte(Ops.OP_CHECKSIG)
+
     def to_script(self):
-        return Script(push_item(self.public_key.to_bytes()) + pack_byte(Ops.OP_CHECKSIG))
+        return Script(self.to_script_bytes())
 
 
 class P2MultiSig_Output:
@@ -177,12 +190,18 @@ class P2MultiSig_Output:
     def __hash__(self):
         return hash(self.public_keys) + self.threshold
 
-    def to_script(self):
+    def to_script_bytes(self):
         parts = [push_int(self.threshold)]
         parts.extend(push_item(public_key.to_bytes()) for public_key in self.public_keys)
         parts.append(push_int(len(self.public_keys)))
         parts.append(pack_byte(Ops.OP_CHECKMULTISIG))
-        return Script(b''.join(parts))
+        return b''.join(parts)
+
+    def to_script(self):
+        return Script(self.to_script_bytes())
+
+    def hash160(self):
+        return hash160(self.to_script_bytes())
 
     def public_key_count(self):
         return len(self.public_keys)
@@ -206,8 +225,11 @@ class OP_RETURN_Output:
     def __hash__(self):
         return 28
 
+    def to_script_bytes(self):
+        return pack_byte(Ops.OP_RETURN)
+
     def to_script(self):
-        return Script(pack_byte(Ops.OP_RETURN))
+        return Script(self.to_script_bytes())
 
     @classmethod
     def from_template(cls, *items):
@@ -216,8 +238,11 @@ class OP_RETURN_Output:
 
 class Unknown_Output:
 
+    def to_script_bytes(self):
+        raise RuntimeError('no canonical script')
+
     def to_script(self):
-        raise RuntimeError('no canonical script for Unknown_Output')
+        return Script(self.to_script_bytes())
 
 
 class InputBase(ABC):
@@ -232,6 +257,12 @@ class InputBase(ABC):
     @abstractmethod
     def signatures_present(self):
         pass
+
+    def to_script_bytes(self):
+        raise RuntimeError('no canonical script')
+
+    def to_script(self):
+        return Script(self.to_script_bytes())
 
 
 class Unknown_Input(InputBase):
@@ -249,9 +280,8 @@ class P2PKH_Input(InputBase):
         self.signature = _to_signature(signature)
         self.public_key = _to_public_key(public_key)
 
-    def to_script(self):
-        return Script(push_item(self.signature.to_bytes())
-                      + push_item(self.public_key.to_bytes()))
+    def to_script_bytes(self):
+        return push_item(self.signature.to_bytes()) + push_item(self.public_key.to_bytes())
 
     def signatures_required(self):
         return 1
@@ -265,8 +295,11 @@ class P2PK_Input(InputBase):
     def __init__(self, signature):
         self.signature = _to_signature(signature)
 
+    def to_script_bytes(self):
+        return push_item(self.signature.to_bytes())
+
     def to_script(self):
-        return Script(push_item(self.signature.to_bytes()))
+        return Script(self.to_script_bytes())
 
     def signatures_required(self):
         return 1
@@ -283,10 +316,13 @@ class P2MultiSig_Input(InputBase):
         if not self.signatures:
             raise ValueError('no signatures provided')
 
-    def to_script(self):
+    def to_script_bytes(self):
         parts = [pack_byte(Ops.OP_0)]
         parts.extend(push_item(signature.to_bytes()) for signature in self.signatures)
-        return Script(b''.join(parts))
+        return b''.join(parts)
+
+    def to_script(self):
+        return Script(self.to_script_bytes())
 
     def signatures_required(self):
         return len(self.signatures)
@@ -313,14 +349,21 @@ class P2SHMultiSig_Input(InputBase):
         self.p2multisig_input = p2multisig_input
         self.nested_script = nested_script
 
+    def to_script_bytes(self):
+        return (self.p2multisig_input.to_script_bytes() +
+                push_item(self.nested_script.to_script_bytes()))
+
     def to_script(self):
-        return self.p2multisig_input.to_script() << self.nested_script.to_script().to_bytes()
+        return Script(self.to_script_bytes())
 
     def signatures_required(self):
         return self.p2multisig_input.signatures_required()
 
     def signatures_present(self):
         return self.p2multisig_input.signatures_present()
+
+    def hash160(self):
+        return self.nested_script.hash160()
 
     @classmethod
     def from_template(cls, *items):
