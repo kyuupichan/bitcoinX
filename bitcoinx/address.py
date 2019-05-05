@@ -344,6 +344,8 @@ def _to_public_key(obj):
     from .keys import PublicKey
     if isinstance(obj, PublicKey):
         return obj
+    if isinstance(obj, str):
+        return PublicKey.from_hex(obj)
     return PublicKey.from_bytes(obj)
 
 
@@ -351,6 +353,8 @@ def _to_signature(obj):
     '''Convert obj a Signature object.'''
     if isinstance(obj, Signature):
         return obj
+    if isinstance(obj, str):
+        return Signature.from_hex(obj)
     return Signature(obj)
 
 
