@@ -5,7 +5,8 @@ import pytest
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes, PrivateKey, PublicKey,
     Signature, Script, pack_byte, push_int, push_item,
-    OP_RETURN, OP_CHECKMULTISIG, OP_0, OP_1, OP_DROP, OP_2DROP, OP_NOP
+    OP_RETURN, OP_CHECKMULTISIG, OP_0, OP_1, OP_DROP, OP_2DROP, OP_NOP, OP_CHECKSIG,
+    hash160
 )
 from bitcoinx.address import *
 
@@ -99,12 +100,18 @@ class TestP2PKH_Address:
         assert address.to_string() == '11111111111111111111BZbvjr'
         assert address.to_string(coin=BitcoinTestnet) == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
 
-    def test_to_script(self):
+    def test_to_script_bytes(self):
         address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'))
         assert address == '1LXnPYpHTwQeWfBVnQZ4yDP23b57NwoyrP'
+        raw = address.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw.hex() == '76a914d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c088ac'
+
+    def test_to_script(self):
+        address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'))
         S = address.to_script()
         assert isinstance(S, Script)
-        assert S == bytes.fromhex('76a914d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c088ac')
+        assert S == address.to_script_bytes()
         assert isinstance(classify_output_script(S), P2PKH_Address)
 
     def test_hashable(self):
@@ -147,12 +154,18 @@ class TestP2SH_Address:
         assert address.to_string() == '31h1vYVSYuKP6AhS86fbRdMw9XHiiQ93Mb'
         assert address.to_string(coin=BitcoinTestnet) == '2MsFDzHRUAMpjHxKyoEHU3aMCMsVtXMsfu8'
 
-    def test_to_script(self):
+    def test_to_script_bytes(self):
         address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'))
         assert address == '3LAP2V4pNJhZ11gwAFUZsDnvXDcyeeaQM5'
+        raw = address.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw.hex() == 'a914ca9f1c4998bf46f66af34d949d8a8f189b6675b587'
+
+    def test_to_script(self):
+        address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'))
         S = address.to_script()
         assert isinstance(S, Script)
-        assert S == bytes.fromhex('a914ca9f1c4998bf46f66af34d949d8a8f189b6675b587')
+        assert S == address.to_script_bytes()
         assert isinstance(classify_output_script(S), P2SH_Address)
 
     def test_hashable(self):
@@ -183,6 +196,28 @@ class TestP2PK_Output:
         p = PrivateKey.from_random().public_key
         {P2PK_Output(p)}
 
+    def test_hash160(self):
+        pubkey_hex = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
+        pubkey = PublicKey.from_hex(pubkey_hex)
+        output = P2PK_Output(pubkey)
+        assert output.hash160() == hash160(bytes.fromhex(pubkey_hex))
+
+    def test_to_script_bytes(self):
+        pubkey_hex = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
+        pubkey = PublicKey.from_hex(pubkey_hex)
+        output = P2PK_Output(pubkey)
+        raw = output.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw == push_item(bytes.fromhex(pubkey_hex)) + pack_byte(OP_CHECKSIG)
+
+    def test_to_script(self):
+        pubkey_hex = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
+        pubkey = PublicKey.from_hex(pubkey_hex)
+        output = P2PK_Output(pubkey)
+        S = output.to_script()
+        assert isinstance(S, Script)
+        assert S == output.to_script_bytes()
+        assert isinstance(classify_output_script(S), P2PK_Output)
 
 
 MS_PUBKEYS = [PrivateKey.from_random().public_key for n in range(5)]
@@ -206,14 +241,19 @@ class TestP2MultiSig_Output:
     @pytest.mark.parametrize("threshold, count",
                              [(m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)]
     )
-    def test_constructor(self, threshold, count):
+    def test_to_script_bytes(self, threshold, count):
         output = P2MultiSig_Output(MS_PUBKEYS[:count], threshold)
-        assert output.to_script() == b''.join((
+        raw = output.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw == b''.join((
             push_int(threshold),
             b''.join(push_item(public_key.to_bytes()) for public_key in MS_PUBKEYS[:count]),
             push_int(count),
             pack_byte(OP_CHECKMULTISIG),
         ))
+        S = output.to_script()
+        assert isinstance(S, Script)
+        assert S == raw
 
     def test_constructor_copies(self):
         public_keys = list(MS_PUBKEYS[:2])
@@ -248,6 +288,10 @@ class TestP2MultiSig_Output:
         assert output.threshold == threshold
         assert output == good_output
 
+    def test_hash160(self):
+        output = P2MultiSig_Output(MS_PUBKEYS, 1)
+        assert output.hash160() == hash160(output.to_script_bytes())
+
     def test_from_template_bad(self):
         public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
         with pytest.raises(ValueError):
@@ -270,8 +314,15 @@ class TestOP_RETURN_Output:
     def test_hashable(self):
         {OP_RETURN_Output()}
 
+    def test_to_script_bytes(self):
+        raw = OP_RETURN_Output().to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw == bytes([OP_RETURN])
+
     def test_to_script(self):
-        assert OP_RETURN_Output().to_script() == bytes([OP_RETURN])
+        S = OP_RETURN_Output().to_script()
+        assert isinstance(S, Script)
+        assert S == bytes([OP_RETURN])
 
     def test_from_template(self):
         output = OP_RETURN_Output.from_template(b'', b'bab')
@@ -288,6 +339,10 @@ class TestUnknown_Output:
     def test_hashable(self):
         {Unknown_Output()}
 
+    def test_to_script_bytes(self):
+        with pytest.raises(RuntimeError):
+            Unknown_Output().to_script_bytes()
+
     def test_to_script(self):
         with pytest.raises(RuntimeError):
             Unknown_Output().to_script()
@@ -298,7 +353,12 @@ class TestP2PK_Input:
     @pytest.mark.parametrize("signature", MS_SIGS)
     def test_constructor(self, signature):
         input = P2PK_Input(signature)
-        assert input.to_script() == push_item(signature)
+        raw = input.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw == push_item(signature)
+        S = input.to_script()
+        assert isinstance(S, Script)
+        assert S == raw
 
     def test_is_complete(self):
         assert P2PK_Input(MS_SIGS[0]).is_complete()
@@ -318,6 +378,14 @@ class TestUnknown_Input:
         assert Unknown_Input().signatures_present() == 0
         assert Unknown_Input().is_complete()
 
+    def test_to_script_bytes(self):
+        with pytest.raises(RuntimeError):
+            Unknown_Input().to_script_bytes()
+
+    def test_to_script(self):
+        with pytest.raises(RuntimeError):
+            Unknown_Input().to_script()
+
 
 SIG_PUBKEY_PAIRS = [
     (bytes.fromhex('304402206f840c84939bb711e9805dc10ced562fa70ea0f7dcc36b5f44c209b2ac29fc9b'
@@ -332,7 +400,12 @@ class TestP2PKH_Input:
     @pytest.mark.parametrize("sig, public_key", SIG_PUBKEY_PAIRS)
     def test_constructor(self, sig, public_key):
         input = P2PKH_Input(sig, public_key)
-        assert input.to_script() == push_item(sig) + push_item(public_key.to_bytes())
+        raw = input.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw == push_item(sig) + push_item(public_key.to_bytes())
+        S = input.to_script()
+        assert isinstance(S, Script)
+        assert S == raw
         assert input.signature.sighash == sig[-1]
         assert input.public_key is public_key
 
@@ -354,9 +427,15 @@ class TestP2PKH_Input:
 class TestP2MultiSig_Input:
 
     def test_constructor_copies(self):
-        script = P2MultiSig_Input(MS_SIGS)
-        assert script.signatures is not MS_SIGS
-        assert script.signatures == MS_SIGS
+        input = P2MultiSig_Input(MS_SIGS)
+        assert input.signatures is not MS_SIGS
+        assert input.signatures == MS_SIGS
+        raw = input.to_script_bytes()
+        assert isinstance(raw, bytes)
+        assert raw == pack_byte(OP_0) + b''.join(push_item(signature) for signature in MS_SIGS)
+        S = input.to_script()
+        assert isinstance(S, Script)
+        assert S == raw
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
@@ -414,9 +493,20 @@ class TestP2SHMultiSig_Input:
         with pytest.raises(ValueError):
             P2SHMultiSig_Input(good.p2multisig_input, good.nested_script)
 
-    def test_default_script(self):
-        good = classify_input_script(Script.from_hex(p2sh_multisig_scriptsig))
-        assert good.to_script().to_hex() == p2sh_multisig_scriptsig
+    def test_script(self):
+        input = classify_input_script(Script.from_hex(p2sh_multisig_scriptsig))
+        raw = input.to_script_bytes()
+        assert raw.hex() == p2sh_multisig_scriptsig
+        assert isinstance(raw, bytes)
+        S = input.to_script()
+        assert isinstance(S, Script)
+        assert S == raw
+
+    def test_hash160(self):
+        input = classify_input_script(Script.from_hex(p2sh_multisig_scriptsig))
+        assert input.hash160() == input.nested_script.hash160()
+        address = P2SH_Address(input.hash160())
+        assert address.to_string() == '3LMZdnYo1w3uUZqmGWFCCv786pz3Br4y45'
 
     # From_template tested in TestClassification
 
