@@ -31,7 +31,6 @@ __all__ = (
 import attr
 from io import BytesIO
 
-from .address import classify_input_script
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list,
@@ -151,17 +150,9 @@ class Tx:
             self.are_inputs_final()
         )
 
-    def is_complete(self):
-        '''Return if all inputs are sufficiently signed.  In general this is impossible to know
-        without the scripts of each output being spent.  So this works best if the inputs
-        are annotated, otherwise it is a best-guess.'''
-        return all(txin.is_complete() for txin in self.inputs)
-
     def hash(self):
-        '''Return the transaction hash if it is complete, otherwise None.'''
-        if self.is_complete():
-            return double_sha256(self.to_bytes())
-        return None
+        '''Return the transaction hash.   Only makes sense for fully-signed transactions.'''
+        return double_sha256(self.to_bytes())
 
     def hex_hash(self):
         '''Return the transaction hash as a hex string if it is complete, otherwise None.'''
@@ -214,12 +205,6 @@ class TxInput:
 
     def is_final(self):
         return self.sequence == 0xffffffff
-
-    def is_complete(self):
-        '''Return True if fully signed.  In general this is impossible to know without the script
-        of the output being spent; instead a best-guess is made.
-        '''
-        return classify_input_script(self.script_sig).is_complete()
 
     def __repr__(self):
         return (

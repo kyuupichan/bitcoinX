@@ -163,24 +163,9 @@ class TestTx:
             tx.inputs[0].sequence = 0xfffffffe
         assert tx.is_final_for_block(height, timestamp) == answer
 
-    def test_is_complete(self):
-        tx = read_tx('b59de025.txn')
-        assert tx.is_complete()
-        # Replace the
-        txin = tx.inputs[2]
-        items = list(txin.script_sig.ops())
-        items[0] = b'\xff'
-        txin.script_sig = Script().push_many(items)
-        assert not tx.is_complete()
-
     def test_hash(self):
         tx = read_tx('b59de025.txn')
         assert tx.hex_hash() == 'b59de0255081f8032c521a1e70d9355876309a0c69e034db31c2ed387e9da809'
-        txin = tx.inputs[1]
-        items = list(txin.script_sig.ops())
-        items[0] = b'\xff'
-        txin.script_sig = Script().push_many(items)
-        assert tx.hex_hash() is None
 
     def test_total_output(self):
         tx = read_tx('b59de025.txn')

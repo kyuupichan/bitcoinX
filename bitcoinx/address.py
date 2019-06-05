@@ -28,8 +28,7 @@
 __all__ = (
     'Address', 'P2PKH_Address', 'P2SH_Address',
     'P2PK_Output', 'P2MultiSig_Output', 'OP_RETURN_Output', 'Unknown_Output',
-    'P2PK_Input', 'P2PKH_Input', 'P2MultiSig_Input', 'P2SHMultiSig_Input', 'Unknown_Input',
-    'classify_input_script', 'classify_output_script',
+    'classify_output_script',
 )
 
 from abc import ABC, abstractmethod
@@ -251,135 +250,6 @@ class Unknown_Output:
         return Script(self.to_script_bytes())
 
 
-class InputBase(ABC):
-
-    def is_complete(self):
-        return self.signatures_required() == self.signatures_present()
-
-    @abstractmethod
-    def signatures_required(self):
-        pass
-
-    @abstractmethod
-    def signatures_present(self):
-        pass
-
-    def to_script_bytes(self):
-        raise RuntimeError('no canonical script')
-
-    def to_script(self):
-        return Script(self.to_script_bytes())
-
-
-class Unknown_Input(InputBase):
-
-    def signatures_required(self):
-        return 0
-
-    def signatures_present(self):
-        return 0
-
-
-class P2PKH_Input(InputBase):
-
-    def __init__(self, signature, public_key):
-        self.signature = _to_signature(signature)
-        self.public_key = _to_public_key(public_key)
-
-    def to_script_bytes(self):
-        return push_item(self.signature.to_bytes()) + push_item(self.public_key.to_bytes())
-
-    def signatures_required(self):
-        return 1
-
-    def signatures_present(self):
-        return int(self.signature.is_present())
-
-
-class P2PK_Input(InputBase):
-
-    def __init__(self, signature):
-        self.signature = _to_signature(signature)
-
-    def to_script_bytes(self):
-        return push_item(self.signature.to_bytes())
-
-    def to_script(self):
-        return Script(self.to_script_bytes())
-
-    def signatures_required(self):
-        return 1
-
-    def signatures_present(self):
-        return int(self.signature.is_present())
-
-
-class P2MultiSig_Input(InputBase):
-
-    def __init__(self, signatures):
-        '''signatures is an iterable.'''
-        self.signatures = [_to_signature(signature) for signature in signatures]
-        if not self.signatures:
-            raise ValueError('no signatures provided')
-
-    def to_script_bytes(self):
-        parts = [pack_byte(Ops.OP_0)]
-        parts.extend(push_item(signature.to_bytes()) for signature in self.signatures)
-        return b''.join(parts)
-
-    def to_script(self):
-        return Script(self.to_script_bytes())
-
-    def signatures_required(self):
-        return len(self.signatures)
-
-    def signatures_present(self):
-        return sum(signature.is_present() for signature in self.signatures)
-
-    @classmethod
-    def from_template(cls, *items):
-        if not items or items[0] != b'':
-            raise ValueError('scriptsig must have at least 2 items with the first empty')
-        return cls(items[1:])
-
-
-class P2SHMultiSig_Input(InputBase):
-
-    def __init__(self, p2multisig_input, nested_script):
-        if not isinstance(p2multisig_input, P2MultiSig_Input):
-            raise TypeError('need a P2MultiSig_Input')
-        if not isinstance(nested_script, P2MultiSig_Output):
-            raise TypeError('need a P2MultiSig_Output')
-        if p2multisig_input.signatures_required() > nested_script.public_key_count():
-            raise ValueError('more signatures than public keys')
-        self.p2multisig_input = p2multisig_input
-        self.nested_script = nested_script
-
-    def to_script_bytes(self):
-        return (self.p2multisig_input.to_script_bytes() +
-                push_item(self.nested_script.to_script_bytes()))
-
-    def to_script(self):
-        return Script(self.to_script_bytes())
-
-    def signatures_required(self):
-        return self.p2multisig_input.signatures_required()
-
-    def signatures_present(self):
-        return self.p2multisig_input.signatures_present()
-
-    def hash160(self):
-        return self.nested_script.hash160()
-
-    @classmethod
-    def from_template(cls, *items):
-        if len(items) < 3:
-            raise ValueError('requires at least 3 items')
-        p2multisig_input = P2MultiSig_Input(items[1:-1])
-        nested_script = classify_output_script(Script(items[-1]))
-        return cls(p2multisig_input, nested_script)
-
-
 def _validate_hash160(hash160):
     if not isinstance(hash160, bytes):
         raise TypeError('hash160 must be bytes')
@@ -441,15 +311,3 @@ output_templates = (
 
 def classify_output_script(script):
     return _classify_script(script, output_templates, Unknown_Output)
-
-
-input_templates = (
-    (bytes((Ops.OP_PUSHDATA1, Ops.OP_PUSHDATA1)), P2PKH_Input),
-    (bytes((Ops.OP_PUSHDATA1, )), P2PK_Input),
-    (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'{3,}'), P2SHMultiSig_Input.from_template),
-    (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'{2,}'), P2MultiSig_Input.from_template),
-)
-
-
-def classify_input_script(script):
-    return _classify_script(script, input_templates, Unknown_Input)
