@@ -49,12 +49,6 @@ class Address(ABC):
     def __init__(self, coin=None):
         self._coin = coin or Bitcoin
 
-    def __eq__(self, other):
-        return str(self) == str(other)
-
-    def __hash__(self):
-        return hash(str(self))
-
     @abstractmethod
     def to_string(self, *, coin=None):
         pass
@@ -112,6 +106,12 @@ class P2PKH_Address(Address):
         super().__init__(coin)
         self._hash160 = _validate_hash160(hash160)
 
+    def __eq__(self, other):
+        return isinstance(other, P2PKH_Address) and self._hash160 == other._hash160
+
+    def __hash__(self):
+        return hash(self._hash160) + 2
+
     def to_string(self, *, coin=None):
         coin = coin or self._coin
         return base58_encode_check(pack_byte(coin.P2PKH_verbyte) + self._hash160)
@@ -135,6 +135,12 @@ class P2SH_Address(Address):
     def __init__(self, hash160, *, coin=None):
         super().__init__(coin)
         self._hash160 = _validate_hash160(hash160)
+
+    def __eq__(self, other):
+        return isinstance(other, P2SH_Address) and self._hash160 == other._hash160
+
+    def __hash__(self):
+        return hash(self._hash160) + 3
 
     def to_string(self, *, coin=None):
         coin = coin or self._coin

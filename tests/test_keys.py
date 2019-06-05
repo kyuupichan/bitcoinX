@@ -8,7 +8,7 @@ from bitcoinx.keys import *
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
 from bitcoinx.signature import InvalidSignatureError
-from bitcoinx import pack_byte, base58_encode_check
+from bitcoinx import pack_byte, base58_encode_check, Address
 
 
 one = bytes(31) + bytes([1])
@@ -672,17 +672,19 @@ class TestPublicKey:
         priv = PrivateKey(bytes(range(32)))
         pub = priv.public_key
 
-        assert pub.to_address() == '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L'
-        assert pub.to_address(compressed=False) == '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP'
+        assert pub.to_address() == Address.from_string('16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L')
+        assert pub.to_address(compressed=False) == Address.from_string(
+            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP')
 
-        assert pub.to_address(coin=Bitcoin) == '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L'
-        assert pub.to_address(coin=Bitcoin, compressed=False) == \
-            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP'
+        assert pub.to_address(coin=Bitcoin) == Address.from_string(
+            '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L')
+        assert pub.to_address(coin=Bitcoin, compressed=False) == Address.from_string(
+            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP')
 
-        assert pub.to_address(coin=BitcoinTestnet, compressed=True) \
-            == 'mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib'
-        assert pub.to_address(coin=BitcoinTestnet, compressed=False) \
-            == 'mvfcNNibtBZcRHqkTCsrCapVPU6dpCoKjp'
+        assert pub.to_address(coin=BitcoinTestnet, compressed=True) == Address.from_string(
+            'mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib')
+        assert pub.to_address(coin=BitcoinTestnet, compressed=False) == Address.from_string(
+            'mvfcNNibtBZcRHqkTCsrCapVPU6dpCoKjp')
 
 
     def test_add(self):

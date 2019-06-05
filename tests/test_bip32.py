@@ -3,6 +3,7 @@ import pytest
 from bitcoinx.bip32 import *
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check, PrivateKey,
+    Address
 )
 
 HARDENED = 1 << 31
@@ -68,7 +69,8 @@ class TestBIP32PublicKey:
         assert mpubkey.to_extended_key_string(coin=BitcoinTestnet) == MXPUB_TESTNET
         chg_master = mpubkey.child(1)
         chg5 = chg_master.child(5)
-        assert chg5.to_address(coin=Bitcoin) == '1BsEFqGtcZnVBbPeimcfAFTitQdTLvUXeX'
+        assert chg5.to_address(coin=Bitcoin) == Address.from_string(
+            '1BsEFqGtcZnVBbPeimcfAFTitQdTLvUXeX')
         assert chg5.to_extended_key_string() == (
             'xpub6AzPNZ1SAS7zmSnj6gakQ6tAKPzRVdQzieL3eCnoeT3A89nJaJKuUYW'
             'oZuYp8xWhCs1gF9yXAwGg7zKYhvCfhk9jrb1bULhLkQCwtB1Nnn1'
@@ -89,15 +91,15 @@ class TestBIP32PublicKey:
     def test_child(self):
         '''Test child derivations agree with Electrum.'''
         rec_master = mpubkey.child(0)
-        assert rec_master.to_address(coin=Bitcoin) == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
+        assert rec_master.to_address().to_string() == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
         chg_master = mpubkey.child(1)
-        assert chg_master.to_address(coin=Bitcoin) == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
+        assert chg_master.to_address().to_string() == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
         rec0 = rec_master.child(0)
-        assert rec0.to_address(coin=Bitcoin) == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
+        assert rec0.to_address().to_string() == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
         rec19 = rec_master.child(19)
-        assert rec19.to_address(coin=Bitcoin) == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
+        assert rec19.to_address().to_string() == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
         chg0 = chg_master.child(0)
-        assert chg0.to_address(coin=Bitcoin) == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
+        assert chg0.to_address(coin=Bitcoin).to_string() == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
 
         with pytest.raises(ValueError):
             mpubkey.child(-1)
@@ -109,15 +111,15 @@ class TestBIP32PublicKey:
     def test_child_safe(self):
         '''Test child derivations agree with Electrum.'''
         rec_master = mpubkey.child_safe(0)
-        assert rec_master.to_address(coin=Bitcoin) == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
+        assert rec_master.to_address().to_string() == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
         chg_master = mpubkey.child_safe(1)
-        assert chg_master.to_address(coin=Bitcoin) == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
+        assert chg_master.to_address().to_string() == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
         rec0 = rec_master.child_safe(0)
-        assert rec0.to_address(coin=Bitcoin) == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
+        assert rec0.to_address(coin=Bitcoin).to_string() == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
         rec19 = rec_master.child_safe(19)
-        assert rec19.to_address(coin=Bitcoin) == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
+        assert rec19.to_address(coin=Bitcoin).to_string() == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
         chg0 = chg_master.child_safe(0)
-        assert chg0.to_address(coin=Bitcoin) == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
+        assert chg0.to_address(coin=Bitcoin).to_string() == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
 
         with pytest.raises(ValueError):
             mpubkey.child_safe(-1)
@@ -150,7 +152,8 @@ class TestBIP32PublicKey:
         BIP32PublicKey.child = saved_child
 
     def test_address(self):
-        assert mpubkey.to_address(coin=Bitcoin) == '1ENCpq6mbb1KYcaodGG7eTpSpYvPnDjFmU'
+        assert mpubkey.to_address(coin=Bitcoin) == Address.from_string(
+            '1ENCpq6mbb1KYcaodGG7eTpSpYvPnDjFmU')
 
     def test_identifier(self):
         assert mpubkey.identifier() == bytes.fromhex('929c3db8d6e7eb52905464851ca70c8a456087dd')
@@ -232,9 +235,11 @@ class TestPrivKey(object):
         '''Test child derivations agree with Electrum.'''
         # Also tests WIF, address
         rec_master = mprivkey.child(0)
-        assert rec_master.public_key.to_address() == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
+        assert rec_master.public_key.to_address() == Address.from_string(
+            '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg')
         chg_master = mprivkey.child(1)
-        assert chg_master.public_key.to_address() == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
+        assert chg_master.public_key.to_address() == Address.from_string(
+            '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy')
         rec0 = rec_master.child(0)
         assert rec0.to_WIF() == 'L2M6WWMdu3YfWxvLGF76HZgHCA6idwVQx5QL91vfdqeZi8XAgWkz'
         rec19 = rec_master.child(19)
@@ -253,9 +258,11 @@ class TestPrivKey(object):
         '''Test child derivations agree with Electrum.'''
         # Also tests WIF, address
         rec_master = mprivkey.child_safe(0)
-        assert rec_master.public_key.to_address() == '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg'
+        assert rec_master.public_key.to_address() == Address.from_string(
+            '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg')
         chg_master = mprivkey.child_safe(1)
-        assert chg_master.public_key.to_address() == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
+        assert chg_master.public_key.to_address() == Address.from_string(
+            '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy')
         rec0 = rec_master.child_safe(0)
         assert rec0.to_WIF() == 'L2M6WWMdu3YfWxvLGF76HZgHCA6idwVQx5QL91vfdqeZi8XAgWkz'
         rec19 = rec_master.child_safe(19)
