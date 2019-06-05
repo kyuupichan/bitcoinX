@@ -28,12 +28,13 @@ class TestAddress:
         assert address == equal
 
     def test_from_string_coin(self):
-        assert Address.from_string('1111111111111111111114oLvT2', coin=Bitcoin) == \
+        assert Address.from_string('1111111111111111111114oLvT2', coin=Bitcoin).to_string() == \
             '1111111111111111111114oLvT2'
-        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=BitcoinTestnet) == \
-            'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
-        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=
-                                   BitcoinScalingTestnet) == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=BitcoinTestnet) \
+            .to_string() == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX',
+                                   coin=BitcoinScalingTestnet).to_string() == \
+                                   'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
         with pytest.raises(ValueError):
             Address.from_string('1111111111111111111114oLvT2', coin=BitcoinTestnet)
         with pytest.raises(ValueError):
@@ -60,7 +61,7 @@ class TestAddress:
         address = Address.from_string(string)
         assert isinstance(address, kind)
         assert address.coin() is coin
-        assert address == equal
+        assert address.to_string() == equal
 
     def test_cashaddr_bad(self):
         with pytest.raises(ValueError):
@@ -102,7 +103,7 @@ class TestP2PKH_Address:
 
     def test_to_script_bytes(self):
         address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'))
-        assert address == '1LXnPYpHTwQeWfBVnQZ4yDP23b57NwoyrP'
+        assert address.to_string() == '1LXnPYpHTwQeWfBVnQZ4yDP23b57NwoyrP'
         raw = address.to_script_bytes()
         assert isinstance(raw, bytes)
         assert raw.hex() == '76a914d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c088ac'
@@ -117,14 +118,12 @@ class TestP2PKH_Address:
     def test_hashable(self):
         {P2PKH_Address(bytes(20))}
 
-    def test_hash(self):
-        addr = P2PKH_Address(os.urandom(20))
-        assert hash(addr) == hash(str(addr))
-
     def test_eq(self):
         address = P2PKH_Address(int_to_be_bytes(1, 20))
-        assert address == '11111111111111111111BZbvjr'
         assert address == P2PKH_Address(int_to_be_bytes(1, 20))
+        assert address == P2PKH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)
+        assert address != '11111111111111111111BZbvjr'
+        assert address != P2SH_Address(int_to_be_bytes(1, 20))
 
 
 class TestP2SH_Address:
@@ -156,7 +155,7 @@ class TestP2SH_Address:
 
     def test_to_script_bytes(self):
         address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'))
-        assert address == '3LAP2V4pNJhZ11gwAFUZsDnvXDcyeeaQM5'
+        assert address.to_string() == '3LAP2V4pNJhZ11gwAFUZsDnvXDcyeeaQM5'
         raw = address.to_script_bytes()
         assert isinstance(raw, bytes)
         assert raw.hex() == 'a914ca9f1c4998bf46f66af34d949d8a8f189b6675b587'
@@ -171,14 +170,12 @@ class TestP2SH_Address:
     def test_hashable(self):
         {P2SH_Address(bytes(20))}
 
-    def test_hash(self):
-        addr = P2SH_Address(os.urandom(20))
-        assert hash(addr) == hash(str(addr))
-
     def test_eq(self):
         address = P2SH_Address(int_to_be_bytes(1, 20))
-        assert address == '31h1vYVSYuKP6AhS86fbRdMw9XHiiQ93Mb'
         assert address == P2SH_Address(int_to_be_bytes(1, 20))
+        assert address == P2SH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)
+        assert address != '31h1vYVSYuKP6AhS86fbRdMw9XHiiQ93Mb'
+        assert address != P2PKH_Address(int_to_be_bytes(1, 20))
 
 
 class TestP2PK_Output:
