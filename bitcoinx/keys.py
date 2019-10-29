@@ -438,7 +438,7 @@ class PublicKey:
     def to_address(self, *, compressed=None, coin=None):
         '''Return the public key as a bitcoin P2PKH address.'''
         coin = coin or self._coin
-        return P2PKH_Address(self.hash160(compressed=compressed), coin=coin)
+        return P2PKH_Address(self.hash160(compressed=compressed), coin)
 
     def add(self, value):
         '''Return a new PublicKey instance formed by adding value*G to this one.

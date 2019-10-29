@@ -32,6 +32,7 @@ __all__ = (
 )
 
 from abc import ABC, abstractmethod
+from functools import partial
 import re
 
 from bitcoinx import cashaddr
@@ -45,19 +46,19 @@ from .signature import Signature
 
 class Address(ABC):
 
-    def __init__(self, coin=None):
-        self._coin = coin or Bitcoin
+    def __init__(self, coin):
+        self._coin = coin
 
     @abstractmethod
-    def to_string(self, *, coin=None):
+    def to_string(self):
         pass
 
     @classmethod
-    def from_string(cls, text, *, coin=None):
+    def from_string(cls, text, coin):
         '''Construct from an address string.'''
         if len(text) > 35:
             try:
-                return cls._from_cashaddr_string(text, coin=coin)
+                return cls._from_cashaddr_string(text, coin)
             except ValueError as e:
                 pass
 
@@ -67,17 +68,15 @@ class Address(ABC):
             raise ValueError(f'invalid address: {text}')
 
         verbyte, hash160 = raw[0], raw[1:]
-        coins = all_coins if coin is None else [coin]
-        for test in coins:
-            if verbyte == test.P2PKH_verbyte:
-                return P2PKH_Address(hash160, coin=test)
-            if verbyte == test.P2SH_verbyte:
-                return P2SH_Address(hash160, coin=test)
+        if verbyte == coin.P2PKH_verbyte:
+            return P2PKH_Address(hash160, coin)
+        if verbyte == coin.P2SH_verbyte:
+            return P2SH_Address(hash160, coin)
 
-        raise ValueError(f'unknown version byte: {verbyte}')
+        raise ValueError(f'unknown version byte {verbyte} for coin {coin.name}')
 
     @classmethod
-    def _from_cashaddr_string(cls, text, *, coin=None):
+    def _from_cashaddr_string(cls, text, coin):
         '''Construct from a cashaddress string.'''
         coin = coin or Bitcoin
         prefix = coin.cashaddr_prefix
@@ -89,8 +88,8 @@ class Address(ABC):
         assert prefix == addr_prefix
 
         if kind == cashaddr.PUBKEY_TYPE:
-            return P2PKH_Address(hash160, coin=coin)
-        return P2SH_Address(hash160, coin=coin)
+            return P2PKH_Address(hash160, coin)
+        return P2SH_Address(hash160, coin)
 
     def coin(self):
         return self._coin
@@ -101,7 +100,7 @@ class Address(ABC):
 
 class P2PKH_Address(Address):
 
-    def __init__(self, hash160, *, coin=None):
+    def __init__(self, hash160, coin):
         super().__init__(coin)
         self._hash160 = _validate_hash160(hash160)
 
@@ -111,9 +110,8 @@ class P2PKH_Address(Address):
     def __hash__(self):
         return hash(self._hash160) + 2
 
-    def to_string(self, *, coin=None):
-        coin = coin or self._coin
-        return base58_encode_check(pack_byte(coin.P2PKH_verbyte) + self._hash160)
+    def to_string(self):
+        return base58_encode_check(pack_byte(self._coin.P2PKH_verbyte) + self._hash160)
 
     def hash160(self):
         return self._hash160
@@ -131,7 +129,7 @@ class P2PKH_Address(Address):
 
 class P2SH_Address(Address):
 
-    def __init__(self, hash160, *, coin=None):
+    def __init__(self, hash160, coin):
         super().__init__(coin)
         self._hash160 = _validate_hash160(hash160)
 
@@ -141,9 +139,8 @@ class P2SH_Address(Address):
     def __hash__(self):
         return hash(self._hash160) + 3
 
-    def to_string(self, *, coin=None):
-        coin = coin or self._coin
-        return base58_encode_check(pack_byte(coin.P2SH_verbyte) + self._hash160)
+    def to_string(self):
+        return base58_encode_check(pack_byte(self._coin.P2SH_verbyte) + self._hash160)
 
     def hash160(self):
         return self._hash160
@@ -297,17 +294,23 @@ def _classify_script(script, templates, unknown_class):
     return unknown_class()
 
 
-output_templates = (
-    (bytes((Ops.OP_DUP, Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUALVERIFY, Ops.OP_CHECKSIG)),
-     P2PKH_Address),
-    (bytes((Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUAL)), P2SH_Address),
-    (bytes((Ops.OP_PUSHDATA1, Ops.OP_CHECKSIG)), P2PK_Output),
-    # Note this loses script ops other than pushdata
-    (re.compile(pack_byte(Ops.OP_RETURN)), OP_RETURN_Output.from_template),
-    (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'{3,}' + pack_byte(Ops.OP_CHECKMULTISIG) + b'$'),
-     P2MultiSig_Output.from_template),
-)
+def _coin_output_script_templates(coin):
+    # Addresses have Coin-specific constructors
+    return (
+        (bytes((Ops.OP_DUP, Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUALVERIFY,
+                Ops.OP_CHECKSIG)), partial(P2PKH_Address, coin=coin)),
+        (bytes((Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUAL)),
+         partial(P2SH_Address, coin=coin)),
+        (bytes((Ops.OP_PUSHDATA1, Ops.OP_CHECKSIG)), P2PK_Output),
+        # Note this loses script ops other than pushdata
+        (re.compile(pack_byte(Ops.OP_RETURN)), OP_RETURN_Output.from_template),
+        (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'{3,}' + pack_byte(Ops.OP_CHECKMULTISIG)
+                    + b'$'), P2MultiSig_Output.from_template),
+    )
 
 
-def classify_output_script(script):
-    return _classify_script(script, output_templates, Unknown_Output)
+def classify_output_script(script, coin):
+    templates = coin.output_script_templates
+    if templates is None:
+        templates = coin.output_script_templates = _coin_output_script_templates(coin)
+    return _classify_script(script, templates, Unknown_Output)

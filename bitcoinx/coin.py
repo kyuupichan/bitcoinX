@@ -89,6 +89,8 @@ class Coin(object):
         self.xpub_verbytes = xpub_verbytes
         self.xprv_verbytes = xprv_verbytes
         self.cashaddr_prefix = cashaddr_prefix
+        # A cache
+        self.output_script_templates = None
 
     def bits_to_difficulty(self, bits):
         return Bitcoin.max_target / bits_to_target(bits)
