@@ -94,10 +94,9 @@ class BIP32PrivateKey(PrivateKey):
         super().__init__(secret, True, coin)
         self._derivation = derivation
 
-    def _extended_key(self, coin):
+    def _extended_key(self):
         '''Return a raw extended private key.'''
-        coin = coin or self._coin
-        return self._derivation.extended_key(coin, self._secret)
+        return self._derivation.extended_key(self._coin, self._secret)
 
     @classmethod
     def _from_parts(cls, privkey, chain_code, coin):
@@ -105,7 +104,7 @@ class BIP32PrivateKey(PrivateKey):
         return cls(privkey, derivation, coin)
 
     @classmethod
-    def from_seed(cls, seed, *, coin=Bitcoin):
+    def from_seed(cls, seed, coin):
         # This hard-coded message string seems to be coin-independent...
         privkey, chain_code = hmac_sha512_halves(b'Bitcoin seed', seed)
         return cls._from_parts(privkey, chain_code, coin)
@@ -165,9 +164,9 @@ class BIP32PrivateKey(PrivateKey):
         '''Return the key's fingerprint as 4 bytes.'''
         return self.public_key.fingerprint()
 
-    def to_extended_key_string(self, *, coin=None):
+    def to_extended_key_string(self):
         '''Return an extended key as a base58 string.'''
-        return base58_encode_check(self._extended_key(coin))
+        return base58_encode_check(self._extended_key())
 
     def __repr__(self):
         return f'BIP32PrivateKey("{str(self)}")'
@@ -188,10 +187,9 @@ class BIP32PublicKey(PublicKey):
         super().__init__(public_key, True, coin)
         self._derivation = derivation
 
-    def _extended_key(self, coin):
+    def _extended_key(self):
         '''Return a raw extended private key.'''
-        coin = coin or self._coin
-        return self._derivation.extended_key(coin, self.to_bytes())
+        return self._derivation.extended_key(self._coin, self.to_bytes())
 
     def child(self, n):
         '''Return the derived child extended pubkey at index N.'''
@@ -226,9 +224,9 @@ class BIP32PublicKey(PublicKey):
         '''Return the key's fingerprint as 4 bytes.'''
         return self.identifier()[:4]
 
-    def to_extended_key_string(self, *, coin=None):
+    def to_extended_key_string(self):
         '''Return an extended key as a base58 string.'''
-        return base58_encode_check(self._extended_key(coin))
+        return base58_encode_check(self._extended_key())
 
     def __str__(self):
         return self.to_extended_key_string()
