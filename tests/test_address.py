@@ -14,40 +14,41 @@ from bitcoinx.address import *
 class TestAddress:
 
     @pytest.mark.parametrize("string,kind,coin,equal", (
-        ('1111111111111111111114oLvT2', P2PKH_Address, Bitcoin, P2PKH_Address(bytes(20))),
+        ('1111111111111111111114oLvT2', P2PKH_Address, Bitcoin, P2PKH_Address(bytes(20), Bitcoin)),
         ('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', P2PKH_Address, BitcoinTestnet,
          P2PKH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)),
-        ('31h1vYVSYuKP6AhS86fbRdMw9XHieotbST', P2SH_Address, Bitcoin, P2SH_Address(bytes(20))),
+        ('31h1vYVSYuKP6AhS86fbRdMw9XHieotbST', P2SH_Address, Bitcoin,
+         P2SH_Address(bytes(20), Bitcoin)),
         ('2MsFDzHRUAMpjHxKyoEHU3aMCMsVtXMsfu8', P2SH_Address, BitcoinTestnet,
          P2SH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)),
     ))
     def test_from_string(self, string, kind, coin, equal):
-        address = Address.from_string(string)
+        address = Address.from_string(string, coin)
         assert isinstance(address, kind)
         assert address.coin() is coin
         assert address == equal
 
     def test_from_string_coin(self):
-        assert Address.from_string('1111111111111111111114oLvT2', coin=Bitcoin).to_string() == \
+        assert Address.from_string('1111111111111111111114oLvT2', Bitcoin).to_string() == \
             '1111111111111111111114oLvT2'
-        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=BitcoinTestnet) \
+        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', BitcoinTestnet) \
             .to_string() == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
         assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX',
-                                   coin=BitcoinScalingTestnet).to_string() == \
+                                   BitcoinScalingTestnet).to_string() == \
                                    'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
         with pytest.raises(ValueError):
-            Address.from_string('1111111111111111111114oLvT2', coin=BitcoinTestnet)
+            Address.from_string('1111111111111111111114oLvT2', BitcoinTestnet)
         with pytest.raises(ValueError):
-            Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', coin=Bitcoin)
+            Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', Bitcoin)
 
 
     def test_from_string_bad(self):
         # Too short
         with pytest.raises(ValueError):
-            Address.from_string('111111111111111111117K4nzc')
+            Address.from_string('111111111111111111117K4nzc', Bitcoin)
         # Unknown version byte
         with pytest.raises(ValueError):
-            Address.from_string('4d3RrygbPdAtMuFnDmzsN8T5fYKVUjFu7m')
+            Address.from_string('mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib', Bitcoin)
 
     @pytest.mark.parametrize("string,kind,coin,equal", (
         ('qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', P2PKH_Address, Bitcoin,
@@ -58,124 +59,130 @@ class TestAddress:
          '36B7DTHvi58L3rq9Ni3jRVxBkeJa3R5EC1'),
     ))
     def test_cashaddr(self, string, kind, coin, equal):
-        address = Address.from_string(string)
+        address = Address.from_string(string, coin)
         assert isinstance(address, kind)
         assert address.coin() is coin
         assert address.to_string() == equal
 
     def test_cashaddr_bad(self):
         with pytest.raises(ValueError):
-            address = Address.from_string('bitcoinCash:isamaurysbitcoinandtherealbcash')
+            address = Address.from_string('bitcoinCash:isamaurysbitcoinandtherealbcash', Bitcoin)
         with pytest.raises(ValueError):
-            Address.from_string('bcash:qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9')
+            Address.from_string('bcash:qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', Bitcoin)
         with pytest.raises(ValueError):
-            Address.from_string('zvqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxhap8z55')
+            Address.from_string('zvqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqxhap8z55',
+                                Bitcoin)
         with pytest.raises(ValueError):
-            Address.from_string('qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', coin=BitcoinTestnet)
+            Address.from_string('qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', BitcoinTestnet)
 
 
 class TestP2PKH_Address:
 
     def test_constructor(self):
-        address = P2PKH_Address(bytes(20))
+        address = P2PKH_Address(bytes(20), Bitcoin)
         assert address.to_string() == '1111111111111111111114oLvT2'
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
-            P2PKH_Address(bytearray(20))
+            P2PKH_Address(bytes(20))
+        with pytest.raises(TypeError):
+            P2PKH_Address(bytearray(20), Bitcoin)
         with pytest.raises(ValueError):
-            P2PKH_Address(bytes(21))
+            P2PKH_Address(bytes(21), Bitcoin)
         with pytest.raises(ValueError):
-            P2PKH_Address(bytes(19))
+            P2PKH_Address(bytes(19), Bitcoin)
 
     def test_coin(self):
-        address = P2PKH_Address(bytes(20))
-        assert address.coin() is Bitcoin
+        address = P2PKH_Address(bytes(20), BitcoinTestnet)
+        assert address.coin() is BitcoinTestnet
 
     def test_hash160(self):
         data = os.urandom(20)
-        assert P2PKH_Address(data).hash160() is data
+        assert P2PKH_Address(data, Bitcoin).hash160() is data
 
     def test_to_string(self):
-        address = P2PKH_Address(int_to_be_bytes(1, 20))
+        address = P2PKH_Address(int_to_be_bytes(1, 20), Bitcoin)
         assert address.to_string() == '11111111111111111111BZbvjr'
-        assert address.to_string(coin=BitcoinTestnet) == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+        address = P2PKH_Address(int_to_be_bytes(1, 20), BitcoinTestnet)
+        assert address.to_string() == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
 
     def test_to_script_bytes(self):
-        address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'))
+        address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'), Bitcoin)
         assert address.to_string() == '1LXnPYpHTwQeWfBVnQZ4yDP23b57NwoyrP'
         raw = address.to_script_bytes()
         assert isinstance(raw, bytes)
         assert raw.hex() == '76a914d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c088ac'
 
     def test_to_script(self):
-        address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'))
+        address = P2PKH_Address(bytes.fromhex('d63cc1e3b6009e31d03bd5f8046cbe0f7e37e8c0'), Bitcoin)
         S = address.to_script()
         assert isinstance(S, Script)
         assert S == address.to_script_bytes()
-        assert isinstance(classify_output_script(S), P2PKH_Address)
+        assert isinstance(classify_output_script(S, Bitcoin), P2PKH_Address)
 
     def test_hashable(self):
-        {P2PKH_Address(bytes(20))}
+        {P2PKH_Address(bytes(20), Bitcoin)}
 
     def test_eq(self):
-        address = P2PKH_Address(int_to_be_bytes(1, 20))
-        assert address == P2PKH_Address(int_to_be_bytes(1, 20))
-        assert address == P2PKH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)
+        address = P2PKH_Address(int_to_be_bytes(1, 20), Bitcoin)
+        assert address == P2PKH_Address(int_to_be_bytes(1, 20), Bitcoin)
+        assert address == P2PKH_Address(int_to_be_bytes(1, 20), BitcoinTestnet)
         assert address != '11111111111111111111BZbvjr'
-        assert address != P2SH_Address(int_to_be_bytes(1, 20))
+        assert address != P2SH_Address(int_to_be_bytes(1, 20), Bitcoin)
 
 
 class TestP2SH_Address:
 
     def test_constructor(self):
-        address = P2SH_Address(bytes(20))
+        address = P2SH_Address(bytes(20), Bitcoin)
         assert address.to_string() == '31h1vYVSYuKP6AhS86fbRdMw9XHieotbST'
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
-            P2SH_Address(bytearray(20))
+            P2SH_Address(bytes(20))
+        with pytest.raises(TypeError):
+            P2SH_Address(bytearray(20), Bitcoin)
         with pytest.raises(ValueError):
-            P2SH_Address(bytes(21))
+            P2SH_Address(bytes(21), Bitcoin)
         with pytest.raises(ValueError):
-            P2SH_Address(bytes(19))
+            P2SH_Address(bytes(19), Bitcoin)
 
     def test_coin(self):
-        address = P2SH_Address(bytes(20))
-        assert address.coin() is Bitcoin
+        address = P2SH_Address(bytes(20), BitcoinTestnet)
+        assert address.coin() is BitcoinTestnet
 
     def test_hash160(self):
         data = os.urandom(20)
-        assert P2SH_Address(data).hash160() is data
+        assert P2SH_Address(data, Bitcoin).hash160() is data
 
     def test_to_string(self):
-        address = P2SH_Address(int_to_be_bytes(1, 20))
+        address = P2SH_Address(int_to_be_bytes(1, 20), Bitcoin)
         assert address.to_string() == '31h1vYVSYuKP6AhS86fbRdMw9XHiiQ93Mb'
-        assert address.to_string(coin=BitcoinTestnet) == '2MsFDzHRUAMpjHxKyoEHU3aMCMsVtXMsfu8'
+        address = P2SH_Address(int_to_be_bytes(1, 20), BitcoinTestnet)
+        assert address.to_string() == '2MsFDzHRUAMpjHxKyoEHU3aMCMsVtXMsfu8'
 
     def test_to_script_bytes(self):
-        address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'))
+        address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'), Bitcoin)
         assert address.to_string() == '3LAP2V4pNJhZ11gwAFUZsDnvXDcyeeaQM5'
         raw = address.to_script_bytes()
         assert isinstance(raw, bytes)
         assert raw.hex() == 'a914ca9f1c4998bf46f66af34d949d8a8f189b6675b587'
 
     def test_to_script(self):
-        address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'))
+        address = P2SH_Address(bytes.fromhex('ca9f1c4998bf46f66af34d949d8a8f189b6675b5'), Bitcoin)
         S = address.to_script()
         assert isinstance(S, Script)
         assert S == address.to_script_bytes()
-        assert isinstance(classify_output_script(S), P2SH_Address)
+        assert isinstance(classify_output_script(S, Bitcoin), P2SH_Address)
 
     def test_hashable(self):
-        {P2SH_Address(bytes(20))}
+        {P2SH_Address(bytes(20), Bitcoin)}
 
     def test_eq(self):
-        address = P2SH_Address(int_to_be_bytes(1, 20))
-        assert address == P2SH_Address(int_to_be_bytes(1, 20))
-        assert address == P2SH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)
+        address = P2SH_Address(int_to_be_bytes(1, 20), Bitcoin)
+        assert address == P2SH_Address(int_to_be_bytes(1, 20), Bitcoin)
         assert address != '31h1vYVSYuKP6AhS86fbRdMw9XHiiQ93Mb'
-        assert address != P2PKH_Address(int_to_be_bytes(1, 20))
+        assert address != P2PKH_Address(int_to_be_bytes(1, 20), Bitcoin)
 
 
 class TestP2PK_Output:
@@ -214,7 +221,7 @@ class TestP2PK_Output:
         S = output.to_script()
         assert isinstance(S, Script)
         assert S == output.to_script_bytes()
-        assert isinstance(classify_output_script(S), P2PK_Output)
+        assert isinstance(classify_output_script(S, Bitcoin), P2PK_Output)
 
 
 MS_PUBKEYS = [PrivateKey.from_random().public_key for n in range(5)]
@@ -350,38 +357,38 @@ class TestClassification:
     def test_P2PKH(self):
         script_hex = '76a914a6dbba870185ab6689f386a40522ae6cb5c7b61a88ac'
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, P2PKH_Address)
 
         prefix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
         s2 = Script.from_hex(prefix.hex() + script_hex)
-        sc2 = classify_output_script(s2)
+        sc2 = classify_output_script(s2, Bitcoin)
         assert s2 != s
         assert isinstance(sc2, P2PKH_Address)
 
     def test_P2SH(self):
         script_hex = 'a9143e4501f9f212cb6813b3815edbc7013d6a3f0f1087'
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, P2SH_Address)
 
         suffix = push_item(b'foobar') + pack_byte(OP_DROP) + pack_byte(OP_NOP)
         s2 = Script.from_hex(script_hex + suffix.hex())
-        sc2 = classify_output_script(s2)
+        sc2 = classify_output_script(s2, Bitcoin)
         assert s2 != s
         assert isinstance(sc2, P2SH_Address)
 
     def test_P2PK(self):
         script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4ac'
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, P2PK_Output)
         assert (sc.public_key.to_hex() ==
                 '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4')
 
         suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
         s2 = Script.from_hex(script_hex + suffix.hex())
-        sc2 = classify_output_script(s2)
+        sc2 = classify_output_script(s2, Bitcoin)
         assert sc2.public_key == sc.public_key
         assert s2 != s
         assert isinstance(sc2, P2PK_Output)
@@ -390,52 +397,51 @@ class TestClassification:
         script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'
                       '3fa0879c543ac97f34daffdaeed808f3500811aa5070e4a1f7e2daed3dd22ef2052ae')
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, P2MultiSig_Output)
         assert len(sc.public_keys) == 2
         assert sc.threshold == 2
 
         # Confirm suffix fails to match
         s = Script.from_hex(script_hex + 'a0')
-        assert isinstance(classify_output_script(s), Unknown_Output)
+        assert isinstance(classify_output_script(s, Bitcoin), Unknown_Output)
         # Confirm prefix fails to match
         s = Script.from_hex('a0' + script_hex)
-        assert isinstance(classify_output_script(s), Unknown_Output)
+        assert isinstance(classify_output_script(s, Bitcoin), Unknown_Output)
 
     def test_OP_RETURN(self):
         s = Script(pack_byte(OP_RETURN))
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, OP_RETURN_Output)
 
         s = Script(pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, OP_RETURN_Output)
 
         # Truncated OP_RETURN script
         s = Script(pack_byte(OP_RETURN) + pack_byte(1))
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, OP_RETURN_Output)
 
     def test_unknown(self):
         # Modified final pubkey byte; not a curve point
         script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b3ac'
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, Unknown_Output)
 
         # Truncated script
         script_hex = '210363f7'
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, Unknown_Output)
 
         # Unknown script
         script_hex = pack_byte(OP_1).hex()
         s = Script.from_hex(script_hex)
-        sc = classify_output_script(s)
+        sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, Unknown_Output)
 
 
 def test_abstract_methods():
     Address.to_string(None)
-    Address.to_string(None, coin=Bitcoin)

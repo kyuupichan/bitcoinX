@@ -672,19 +672,20 @@ class TestPublicKey:
         priv = PrivateKey(bytes(range(32)))
         pub = priv.public_key
 
-        assert pub.to_address() == Address.from_string('16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L')
+        assert pub.to_address() == Address.from_string('16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L',
+                                                       Bitcoin)
         assert pub.to_address(compressed=False) == Address.from_string(
-            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP')
+            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP', Bitcoin)
 
         assert pub.to_address(coin=Bitcoin) == Address.from_string(
-            '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L')
+            '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L', Bitcoin)
         assert pub.to_address(coin=Bitcoin, compressed=False) == Address.from_string(
-            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP')
+            '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP', Bitcoin)
 
         assert pub.to_address(coin=BitcoinTestnet, compressed=True) == Address.from_string(
-            'mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib')
+            'mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib', BitcoinTestnet)
         assert pub.to_address(coin=BitcoinTestnet, compressed=False) == Address.from_string(
-            'mvfcNNibtBZcRHqkTCsrCapVPU6dpCoKjp')
+            'mvfcNNibtBZcRHqkTCsrCapVPU6dpCoKjp', BitcoinTestnet)
 
 
     def test_add(self):

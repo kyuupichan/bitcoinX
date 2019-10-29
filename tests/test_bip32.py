@@ -70,7 +70,7 @@ class TestBIP32PublicKey:
         chg_master = mpubkey.child(1)
         chg5 = chg_master.child(5)
         assert chg5.to_address(coin=Bitcoin) == Address.from_string(
-            '1BsEFqGtcZnVBbPeimcfAFTitQdTLvUXeX')
+            '1BsEFqGtcZnVBbPeimcfAFTitQdTLvUXeX', Bitcoin)
         assert chg5.to_extended_key_string() == (
             'xpub6AzPNZ1SAS7zmSnj6gakQ6tAKPzRVdQzieL3eCnoeT3A89nJaJKuUYW'
             'oZuYp8xWhCs1gF9yXAwGg7zKYhvCfhk9jrb1bULhLkQCwtB1Nnn1'
@@ -153,7 +153,7 @@ class TestBIP32PublicKey:
 
     def test_address(self):
         assert mpubkey.to_address(coin=Bitcoin) == Address.from_string(
-            '1ENCpq6mbb1KYcaodGG7eTpSpYvPnDjFmU')
+            '1ENCpq6mbb1KYcaodGG7eTpSpYvPnDjFmU', Bitcoin)
 
     def test_identifier(self):
         assert mpubkey.identifier() == bytes.fromhex('929c3db8d6e7eb52905464851ca70c8a456087dd')
@@ -236,10 +236,10 @@ class TestPrivKey(object):
         # Also tests WIF, address
         rec_master = mprivkey.child(0)
         assert rec_master.public_key.to_address() == Address.from_string(
-            '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg')
+            '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg', Bitcoin)
         chg_master = mprivkey.child(1)
         assert chg_master.public_key.to_address() == Address.from_string(
-            '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy')
+            '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy', Bitcoin)
         rec0 = rec_master.child(0)
         assert rec0.to_WIF() == 'L2M6WWMdu3YfWxvLGF76HZgHCA6idwVQx5QL91vfdqeZi8XAgWkz'
         rec19 = rec_master.child(19)
@@ -259,10 +259,10 @@ class TestPrivKey(object):
         # Also tests WIF, address
         rec_master = mprivkey.child_safe(0)
         assert rec_master.public_key.to_address() == Address.from_string(
-            '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg')
+            '18zW4D1Vxx9jVPGzsFzgXj8KrSLHt7w2cg', Bitcoin)
         chg_master = mprivkey.child_safe(1)
         assert chg_master.public_key.to_address() == Address.from_string(
-            '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy')
+            '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy', Bitcoin)
         rec0 = rec_master.child_safe(0)
         assert rec0.to_WIF() == 'L2M6WWMdu3YfWxvLGF76HZgHCA6idwVQx5QL91vfdqeZi8XAgWkz'
         rec19 = rec_master.child_safe(19)
