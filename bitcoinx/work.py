@@ -149,7 +149,7 @@ def required_bits_mainnet(headers, chain, height, _timestamp=None):
         return _required_bits_DAA(headers, chain, height)
 
 
-def _required_bits_testnet(headers, chain, height, timestamp, daa_height):
+def _required_bits_testnet(headers, chain, height, timestamp, daa_height, has_daa_minpow):
     def prior_non_special_bits():
         genesis_bits = headers.coin.genesis_bits
         raw_header = headers.raw_header_at_height
@@ -172,14 +172,16 @@ def _required_bits_testnet(headers, chain, height, timestamp, daa_height):
             return headers.coin.genesis_bits
         return prior_non_special_bits()
     else:
-        if is_slow:
+        if has_daa_minpow and is_slow:
             return headers.coin.genesis_bits
         return _required_bits_DAA(headers, chain, height)
 
 
 def required_bits_testnet(headers, chain, height, timestamp):
-    return _required_bits_testnet(headers, chain, height, timestamp, 1188697)
+    return _required_bits_testnet(headers, chain, height, timestamp, 1188697, True)
 
 
 def required_bits_scaling_testnet(headers, chain, height, timestamp):
-    return _required_bits_testnet(headers, chain, height, timestamp, 2200)
+    # The `fPowAllowMinDifficultyBlocks` setting is disabled on STN, so we no longer
+    # check it and adjust min pow after the DAA height.
+    return _required_bits_testnet(headers, chain, height, timestamp, 2200, False)
