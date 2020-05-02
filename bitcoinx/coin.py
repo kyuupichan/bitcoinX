@@ -24,7 +24,8 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'Coin', 'Header', 'all_coins',
+    'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'BitcoinRegTestnet', 'Coin', 'Header',
+    'all_coins',
 )
 
 import attr
@@ -175,5 +176,20 @@ BitcoinScalingTestnet = Coin(
     'bchtest',
 )
 
+
+BitcoinRegTestnet = Coin(
+    'Bitcoin regression testnet',
+    '0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd'
+    '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
+    required_bits_testnet,
+    0x6f,
+    0xc4,
+    0xef,
+    bytes.fromhex("043587cf"),
+    bytes.fromhex("04358394"),
+    'bchtest',
+)
+
+
 # rt12 -- Scaling testnet has same settings as regular testnet, so will cause conflicts.
-all_coins = (Bitcoin, BitcoinTestnet, BitcoinScalingTestnet)
+all_coins = (Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, BitcoinRegTestnet)

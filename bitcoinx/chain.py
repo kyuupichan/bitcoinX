@@ -64,7 +64,7 @@ class IncorrectBits(ChainException):
         self.required_bits = required_bits
 
     def __str__(self):
-        return f'header f{self.header} requires bits 0x{self.required_bits}'
+        return f'header {self.header} requires bits 0x{self.required_bits}'
 
 
 class InsufficientPoW(ChainException):
