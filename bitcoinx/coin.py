@@ -24,7 +24,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 __all__ = (
-    'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'BitcoinRegTestnet', 'Coin', 'Header',
+    'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'BitcoinRegtest', 'Coin', 'Header',
     'all_coins',
 )
 
@@ -177,7 +177,7 @@ BitcoinScalingTestnet = Coin(
 )
 
 
-BitcoinRegTestnet = Coin(
+BitcoinRegtest = Coin(
     'Bitcoin regression testnet',
     '0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd'
     '7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
@@ -192,4 +192,4 @@ BitcoinRegTestnet = Coin(
 
 
 # rt12 -- Scaling testnet has same settings as regular testnet, so will cause conflicts.
-all_coins = (Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, BitcoinRegTestnet)
+all_coins = (Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, BitcoinRegtest)
