@@ -16,12 +16,12 @@ jobs:
 - template: run-tests.yml
   parameters:
     name: TestPython36_Mac
-    vmImage: 'macOS-10.13'
+    vmImage: 'macOS-10.14'
     pythonVersion: '3.6'
 - template: run-tests.yml
   parameters:
     name: TestPython37_Mac
-    vmImage: 'macOS-10.13'
+    vmImage: 'macOS-10.14'
     pythonVersion: '3.7'
 - template: run-tests.yml
   parameters:
