@@ -28,12 +28,15 @@
 
 __all__ = (
     'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
+    'classify_output_script',
     'Script', 'ScriptError', 'TruncatedScriptError'
 )
 
-
+import re
 from enum import IntEnum
+from functools import partial
 
+from .consts import JSONFlags
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32,
@@ -262,6 +265,54 @@ def _to_bytes(item):
     raise TypeError(f"cannot convert append {item} to a scriptlet")
 
 
+def _classify_script(script, templates, unknown_class):
+    our_template, items = script.to_template()
+
+    for template, constructor in templates:
+        if isinstance(template, bytes):
+            if template != our_template:
+                continue
+        else:
+            match = template.match(our_template)
+            if not match:
+                continue
+
+        try:
+            return constructor(*items)
+        except (ValueError, TypeError):
+            pass
+
+    return unknown_class()
+
+
+def _coin_output_script_templates(coin):
+    from .address import (P2PKH_Address, P2SH_Address, P2PK_Output, OP_RETURN_Output,
+                          P2MultiSig_Output)
+
+    # Addresses have Coin-specific constructors
+    return (
+        (bytes((Ops.OP_DUP, Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUALVERIFY,
+                Ops.OP_CHECKSIG)), partial(P2PKH_Address, coin=coin)),
+        (bytes((Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUAL)),
+         partial(P2SH_Address, coin=coin)),
+        (bytes((Ops.OP_PUSHDATA1, Ops.OP_CHECKSIG)), partial(P2PK_Output, coin=coin)),
+        # Note this loses script ops other than pushdata
+        (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'*' + pack_byte(Ops.OP_RETURN)),
+         OP_RETURN_Output.from_template),
+        (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'{3,}' + pack_byte(Ops.OP_CHECKMULTISIG)
+                    + b'$'), P2MultiSig_Output.from_template),
+    )
+
+
+def classify_output_script(script, coin):
+    from .address import Unknown_Output
+
+    templates = coin.output_script_templates
+    if templates is None:
+        templates = coin.output_script_templates = _coin_output_script_templates(coin)
+    return _classify_script(script, templates, Unknown_Output)
+
+
 class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
 
@@ -371,6 +422,25 @@ class Script:
     def to_bytes(self):
         '''Return the script as a bytes() object.'''
         return self._script
+
+    def to_json(self, flags, coin):
+        '''Return the script as an (unconverted) json object; flags controls the output and is a
+        JSONFlags instance.  Coin is used when displaying addresses.'''
+        result = {
+            'asm': self.to_asm(),
+            'hex': self.to_hex(),
+        }
+        if flags & JSONFlags.CLASSIFY_OUTPUT_SCRIPT:
+            from .address import P2PKH_Address, P2PK_Output
+
+            output = classify_output_script(self, coin)
+            result['type'] = output.KIND
+            if isinstance(output, P2PKH_Address):
+                result['address'] = output.to_string()
+            elif isinstance(output, P2PK_Output):
+                result['pubkey'] = output.public_key.to_hex()
+                result['address'] = output.to_address().to_string()
+        return result
 
     @classmethod
     def from_hex(cls, hex_str):

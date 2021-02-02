@@ -550,7 +550,7 @@ class PublicKey:
 
     def P2PK_script(self):
         '''Return a Script instance representing the P2PK script.'''
-        return P2PK_Output(self).to_script()
+        return P2PK_Output(self, self._coin).to_script()
 
     def P2PKH_script(self):
         '''Return a Script instance representing the P2PKH script.'''

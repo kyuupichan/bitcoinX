@@ -28,12 +28,9 @@
 __all__ = (
     'Address', 'P2PKH_Address', 'P2SH_Address',
     'P2PK_Output', 'P2MultiSig_Output', 'OP_RETURN_Output', 'Unknown_Output',
-    'classify_output_script',
 )
 
 from abc import ABC, abstractmethod
-from functools import partial
-import re
 
 from bitcoinx import cashaddr
 from .base58 import base58_decode_check, base58_encode_check
@@ -100,6 +97,8 @@ class Address(ABC):
 
 class P2PKH_Address(Address):
 
+    KIND = 'pubkeyhash'
+
     def __init__(self, hash160, coin):
         super().__init__(coin)
         self._hash160 = _validate_hash160(hash160)
@@ -155,8 +154,11 @@ class P2SH_Address(Address):
 
 class P2PK_Output:
 
-    def __init__(self, public_key):
+    KIND = 'pubkey'
+
+    def __init__(self, public_key, coin):
         self.public_key = _to_public_key(public_key)
+        self._coin = coin
 
     def __eq__(self, other):
         return isinstance(other, P2PK_Output) and self.public_key == other.public_key
@@ -167,6 +169,9 @@ class P2PK_Output:
     def hash160(self):
         return self.public_key.hash160()
 
+    def to_address(self):
+        return self.public_key.to_address(coin=self._coin)
+
     def to_script_bytes(self):
         return push_item(self.public_key.to_bytes()) + pack_byte(Ops.OP_CHECKSIG)
 
@@ -175,6 +180,8 @@ class P2PK_Output:
 
 
 class P2MultiSig_Output:
+
+    KIND = 'multisig'
 
     def __init__(self, public_keys, threshold):
         '''public_keys is an iterable.'''
@@ -221,6 +228,8 @@ class P2MultiSig_Output:
 class OP_RETURN_Output:
     '''This class indicates the script is an OP_RETURN script.'''
 
+    KIND = 'op_return'
+
     def __eq__(self, other):
         return isinstance(other, OP_RETURN_Output)
 
@@ -239,6 +248,8 @@ class OP_RETURN_Output:
 
 
 class Unknown_Output:
+
+    KIND = 'unknown'
 
     def to_script_bytes(self):
         raise RuntimeError('no canonical script')
@@ -272,45 +283,3 @@ def _to_signature(obj):
     if isinstance(obj, str):
         return Signature.from_hex(obj)
     return Signature(obj)
-
-
-def _classify_script(script, templates, unknown_class):
-    our_template, items = script.to_template()
-
-    for template, constructor in templates:
-        if isinstance(template, bytes):
-            if template != our_template:
-                continue
-        else:
-            match = template.match(our_template)
-            if not match:
-                continue
-
-        try:
-            return constructor(*items)
-        except (ValueError, TypeError):
-            pass
-
-    return unknown_class()
-
-
-def _coin_output_script_templates(coin):
-    # Addresses have Coin-specific constructors
-    return (
-        (bytes((Ops.OP_DUP, Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUALVERIFY,
-                Ops.OP_CHECKSIG)), partial(P2PKH_Address, coin=coin)),
-        (bytes((Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUAL)),
-         partial(P2SH_Address, coin=coin)),
-        (bytes((Ops.OP_PUSHDATA1, Ops.OP_CHECKSIG)), P2PK_Output),
-        # Note this loses script ops other than pushdata
-        (re.compile(pack_byte(Ops.OP_RETURN)), OP_RETURN_Output.from_template),
-        (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'{3,}' + pack_byte(Ops.OP_CHECKMULTISIG)
-                    + b'$'), P2MultiSig_Output.from_template),
-    )
-
-
-def classify_output_script(script, coin):
-    templates = coin.output_script_templates
-    if templates is None:
-        templates = coin.output_script_templates = _coin_output_script_templates(coin)
-    return _classify_script(script, templates, Unknown_Output)

@@ -6,7 +6,7 @@ from bitcoinx import (
     Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes, PrivateKey, PublicKey,
     Signature, Script, pack_byte, push_int, push_item,
     OP_RETURN, OP_CHECKMULTISIG, OP_0, OP_1, OP_DROP, OP_2DROP, OP_NOP, OP_CHECKSIG,
-    hash160
+    hash160, classify_output_script
 )
 from bitcoinx.address import *
 
@@ -189,27 +189,27 @@ class TestP2PK_Output:
 
     def test_constructor_bad(self):
         with pytest.raises(ValueError):
-            P2PK_Output(b'')
+            P2PK_Output(b'', Bitcoin)
 
     def test_eq(self):
         p = PrivateKey.from_random().public_key
-        assert P2PK_Output(p) == P2PK_Output(p)
-        assert P2PK_Output(p) != p
+        assert P2PK_Output(p, Bitcoin) == P2PK_Output(p, Bitcoin)
+        assert P2PK_Output(p, Bitcoin) != p
 
     def test_hashable(self):
         p = PrivateKey.from_random().public_key
-        {P2PK_Output(p)}
+        {P2PK_Output(p, Bitcoin)}
 
     def test_hash160(self):
         pubkey_hex = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
         pubkey = PublicKey.from_hex(pubkey_hex)
-        output = P2PK_Output(pubkey)
+        output = P2PK_Output(pubkey, Bitcoin)
         assert output.hash160() == hash160(bytes.fromhex(pubkey_hex))
 
     def test_to_script_bytes(self):
         pubkey_hex = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
         pubkey = PublicKey.from_hex(pubkey_hex)
-        output = P2PK_Output(pubkey)
+        output = P2PK_Output(pubkey, Bitcoin)
         raw = output.to_script_bytes()
         assert isinstance(raw, bytes)
         assert raw == push_item(bytes.fromhex(pubkey_hex)) + pack_byte(OP_CHECKSIG)
@@ -217,11 +217,30 @@ class TestP2PK_Output:
     def test_to_script(self):
         pubkey_hex = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
         pubkey = PublicKey.from_hex(pubkey_hex)
-        output = P2PK_Output(pubkey)
+        output = P2PK_Output(pubkey, Bitcoin)
         S = output.to_script()
         assert isinstance(S, Script)
         assert S == output.to_script_bytes()
         assert isinstance(classify_output_script(S, Bitcoin), P2PK_Output)
+
+    def test_to_address_compressed(self):
+        pubkey_hex = '036d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e2'
+        pubkey = PublicKey.from_hex(pubkey_hex)
+        output = P2PK_Output(pubkey, Bitcoin)
+        address = output.to_address()
+        assert isinstance(address, P2PKH_Address)
+        assert address.to_string() == '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L'
+
+    def test_to_address_uncompressed(self):
+        pubkey_hex = (
+            '046d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e'
+            '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab'
+        )
+        pubkey = PublicKey.from_hex(pubkey_hex)
+        output = P2PK_Output(pubkey, Bitcoin)
+        address = output.to_address()
+        assert isinstance(address, P2PKH_Address)
+        assert address.to_string() == '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP'
 
 
 MS_PUBKEYS = [PrivateKey.from_random().public_key for n in range(5)]
@@ -409,19 +428,27 @@ class TestClassification:
         s = Script.from_hex('a0' + script_hex)
         assert isinstance(classify_output_script(s, Bitcoin), Unknown_Output)
 
-    def test_OP_RETURN(self):
-        s = Script(pack_byte(OP_RETURN))
+    def _test_op_return(self, old=False):
+        prefix = b'' if old else pack_byte(OP_0)
+
+        s = Script(prefix + pack_byte(OP_RETURN))
         sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, OP_RETURN_Output)
 
-        s = Script(pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
+        s = Script(prefix + pack_byte(OP_RETURN) + push_item(b'BitcoinSV'))
         sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, OP_RETURN_Output)
 
         # Truncated OP_RETURN script
-        s = Script(pack_byte(OP_RETURN) + pack_byte(1))
+        s = Script(prefix + pack_byte(OP_RETURN) + pack_byte(1))
         sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, OP_RETURN_Output)
+
+    def test_old_OP_RETURN(self):
+        self._test_op_return(False)
+
+    def test_new_OP_RETURN(self):
+        self._test_op_return(True)
 
     def test_unknown(self):
         # Modified final pubkey byte; not a curve point
