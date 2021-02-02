@@ -3,8 +3,9 @@ import os
 import pytest
 import random
 
+from bitcoinx.consts import JSONFlags
 from bitcoinx.script import *
-from bitcoinx import pack_varint, PrivateKey, pack_byte, BitcoinTestnet
+from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet
 
 
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
@@ -303,7 +304,7 @@ class TestScript:
         ('', b'', '00'),
         ('8844aa', b'0' * 100, '8844aa4c64' + '30' * 100),
         ('88', Script.from_hex('77'), '8877'),
-    ))
+    ), ids=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"])
     def test_lshift(self, script, item, answer):
         script = Script.from_hex(script)
         script = script << item
@@ -417,9 +418,106 @@ class TestScript:
          "OP_CHECKMULTISIG OP_CHECKMULTISIGVERIFY OP_NOP1 OP_CHECKLOCKTIMEVERIFY "
          "OP_CHECKSEQUENCEVERIFY OP_NOP4 OP_NOP5 OP_NOP6 OP_NOP7 OP_NOP8 OP_NOP9 OP_NOP10 "
          + "OP_UNKNOWN " * 69 + "OP_INVALIDOPCODE"),
-    ))
+    ), ids=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14",
+            "15", "16", "-1", "6 -1", "16 16 16 16", "17 17 17", "0...256", "signed 32",
+            "1hex", "empty", "error", "many ops"])
     def test_to_asm(self, script, asm):
         assert Script(script).to_asm() == asm
+
+    @pytest.mark.parametrize("script,coin,json,extra", (
+        # A P2PK output
+        ('410494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223cd89719'
+         '4a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aaac', Bitcoin,
+         {
+             'asm': '0494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223c'
+             'd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aa OP_CHECKSIG',
+         },
+         {
+             'type': 'pubkey',
+             'pubkey': '0494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb919'
+             '1223cd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aa',
+             'address': '1FvzCLoTPGANNjWoUo6jUGuAG3wg1w4YjR',
+         },
+        ),
+        # A P2PK signature
+        ('47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220'
+         '181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901', Bitcoin,
+         {
+             'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb'
+             '8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901',
+         },
+         {
+             'type': 'unknown',
+         },
+        ),
+        # A P2PKH output
+        (
+            '76a914db47858485fa2fd737bbfddd46e5ce106cc2693c88ac', Bitcoin,
+            {
+                'asm': 'OP_DUP OP_HASH160 db47858485fa2fd737bbfddd46e5ce106cc2693c '
+                'OP_EQUALVERIFY OP_CHECKSIG',
+            },
+            {
+                'type': 'pubkeyhash',
+                'address': '1LzSfR6nFctA9yktzGh9wgdc2ioByaRT2r',
+            },
+        ),
+        # A P2PKH output (testnet)
+        (
+            '76a914db47858485fa2fd737bbfddd46e5ce106cc2693c88ac', BitcoinTestnet,
+            {
+                'asm': 'OP_DUP OP_HASH160 db47858485fa2fd737bbfddd46e5ce106cc2693c '
+                'OP_EQUALVERIFY OP_CHECKSIG',
+            },
+            {
+                'type': 'pubkeyhash',
+                'address': 'n1WPxUBm4eKQw6EWhqfXmbqvtiPtwcUoq7',
+            },
+        ),
+        # A P2PKH signature
+        (
+            '47304402205720b4406b5ff54b4978b61a924b304f1f74d97121f2323d53b2271120f9219602204'
+            'c9cd794420d192fae98e5d1e43afeac606f2cadecd1506788ab93f458c18347412103670df4024f'
+            '4dfd2b35ae61e9eac4e533f419abe68edc46cee68755974cf3a453', Bitcoin,
+            {
+                'asm': '304402205720b4406b5ff54b4978b61a924b304f1f74d97121f2323d53b2271120f9'
+                '219602204c9cd794420d192fae98e5d1e43afeac606f2cadecd1506788ab93f458c1834741 '
+                '03670df4024f4dfd2b35ae61e9eac4e533f419abe68edc46cee68755974cf3a453'
+            },
+            {
+                'type': 'unknown',
+            },
+        ),
+        # An OP_RETURN output
+        (
+            '006a403464373835363335363064663133393863356164303539373865336365393764616266373'
+            '3333537366562323633353134663933633032386366613636633732', Bitcoin,
+            {
+                'asm': '0 OP_RETURN 34643738353633353630646631333938633561643035393738653363'
+                '653937646162663733333537366562323633353134663933633032386366613636633732'
+            },
+            {
+                'type': 'op_return',
+            },
+        ),
+        # TODO: An R-puzzle output
+        # An erroneous script
+        (
+            '006a403464373835363335363064663133393863', Bitcoin,
+            {
+                'asm': '[error]'
+            },
+            {
+                'type': 'op_return',
+            },
+        ),
+    ), ids = ['p2pk', 'p2pk-testnet', 'p2pk_sig', 'p2pkh_output', 'p2pkh_sig',
+              'op_return', 'erroneous'])
+    def test_to_json(self, script, coin, json, extra):
+        json['hex'] = script
+        assert Script.from_hex(script).to_json(0, coin) == json
+        json.update(extra)
+        assert Script.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT, coin) == json
 
     @pytest.mark.parametrize("op,word", (
         (OP_VERIF, "OP_VERIF"),
@@ -472,13 +570,13 @@ class TestScript:
     @pytest.mark.parametrize("asm,script", (
         ("OP_NOP OP_CHECKSIG OP_0 90 ababababab",
          bytes([OP_NOP, OP_CHECKSIG, OP_0, 1, 90, 5, 171, 171, 171, 171, 171])),
-    ))
+    ), ids=["1"])
     def test_from_asm(self, asm, script):
         assert Script.from_asm(asm) == script
 
     @pytest.mark.parametrize("asm", (
         "OP_NOP5 OP_CHECKSIG 0 67 287542 -1 deadbeefdead",
-    ))
+    ), ids=["1"])
     def test_asm_both_ways(self, asm):
         script = Script.from_asm(asm)
         assert script.to_asm() == asm
