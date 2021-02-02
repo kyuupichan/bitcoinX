@@ -24,6 +24,11 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
+__all__ = (
+    'JSONFlags',
+)
+
+
 from enum import IntFlag
 
 

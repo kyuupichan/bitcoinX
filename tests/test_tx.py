@@ -1,10 +1,13 @@
 from io import BytesIO
 import json
 import os
+import random
 
 import pytest
 
-from bitcoinx import Script, PublicKey, SigHash, hash_to_hex_str
+from bitcoinx import (
+    Script, PublicKey, SigHash, hash_to_hex_str, Bitcoin, BitcoinTestnet, JSONFlags,
+)
 from bitcoinx.tx import *
 from bitcoinx.tx import LOCKTIME_THRESHOLD
 
@@ -169,8 +172,106 @@ class TestTx:
 
     def test_total_output(self):
         tx = read_tx('b59de025.txn')
-        print(tx.outputs)
         assert tx.total_output_value() == 59_999_999_818
+
+    @pytest.mark.parametrize("script,coin,json", (
+        # Genesis tx
+        (
+            '01000000010000000000000000000000000000000000000000000000000000000000000000FFFFFFFF4'
+            'D04FFFF001D0104455468652054696D65732030332F4A616E2F32303039204368616E63656C6C6F7220'
+            '6F6E206272696E6B206F66207365636F6E64206261696C6F757420666F722062616E6B73FFFFFFFF010'
+            '0F2052A01000000434104678AFDB0FE5548271967F1A67130B7105CD6A828E03909A67962E0EA1F61DE'
+            'B649F6BC3F4CEF38C4F35504E51EC112DE5C384DF7BA0B8D578A4C702B6BF11D5FAC00000000',
+            Bitcoin,
+            {
+                'version': 1,
+                'nInputs': 1,
+                'vin': [
+                    {
+                        'coinbase': '04ffff001d0104455468652054696d65732030332f4a616e2f323030392'
+                        '04368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f'
+                        '757420666f722062616e6b73',
+                        'text': '\x04��\x00\x1d\x01\x04EThe Times 03/Jan/2009 Chancellor on '
+                        'brink of second bailout for banks',
+                        'sequence': 4294967295
+                    }
+                ],
+                'nOutputs': 1,
+                'vout': [
+                    {
+                        'value': 5000000000,
+                        'script': {
+                            'asm': '04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1'
+                            'f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf'
+                            '11d5f OP_CHECKSIG',
+                            'hex': '4104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0e'
+                            'a1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6'
+                            'bf11d5fac'
+                        }
+                    }
+                ],
+                'locktime': 0,
+                'hash': '4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b'
+            },
+        ),
+        (
+            '0100000001e1337a3e268d53b9b292dab07a3fbf47a51aa155273362c5a9e7e3dfe64f006e000000006'
+            'a47304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778a79cd125f0b8022013b3'
+            'e5a87f3fa84333f222dc32c2c75e630efb205a3c58010aab92ab425453104121030b56f95f6d8d5f6b8'
+            '4d4c7d6909423bd4b9cf189e9dd287fdea495582a3a5474feffffff01bd731f2c000000001976a914f6'
+            '7000134f47d60523a36505830115fd52bc656e88ac2bc30800',
+            Bitcoin,
+            {
+                'version': 1,
+                'nInputs': 1,
+                'vin': [
+                    {
+                        'hash': 'e1337a3e268d53b9b292dab07a3fbf47a51aa155273362c5a9e7e3dfe64f006e',
+                        'idx': 0,
+                        'script':
+                        {
+                            'asm': '304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778'
+                            'a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010aa'
+                            'b92ab4254531041 030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd287fd'
+                            'ea495582a3a5474',
+                            'hex': '47304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d75457'
+                            '78a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010'
+                            'aab92ab425453104121030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd28'
+                            '7fdea495582a3a5474'
+                        },
+                        'sequence': 4294967294
+                    }
+                ],
+                'nOutputs': 1,
+                'vout': [
+                    {
+                        'value': 740258749,
+                        'script':
+                        {
+                            'asm': 'OP_DUP OP_HASH160 f67000134f47d60523a36505830115fd52bc656e '
+                            'OP_EQUALVERIFY OP_CHECKSIG',
+                            'hex': '76a914f67000134f47d60523a36505830115fd52bc656e88ac'
+                        }
+                    }
+                ],
+                'locktime': 574251,
+                'hash': '85d895859f19d8f0125f3a93af854a7b48c04cab8830f800cd5e4daaeb02dc00'
+            },
+        ),
+    ), ids=['genesis', 'locktime'])
+    def test_to_json(self, script, coin, json):
+        flags = 0
+        assert Tx.from_hex(script).to_json(flags, coin) == json
+        json['size'] = len(script) // 2
+        flags += JSONFlags.SIZE
+        assert Tx.from_hex(script).to_json(flags, coin) == json
+        if json['locktime'] == 0:
+            json['locktimeMeaning'] = 'valid in any block'
+        else:
+            json['locktimeMeaning'] = (f'valid in blocks with height greater than '
+                                       f'{json["locktime"]:,d}')
+        flags += JSONFlags.LOCKTIME_MEANING
+        assert Tx.from_hex(script).to_json(flags, coin) == json
 
 
 class TestTxInput:
@@ -190,3 +291,109 @@ class TestTxInput:
         assert txin.is_final()
         txin.sequence -= 1
         assert not txin.is_final()
+
+    @pytest.mark.parametrize("script,json", (
+        # Genesis coinbase
+        (
+            '0000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff'
+            '001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e'
+            '206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff',
+            {
+                'coinbase': '04ffff001d0104455468652054696d65732030332f4a616e2f323030'
+                '39204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261'
+                '696c6f757420666f722062616e6b73',
+                'text': '\x04��\x00\x1d\x01\x04EThe Times 03/Jan/2009 Chancellor on brink '
+                'of second bailout for banks',
+                'sequence': 4294967295,
+            },
+        ),
+        # Another coinbase
+        (
+            '0000000000000000000000000000000000000000000000000000000000000000ffffffff41032b2'
+            'c0a2f7461616c2e636f6d2f506c656173652070617920302e3520736174732f627974652c20696e'
+            '666f407461616c2e636f6d6419c0bead6d55ff46be0400ffffffff',
+            {
+                'coinbase': '032b2c0a2f7461616c2e636f6d2f506c656173652070617920302e352073617'
+                '4732f627974652c20696e666f407461616c2e636f6d6419c0bead6d55ff46be0400',
+                'text': '\x03+,\n/taal.com/Please pay 0.5 sats/byte, info@taal.comd\x19���mU'
+                '�F�\x04\x00',
+                'sequence': 4294967295,
+            }
+        ),
+        # A P2PK signature
+        ('c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd37040000000048473044022'
+         '04e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07'
+         'de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff',
+         {
+             'hash': 'c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704',
+             'idx': 0,
+             'script': {
+                 'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8'
+                 'cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901',
+                 'hex': '47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5f'
+                 'b8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901'
+             },
+             'sequence': 4294967295,
+         },
+        ),
+    ), ids=['genesis', "coinbase", "p2pk"])
+    def test_to_json(self, script,json):
+        assert TxInput.from_hex(script).to_json(0, 0) == json
+        assert TxInput.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT, 0) == json
+        assert TxInput.from_hex(script).to_json(JSONFlags.ENUMERATE_INPUTS, None) == json
+        n = random.randrange(0, 100)
+        json.update({'nInput': n})
+        assert TxInput.from_hex(script).to_json(JSONFlags.ENUMERATE_INPUTS, n) == json
+
+
+class TestTxOutput:
+
+    @pytest.mark.parametrize("script,json,coin,extra", (
+        # Genesis P2PK output
+        (
+            '00f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1'
+            'f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac',
+            {
+                'value': 5000000000,
+                'script': {
+                    'asm': '04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb64'
+                    '9f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f OP_CHECKSIG',
+                    'hex': '4104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6'
+                    '49f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac'
+                },
+            },
+            Bitcoin,
+            {
+                'type': 'pubkey',
+                'pubkey': '04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb6'
+                '49f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f',
+                'address': '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa',
+            },
+        ),
+        # P2PKH output
+        (
+            '7dd8db00000000001976a9141207c3cd11e35de894c432e9907f2dcb1446855888ac',
+            {
+                'value': 14407805,
+                'script': {
+                    'asm': 'OP_DUP OP_HASH160 1207c3cd11e35de894c432e9907f2dcb14468558 '
+                    'OP_EQUALVERIFY OP_CHECKSIG',
+                    'hex': '76a9141207c3cd11e35de894c432e9907f2dcb1446855888ac',
+                },
+            },
+            BitcoinTestnet,
+            {
+                'type': 'pubkeyhash',
+                'address': 'mhAHm1zzjzuu61HhiQUyfjqqnewLQ3FM4s',
+            },
+        ),
+    ), ids=['p2pk', 'p2pkh'])
+    def test_to_json(self, script,coin,json,extra):
+        assert TxOutput.from_hex(script).to_json(0, coin) == json
+        assert TxOutput.from_hex(script).to_json(JSONFlags.ENUMERATE_OUTPUTS, coin) == json
+        n = random.randrange(0, 100)
+        json.update({'nOutput': n})
+        assert TxOutput.from_hex(script).to_json(JSONFlags.ENUMERATE_OUTPUTS, coin, n) == json
+        json['script'].update(extra)
+        assert TxOutput.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT |
+                                                 JSONFlags.ENUMERATE_OUTPUTS, coin, n) == json
