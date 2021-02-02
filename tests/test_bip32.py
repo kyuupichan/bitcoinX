@@ -457,17 +457,26 @@ class TestVectors():
                         "ADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y")
 
 
-@pytest.mark.parametrize("chain_str,answer", (
+derivation_tests = (
     ("m", []),
     ("m/0", [0]),
     ("m/1'", [0x80000001]),
     ("m/1/2/3'/4/5/6", [1, 2, 0x80000003, 4, 5, 6]),
     ("m/2147483647/2", [0x07fffffff, 2]),
     ("m/2147483647'/255'", [0xffffffff, 0x800000ff]),
-))
-def test_bip32_decompose_chain_string(chain_str, answer):
-    assert bip32_decompose_chain_string(chain_str) == answer
+)
+
+@pytest.mark.parametrize("chain_str,derivation", derivation_tests)
+def test_bip32_decompose_chain_string(chain_str, derivation):
+    assert bip32_decompose_chain_string(chain_str) == derivation
     assert bip32_is_valid_chain_string(chain_str)
+
+
+@pytest.mark.parametrize("chain_str,derivation", derivation_tests)
+def test_bip32_build_chain_string(chain_str, derivation):
+    assert bip32_build_chain_string(derivation) == chain_str
+    assert bip32_build_chain_string(x for x in derivation) == chain_str
+    bip32_validate_derivation(derivation)
 
 
 @pytest.mark.parametrize("bad_arg,exc", (
@@ -490,3 +499,14 @@ def test_bip32_decompose_chain_string_bad(bad_arg, exc):
         bip32_decompose_chain_string(bad_arg)
     if exc is ValueError:
         assert not bip32_is_valid_chain_string(bad_arg)
+
+
+@pytest.mark.parametrize("derivation,exc", (
+    (1, TypeError),
+    ([1, 2, 'z'], TypeError),
+    ([-1], ValueError),
+    ([1, 1 << 32], ValueError),
+))
+def test_bip32_validate_derivation_bad(derivation, exc):
+    with pytest.raises(exc):
+        bip32_validate_derivation(derivation)

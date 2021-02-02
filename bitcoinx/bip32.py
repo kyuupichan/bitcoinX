@@ -28,6 +28,7 @@
 __all__ = (
     'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation',
     'bip32_key_from_string', 'bip32_decompose_chain_string', 'bip32_is_valid_chain_string',
+    'bip32_build_chain_string', 'bip32_validate_derivation',
 )
 
 from os import urandom
@@ -285,7 +286,7 @@ def bip32_decompose_chain_string(chain_str):
         if not match:
             raise ValueError(f'invalid bip32 chain: {chain_str}')
         value = int(match.groups()[0])
-        if value >= 2147483648:
+        if value >= HARDENED:
             raise ValueError(f'invalid bip32 chain: {chain_str}')
         if part[-1] == "'":
             value += HARDENED
@@ -300,3 +301,35 @@ def bip32_is_valid_chain_string(chain_str):
         return True
     except ValueError:
         return False
+
+
+def bip32_validate_derivation(derivation):
+    '''Validate if derivation, an iterable of integers, is a valid BIP32 derivation.
+
+    Returns the derivation as a list of integers.  Raises: ValueError, TypeError.
+    '''
+    result = list(derivation)
+    for n in result:
+        if not isinstance(n, int):
+            raise TypeError('derivation must be a sequence of ints')
+        if not 0 <= n < (1 << 32):
+            raise ValueError(f'invalid child number: {n}')
+    return result
+
+
+def bip32_build_chain_string(derivation):
+    '''Given an iterable of unsigned integers, return a chain string.  This is the inverse of
+       the bip32_decompose_chain_string() function.
+
+       For example:  [1, 0x80000002, 0x800000003, 0] -> m/1/2'/3'/0
+                     []                              -> m
+    '''
+    def parts(derivation):
+        yield 'm'
+        for n in derivation:
+            if n < HARDENED:
+                yield str(n)
+            else:
+                yield str(n - HARDENED) + "'"
+
+    return '/'.join(parts(bip32_validate_derivation(derivation)))
