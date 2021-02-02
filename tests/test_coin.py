@@ -65,7 +65,7 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
 
 def test_from_WIF_byte():
     for coin in all_coins:
-        if coin is BitcoinScalingTestnet:
+        if coin in (BitcoinScalingTestnet, BitcoinRegtest):
             # Testnet has the same identifiers as scaling testnet, as the latter is dumbed down.
             assert Coin.from_WIF_byte(coin.WIF_byte) is BitcoinTestnet
         else:
@@ -76,7 +76,7 @@ def test_from_WIF_byte():
 
 def test_lookup_xver_bytes():
     for coin in all_coins:
-        if coin is BitcoinScalingTestnet:
+        if coin in (BitcoinScalingTestnet, BitcoinRegtest):
             # Testnet has the same identifiers as scaling testnet, as the latter is dumbed down.
             assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (BitcoinTestnet, True)
             assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (BitcoinTestnet, False)
