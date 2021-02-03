@@ -1,4 +1,4 @@
-# Copyright (c) 2019, Neil Booth
+# Copyright (c) 2019-2021, Neil Booth
 #
 # All rights reserved.
 #
@@ -31,6 +31,7 @@ __all__ = (
 import attr
 from io import BytesIO
 
+from .consts import JSONFlags
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list,
@@ -159,9 +160,29 @@ class Tx:
         tx_hash = self.hash()
         return hash_to_hex_str(tx_hash) if tx_hash else None
 
+    def size(self):
+        return len(self.to_bytes())
+
     def total_output_value(self):
         '''Return the sum of the output values.'''
         return sum(output.value for output in self.outputs)
+
+    def to_json(self, flags, coin):
+        result = {
+            'version': self.version,
+            'nInputs': len(self.inputs),
+            'vin': [input.to_json(flags, index) for index, input in enumerate(self.inputs)],
+            'nOutputs': len(self.outputs),
+            'vout': [output.to_json(flags, coin, index)
+                     for index, output in enumerate(self.outputs)],
+            'locktime': self.locktime,
+            'hash': self.hex_hash(),
+        }
+        if flags & JSONFlags.SIZE:
+            result['size'] = self.size()
+        if flags & JSONFlags.LOCKTIME_MEANING:
+            result['locktimeMeaning'] = locktime_description(self.locktime)
+        return result
 
 
 @attr.s(slots=True, repr=False)
@@ -203,8 +224,38 @@ class TxInput:
             pack_le_uint32(self.sequence),
         ))
 
+    def to_hex(self):
+        return self.to_bytes().hex()
+
+    @classmethod
+    def from_bytes(cls, raw):
+        return cls.read(BytesIO(raw).read)
+
+    @classmethod
+    def from_hex(cls, hex_str):
+        return cls.from_bytes(bytes.fromhex(hex_str))
+
     def is_final(self):
         return self.sequence == 0xffffffff
+
+    def to_json(self, flags, index=None):
+        if self.is_coinbase():
+            result = {
+                'coinbase': self.script_sig.to_hex(),
+                'text': self.script_sig.to_bytes().decode(errors='replace'),
+                'sequence': self.sequence,
+            }
+        else:
+            result = {
+                'hash': self.prev_hash.hex(),
+                'idx': self.prev_idx,
+                'script': self.script_sig.to_json(flags & ~JSONFlags.CLASSIFY_OUTPUT_SCRIPT, None),
+                'sequence': self.sequence,
+            }
+
+        if flags & JSONFlags.ENUMERATE_INPUTS and index is not None:
+            result['nInput'] = index
+        return result
 
     def __repr__(self):
         return (
@@ -232,7 +283,37 @@ class TxOutput:
             pack_varbytes(bytes(self.script_pubkey)),
         ))
 
+    def to_hex(self):
+        return self.to_bytes().hex()
+
+    @classmethod
+    def from_bytes(cls, raw):
+        return cls.read(BytesIO(raw).read)
+
+    @classmethod
+    def from_hex(cls, hex_str):
+        return cls.from_bytes(bytes.fromhex(hex_str))
+
+    def to_json(self, flags, coin, index=None):
+        result = {
+            'value': self.value,
+            'script': self.script_pubkey.to_json(flags, coin),
+        }
+        if flags & JSONFlags.ENUMERATE_OUTPUTS and index is not None:
+            result['nOutput'] = index
+        return result
+
     def __repr__(self):
         return (
             f'TxOutput(value={self.value}, script_pubkey="{self.script_pubkey}")'
         )
+
+
+def locktime_description(locktime):
+    '''A human-readable description of meaning of locktime.'''
+    if locktime == 0:
+        return 'valid in any block'
+    if locktime < 500_000_000:
+        return f'valid in blocks with height greater than {locktime:,d}'
+    utc = datetime.datetime.utcfromtimestamp(locktime)
+    return f'valid in blocks with MTP greater than {utc.isoformat(" ")} UTC'

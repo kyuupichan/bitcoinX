@@ -3,6 +3,7 @@ from .base58 import *
 from .bip32 import *
 from .chain import *
 from .coin import *
+from .consts import *
 from .hashes import *
 from .keys import *
 from .misc import *
@@ -21,6 +22,7 @@ __all__ = sum((
     bip32.__all__,
     chain.__all__,
     coin.__all__,
+    consts.__all__,
     hashes.__all__,
     keys.__all__,
     misc.__all__,
