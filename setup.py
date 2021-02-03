@@ -19,7 +19,7 @@ version = find_version(os.path.join(tld, 'bitcoinx', '__init__.py'))
 setuptools.setup(
     name='bitcoinX',
     version=version,
-    python_requires='>=3.6',
+    python_requires='>=3.7',
     install_requires=['attrs', 'pyaes', 'electrumsv-secp256k1'],
     packages=['bitcoinx'],
     description='Library of Bitcoin functions',

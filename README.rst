@@ -13,7 +13,7 @@ A Python Bitcoin library that will grow to encompass network protocol,
 consensus, transactions, scripting and signing.
 
   :Licence: MIT
-  :Language: Python (>= 3.6)
+  :Language: Python (>= 3.7)
   :Author: Neil Booth
 
 
