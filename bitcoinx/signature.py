@@ -1,4 +1,4 @@
-# Copyright (c) 2019, Neil Booth
+# Copyright (c) 2019-2021, Neil Booth
 #
 # All rights reserved.
 #
@@ -40,6 +40,7 @@ from .packing import pack_byte
 
 
 CDATA_SIG_LENGTH = 64
+# This is for the ECDSA signature without the sighash suffix
 MAX_SIG_LENGTH = 72
 MISSING_SIG_BYTES = b'\xff'
 
@@ -175,12 +176,27 @@ class SigHash(int):
         '''Returns True if ANYONE_CAN_PAY is set.'''
         return bool(self & SigHash.ANYONE_CAN_PAY)
 
+    def to_string(self):
+        kinds = []
+        if self & 3:
+            kinds.append(('ALL', 'NONE', 'SINGLE')[(self & 3) - 1])
+        if self & self.ANYONE_CAN_PAY:
+            kinds.append('ANYONE_CAN_PAY')
+        if self & self.FORKID:
+            kinds.append('FORKID')
+        residual = self & ~(self.ANYONE_CAN_PAY | self.FORKID | 3)
+        if residual:
+            kinds.append(f'0x{residual:02x}')
+        return '|'.join(kinds)
+
 
 class Signature:
     '''A bitcoin DER signature, as raw bytes.'''
 
     def __init__(self, raw):
-        '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.'''
+        '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.
+
+        Raises InvalidSignatureError.'''
         if raw != MISSING_SIG_BYTES:
             # Validate the DER encoding
             der_signature_to_compact(raw[:-1])
@@ -227,6 +243,10 @@ class Signature:
     def s_value(self):
         '''The s value as an integer.'''
         return be_bytes_to_int(self.to_compact()[32:])
+
+    def to_string(self):
+        '''The signature as an ASM string.'''
+        return self._raw[:-1].hex() + '[' + SigHash(self._raw[-1]).to_string() + ']'
 
     @property
     def der_signature(self):

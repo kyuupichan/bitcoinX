@@ -51,6 +51,23 @@ class TestSigHash:
         assert isinstance(s.base, SigHash)
         assert s.anyone_can_pay is (n >= 128)
 
+    @pytest.mark.parametrize("n, text", (
+        (0, ""),
+        (1, "ALL"),
+        (2, "NONE"),
+        (3, "SINGLE"),
+        (0x40, "FORKID"),
+        (0x41, "ALL|FORKID"),
+        (0x42, "NONE|FORKID"),
+        (0x43, "SINGLE|FORKID"),
+        (0x80, "ANYONE_CAN_PAY"),
+        (0x81, "ALL|ANYONE_CAN_PAY"),
+        (0x82, "NONE|ANYONE_CAN_PAY"),
+        (0x83, "SINGLE|ANYONE_CAN_PAY"),
+    ))
+    def test_to_string(self, n, text):
+        assert SigHash(n).to_string() == text
+
 
 class TestSignature:
 
@@ -130,3 +147,12 @@ class TestSignature:
         s = Signature(MISSING_SIG_BYTES)
         with pytest.raises(InvalidSignatureError):
             s.sighash
+
+    @pytest.mark.parametrize("sig, text", (
+        ('304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778a79cd125f0b8022013b3e5a'
+         '87f3fa84333f222dc32c2c75e630efb205a3c58010aab92ab4254531041',
+         '304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778a79cd125f0b8022013b3e5a'
+         '87f3fa84333f222dc32c2c75e630efb205a3c58010aab92ab42545310[ALL|FORKID]'),
+    ))
+    def test_to_string(self, sig, text):
+        assert Signature.from_hex(sig).to_string() == text

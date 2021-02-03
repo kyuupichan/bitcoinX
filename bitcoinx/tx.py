@@ -250,7 +250,7 @@ class TxInput:
             result = {
                 'hash': self.prev_hash.hex(),
                 'idx': self.prev_idx,
-                'script': self.script_sig.to_json(flags & ~JSONFlags.CLASSIFY_OUTPUT_SCRIPT, None),
+                'script': self.script_sig.to_json(flags, True, None),
                 'sequence': self.sequence,
             }
 
@@ -298,7 +298,7 @@ class TxOutput:
     def to_json(self, flags, coin, index=None):
         result = {
             'value': self.value,
-            'script': self.script_pubkey.to_json(flags, coin),
+            'script': self.script_pubkey.to_json(flags, False, coin),
         }
         if flags & JSONFlags.ENUMERATE_OUTPUTS and index is not None:
             result['nOutput'] = index

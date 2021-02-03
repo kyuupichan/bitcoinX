@@ -422,7 +422,7 @@ class TestScript:
             "15", "16", "-1", "6 -1", "16 16 16 16", "17 17 17", "0...256", "signed 32",
             "1hex", "empty", "error", "many ops"])
     def test_to_asm(self, script, asm):
-        assert Script(script).to_asm() == asm
+        assert Script(script).to_asm(False) == asm
 
     @pytest.mark.parametrize("script,coin,json,extra", (
         # A P2PK output
@@ -515,9 +515,10 @@ class TestScript:
               'op_return', 'erroneous'])
     def test_to_json(self, script, coin, json, extra):
         json['hex'] = script
-        assert Script.from_hex(script).to_json(0, coin) == json
+        assert Script.from_hex(script).to_json(0, False, coin) == json
         json.update(extra)
-        assert Script.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT, coin) == json
+        assert Script.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT, False,
+                                               coin) == json
 
     @pytest.mark.parametrize("op,word", (
         (OP_VERIF, "OP_VERIF"),
@@ -528,7 +529,7 @@ class TestScript:
         (bytes([255, 255, 255, 127]), "2147483647"),
     ))
     def test_op_to_asm_word(self, op, word):
-        assert Script.op_to_asm_word(op) == word
+        assert Script.op_to_asm_word(op, False) == word
 
     def test_to_bytes(self):
         data = os.urandom(15)
@@ -579,7 +580,7 @@ class TestScript:
     ), ids=["1"])
     def test_asm_both_ways(self, asm):
         script = Script.from_asm(asm)
-        assert script.to_asm() == asm
+        assert script.to_asm(False) == asm
 
     @pytest.mark.parametrize("script,answer", (
         (Script(), (b'', [])),

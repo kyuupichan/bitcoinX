@@ -232,8 +232,8 @@ class TestTx:
                         {
                             'asm': '304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778'
                             'a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010aa'
-                            'b92ab4254531041 030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd287fd'
-                            'ea495582a3a5474',
+                            'b92ab42545310[ALL|FORKID] 030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf18'
+                            '9e9dd287fdea495582a3a5474',
                             'hex': '47304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d75457'
                             '78a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010'
                             'aab92ab425453104121030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd28'
@@ -276,8 +276,8 @@ class TestTx:
                         {
                             'asm': '304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778'
                             'a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010aa'
-                            'b92ab4254531041 030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd287fd'
-                            'ea495582a3a5474',
+                            'b92ab42545310[ALL|FORKID] 030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf18'
+                            '9e9dd287fdea495582a3a5474',
                             'hex': '47304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d75457'
                             '78a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010'
                             'aab92ab425453104121030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd28'
@@ -384,7 +384,7 @@ class TestTxInput:
              'idx': 0,
              'script': {
                  'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8'
-                 'cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901',
+                 'cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09[ALL]',
                  'hex': '47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5f'
                  'b8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901'
              },

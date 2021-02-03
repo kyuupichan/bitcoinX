@@ -1,4 +1,4 @@
-# Copyright (c) 2019, Neil Booth
+# Copyright (c) 2019-2021, Neil Booth
 #
 # All rights reserved.
 #
@@ -42,6 +42,7 @@ from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32,
     unpack_le_uint16, unpack_le_uint32,
 )
+from .signature import Signature, InvalidSignatureError
 
 
 class ScriptError(Exception):
@@ -398,24 +399,38 @@ class Script:
                 yield op
 
     @classmethod
-    def op_to_asm_word(cls, op):
+    def op_to_asm_word(cls, op, decode_sighash):
         '''Convert a single opcode, or data push, as returned by ops(), to a human-readable
-        word.'''
+        word.
+
+        If decode_sighash is true, pushdata that look like a signature are suffixed with
+        the appropriate SIGHASH flags.
+        '''
         if isinstance(op, bytes):
             if len(op) <= 4:
                 return str(item_to_int(op))
-            # Should we implement bitcoind's sigHashDecode?
+            # Print signatures as strings showing the sighash text.  Without sighash byte
+            # DER-encoded signatures are between 8 and 72 bytes
+            if decode_sighash and op[0] == 0x30 and 9 <= len(op) <= 73:
+                try:
+                    return Signature(op).to_string()
+                except InvalidSignatureError:
+                    pass
             return op.hex()
         try:
             return Ops(op).name
         except ValueError:
             return "OP_INVALIDOPCODE" if op == 0xff else "OP_UNKNOWN"
 
-    def to_asm(self):
-        '''Return a script converted to bitcoin's human-readable ASM format.'''
+    def to_asm(self, decode_sighash):
+        '''Return a script converted to bitcoin's human-readable ASM format.
+
+        If decode_sighash is true, pushdata that look like a signature are suffixed with
+        the appropriate SIGHASH flags.
+        '''
         op_to_asm_word = self.op_to_asm_word
         try:
-            return ' '.join(op_to_asm_word(op) for op in self.ops())
+            return ' '.join(op_to_asm_word(op, decode_sighash) for op in self.ops())
         except TruncatedScriptError:
             return '[error]'
 
@@ -423,14 +438,14 @@ class Script:
         '''Return the script as a bytes() object.'''
         return self._script
 
-    def to_json(self, flags, coin):
+    def to_json(self, flags, is_script_sig, coin):
         '''Return the script as an (unconverted) json object; flags controls the output and is a
         JSONFlags instance.  Coin is used when displaying addresses.'''
         result = {
-            'asm': self.to_asm(),
+            'asm': self.to_asm(decode_sighash=is_script_sig),
             'hex': self.to_hex(),
         }
-        if flags & JSONFlags.CLASSIFY_OUTPUT_SCRIPT:
+        if not is_script_sig and flags & JSONFlags.CLASSIFY_OUTPUT_SCRIPT:
             from .address import P2PKH_Address, P2PK_Output
 
             output = classify_output_script(self, coin)
