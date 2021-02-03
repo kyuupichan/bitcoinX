@@ -29,6 +29,7 @@ __all__ = (
 )
 
 import attr
+import datetime
 from io import BytesIO
 
 from .consts import JSONFlags
