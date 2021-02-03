@@ -81,6 +81,7 @@ class TestP2PKH_Address:
     def test_constructor(self):
         address = P2PKH_Address(bytes(20), Bitcoin)
         assert address.to_string() == '1111111111111111111114oLvT2'
+        assert str(address) == address.to_string()
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
@@ -191,6 +192,11 @@ class TestP2PK_Output:
         with pytest.raises(ValueError):
             P2PK_Output(b'', Bitcoin)
 
+    def test_constructor_hex(self):
+        h = '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
+        p = P2PK_Output(h, Bitcoin)
+        assert p.public_key.to_hex() == h
+
     def test_eq(self):
         p = PrivateKey.from_random().public_key
         assert P2PK_Output(p, Bitcoin) == P2PK_Output(p, Bitcoin)
@@ -266,6 +272,7 @@ class TestP2MultiSig_Output:
     )
     def test_to_script_bytes(self, threshold, count):
         output = P2MultiSig_Output(MS_PUBKEYS[:count], threshold)
+        assert output.public_key_count() == count
         raw = output.to_script_bytes()
         assert isinstance(raw, bytes)
         assert raw == b''.join((

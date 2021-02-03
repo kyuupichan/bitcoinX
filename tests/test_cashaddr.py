@@ -49,6 +49,29 @@ VALID_HASHES = [
 ]
 
 
+# These functions are for testing only so moved out of cashaddr.py.
+
+def _encode(prefix, kind, addr_hash):
+    """Encode a cashaddr address without prefix and separator."""
+    if not isinstance(prefix, str):
+        raise TypeError('prefix must be a string')
+
+    if not isinstance(addr_hash, (bytes, bytearray)):
+        raise TypeError('addr_hash must be binary bytes')
+
+    if kind not in (cashaddr.SCRIPT_TYPE, cashaddr.PUBKEY_TYPE):
+        raise ValueError('unrecognised address type {}'.format(kind))
+
+    payload = cashaddr._pack_addr_data(kind, addr_hash)
+    checksum = cashaddr._create_checksum(prefix, payload)
+    return ''.join(cashaddr._CHARSET[d] for d in payload + checksum)
+
+
+def _encode_full(prefix, kind, addr_hash):
+    """Encode a full cashaddr address, with prefix and separator."""
+    return ':'.join((prefix, _encode(prefix, kind, addr_hash)))
+
+
 class TestCashAddrAddress:
     """Unit test class for cashaddr addressess."""
 
@@ -64,7 +87,7 @@ class TestCashAddrAddress:
                 size = bits_size // 8
                 # Convert to a valid number of bytes for a hash
                 hashbytes = bytes(random.randint(0, 255) for i in range(size))
-                addr = cashaddr._encode_full(prefix, cashaddr.PUBKEY_TYPE, hashbytes)
+                addr = _encode_full(prefix, cashaddr.PUBKEY_TYPE, hashbytes)
                 rprefix, kind, addr_hash = cashaddr.decode(addr)
                 assert rprefix == prefix
                 assert kind == cashaddr.PUBKEY_TYPE

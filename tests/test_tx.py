@@ -258,7 +258,51 @@ class TestTx:
                 'hash': '85d895859f19d8f0125f3a93af854a7b48c04cab8830f800cd5e4daaeb02dc00'
             },
         ),
-    ), ids=['genesis', 'locktime'])
+        (
+            '0100000001e1337a3e268d53b9b292dab07a3fbf47a51aa155273362c5a9e7e3dfe64f006e000000006'
+            'a47304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778a79cd125f0b8022013b3'
+            'e5a87f3fa84333f222dc32c2c75e630efb205a3c58010aab92ab425453104121030b56f95f6d8d5f6b8'
+            '4d4c7d6909423bd4b9cf189e9dd287fdea495582a3a5474feffffff01bd731f2c000000001976a914f6'
+            '7000134f47d60523a36505830115fd52bc656e88ac2bc30860',
+            Bitcoin,
+            {
+                'version': 1,
+                'nInputs': 1,
+                'vin': [
+                    {
+                        'hash': 'e1337a3e268d53b9b292dab07a3fbf47a51aa155273362c5a9e7e3dfe64f006e',
+                        'idx': 0,
+                        'script':
+                        {
+                            'asm': '304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d7545778'
+                            'a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010aa'
+                            'b92ab4254531041 030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd287fd'
+                            'ea495582a3a5474',
+                            'hex': '47304402207f5ba050adff0567df3dcdc70d5059c4b8b8d2afc961d75457'
+                            '78a79cd125f0b8022013b3e5a87f3fa84333f222dc32c2c75e630efb205a3c58010'
+                            'aab92ab425453104121030b56f95f6d8d5f6b84d4c7d6909423bd4b9cf189e9dd28'
+                            '7fdea495582a3a5474'
+                        },
+                        'sequence': 4294967294
+                    }
+                ],
+                'nOutputs': 1,
+                'vout': [
+                    {
+                        'value': 740258749,
+                        'script':
+                        {
+                            'asm': 'OP_DUP OP_HASH160 f67000134f47d60523a36505830115fd52bc656e '
+                            'OP_EQUALVERIFY OP_CHECKSIG',
+                            'hex': '76a914f67000134f47d60523a36505830115fd52bc656e88ac'
+                        }
+                    }
+                ],
+                'locktime': 1611186987,
+                'hash': '9eaa6c0529a2d151eb4f0c7cfe99125c54b8908a0d3e8f66423f769bb553a816'
+            },
+        ),
+    ), ids=['genesis', 'locktime block', 'locktime time'])
     def test_to_json(self, script, coin, json):
         flags = 0
         assert Tx.from_hex(script).to_json(flags, coin) == json
@@ -267,9 +311,13 @@ class TestTx:
         assert Tx.from_hex(script).to_json(flags, coin) == json
         if json['locktime'] == 0:
             json['locktimeMeaning'] = 'valid in any block'
-        else:
+        elif json['locktime'] < 500_000_000:
             json['locktimeMeaning'] = (f'valid in blocks with height greater than '
                                        f'{json["locktime"]:,d}')
+        else:
+            json['locktimeMeaning'] = (
+                'valid in blocks with MTP greater than 2021-01-20 23:56:27 UTC'
+            )
         flags += JSONFlags.LOCKTIME_MEANING
         assert Tx.from_hex(script).to_json(flags, coin) == json
 
@@ -291,6 +339,13 @@ class TestTxInput:
         assert txin.is_final()
         txin.sequence -= 1
         assert not txin.is_final()
+
+    def test_to_hex(self):
+        tx = read_tx('afda808f.txn')
+        assert tx.inputs[0].to_hex() == (
+            '0000000000000000000000000000000000000000000000000000000000000000ffffffff220319'
+            'c4082f626d67706f6f6c2e636f6d2f5473537148110d9e7fcc3cf74ee70c0200ffffffff'
+        )
 
     @pytest.mark.parametrize("script,json", (
         # Genesis coinbase
@@ -347,6 +402,12 @@ class TestTxInput:
 
 
 class TestTxOutput:
+
+    def test_to_hex(self):
+        tx = read_tx('afda808f.txn')
+        assert tx.outputs[0].to_hex() == (
+            'f992814a000000001976a914db1aea84aad494d9f5b253327da23c4e51266c9388ac'
+        )
 
     @pytest.mark.parametrize("script,json,coin,extra", (
         # Genesis P2PK output

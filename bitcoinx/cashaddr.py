@@ -142,26 +142,6 @@ def _decode_payload(addr):
     return prefix, data[:-8]
 
 
-def _encode(prefix, kind, addr_hash):
-    """Encode a cashaddr address without prefix and separator."""
-    if not isinstance(prefix, str):
-        raise TypeError('prefix must be a string')
-
-    if not isinstance(addr_hash, (bytes, bytearray)):
-        raise TypeError('addr_hash must be binary bytes')
-
-    if kind not in (SCRIPT_TYPE, PUBKEY_TYPE):
-        raise ValueError('unrecognised address type {}'.format(kind))
-
-    payload = _pack_addr_data(kind, addr_hash)
-    checksum = _create_checksum(prefix, payload)
-    return ''.join(_CHARSET[d] for d in payload + checksum)
-
-
-def _encode_full(prefix, kind, addr_hash):
-    """Encode a full cashaddr address, with prefix and separator."""
-    return ':'.join((prefix, _encode(prefix, kind, addr_hash)))
-
 #
 # External Interface
 #
