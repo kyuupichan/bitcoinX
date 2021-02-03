@@ -5,46 +5,46 @@ pr:
 jobs:
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Ubuntu
+    name: Py37_Ubuntu
     vmImage: 'ubuntu-16.04'
     pythonVersion: '3.7'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Mac
+    name: Py37_Mac
     vmImage: 'macOS-10.14'
     pythonVersion: '3.7'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Win
+    name: Py37_Win
     vmImage: 'windows-2019'
     pythonVersion: '3.7'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Ubuntu
+    name: Py38_Ubuntu
     vmImage: 'ubuntu-16.04'
     pythonVersion: '3.8'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Mac
+    name: Py38_Mac
     vmImage: 'macOS-10.14'
     pythonVersion: '3.8'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Win
+    name: Py38_Win
     vmImage: 'windows-2019'
     pythonVersion: '3.8'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Ubuntu
+    name: Py39_Ubuntu
     vmImage: 'ubuntu-16.04'
     pythonVersion: '3.9'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Mac
+    name: Py39_Mac
     vmImage: 'macOS-10.14'
     pythonVersion: '3.9'
 - template: run-tests.yml
   parameters:
-    name: TestPython37_Win
+    name: Py39_Win
     vmImage: 'windows-2019'
     pythonVersion: '3.9'
