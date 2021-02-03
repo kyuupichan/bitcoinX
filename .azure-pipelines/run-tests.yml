@@ -16,7 +16,6 @@ jobs:
   - template: prepare-env.yml
   - script: |
       coverage run -m pytest --junitxml=junit/test-results.xml tests
-      coverage html
       coverage xml
     displayName: 'Test with pytest'
   - task: PublishTestResults@2
@@ -28,7 +27,6 @@ jobs:
     inputs:
       codeCoverageTool: cobertura
       summaryFileLocation: coverage.xml
-      reportDirectory: htmlcov
   - bash: |
       COVERALLS_REPO_TOKEN=$(COVERALLS_REPO_TOKEN) coveralls
     displayName: 'Coveralls'
