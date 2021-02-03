@@ -41,6 +41,7 @@ _sha256 = hashlib.sha256
 _sha512 = hashlib.sha512
 _new_hash = hashlib.new
 bytes_fromhex = bytes.fromhex
+hmac_digest = hmac.digest
 
 
 def sha1(x):
@@ -95,14 +96,6 @@ def hash_to_value(x):
 def hex_str_to_hash(x):
     '''Convert a displayed hex string to a binary hash.'''
     return bytes(reversed(bytes_fromhex(x)))
-
-
-if hasattr(hmac, 'digest'):
-    # Python 3.7+
-    hmac_digest = hmac.digest   # pylint: disable=no-member
-else:
-    def hmac_digest(key, msg, digest):
-        return hmac.new(key, msg, digest).digest()
 
 
 def hmac_sha512_halves(key, msg):
