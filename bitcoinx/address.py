@@ -33,12 +33,11 @@ __all__ = (
 from abc import ABC, abstractmethod
 
 from bitcoinx import cashaddr
+from .hashes import hash160 as calc_hash160
 from .base58 import base58_decode_check, base58_encode_check
-from .coin import Bitcoin, all_coins
-from .hashes import hash160
+from .coin import Bitcoin
 from .packing import pack_byte
 from .script import Script, Ops, push_item, push_int, item_to_int
-from .signature import Signature
 
 
 class Address(ABC):
@@ -56,7 +55,7 @@ class Address(ABC):
         if len(text) > 35:
             try:
                 return cls._from_cashaddr_string(text, coin)
-            except ValueError as e:
+            except ValueError:
                 pass
 
         raw = base58_decode_check(text)
@@ -210,7 +209,7 @@ class P2MultiSig_Output:
         return Script(self.to_script_bytes())
 
     def hash160(self):
-        return hash160(self.to_script_bytes())
+        return calc_hash160(self.to_script_bytes())
 
     def public_key_count(self):
         return len(self.public_keys)
@@ -243,7 +242,7 @@ class OP_RETURN_Output:
         return Script(self.to_script_bytes())
 
     @classmethod
-    def from_template(cls, *items):
+    def from_template(cls, *_items):
         return cls()
 
 

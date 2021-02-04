@@ -151,7 +151,7 @@ class BIP32PrivateKey(PrivateKey):
                     raise
                 n += 1
                 if n & (HARDENED - 1) == 0:
-                    raise ValueError('out of BIP32 derivations')
+                    raise ValueError('out of BIP32 derivations') from None
 
     def derivation(self):
         '''Return a BIP32 derivation object.'''
