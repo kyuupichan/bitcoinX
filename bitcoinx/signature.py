@@ -152,7 +152,7 @@ def to_recoverable_signature(message_sig):
         try:
             message_sig = b64decode(message_sig, validate=True)
         except binascii_Error:
-            raise InvalidSignatureError('invalid base64 encoding of message signature')
+            raise InvalidSignatureError('invalid base64 encoding of message signature') from None
     if not isinstance(message_sig, bytes) or len(message_sig) != 65:
         raise InvalidSignatureError('message signature must be 65 bytes')
     if not 27 <= message_sig[0] < 35:

@@ -38,7 +38,7 @@ from .address import P2PKH_Address, P2PK_Output
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
-from .hashes import sha256, sha512, double_sha256, hash160, hmac_digest, _sha256
+from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT
 from .packing import pack_byte, pack_varbytes
 from .signature import (
@@ -298,7 +298,7 @@ class PrivateKey:
             try:
                 message = b64decode(message, validate=True)
             except binascii_Error:
-                raise DecryptionError('invalid base64 encoding of encrypted message')
+                raise DecryptionError('invalid base64 encoding of encrypted message') from None
         mlen = len(magic)
         if len(message) < 81 + mlen:
             raise DecryptionError('message too short')
@@ -529,6 +529,7 @@ class PublicKey:
         if isinstance(message, str):
             message = message.encode()
         ephemeral_key = PrivateKey.from_random()
+        # pylint: disable=E1123
         key = sha512(ephemeral_key.ecdh_shared_secret(self).to_bytes(compressed=True))
         iv, key_e, key_m = key[0:16], key[16:32], key[32:]
         ciphertext = aes_encrypt_with_iv(key_e, iv, message)
@@ -542,7 +543,7 @@ class PublicKey:
 
     def hash160(self, *, compressed=None):
         '''Returns a P2PK script.'''
-        return hash160(self.to_bytes(compressed=compressed))
+        return calc_hash160(self.to_bytes(compressed=compressed))
 
     def complement(self):
         '''Returns a compressed public key if uncompressed, or vice versa.'''

@@ -130,7 +130,7 @@ def _decode_payload(addr):
         data = bytes(_CHARSET.find(x) for x in payload)
     except ValueError:
         raise ValueError('invalid characters in address: {}'
-                         .format(payload))
+                         .format(payload)) from None
 
     if _polymod(_prefix_expand(prefix) + data):
         raise ValueError('invalid checksum in address: {}'.format(addr))
