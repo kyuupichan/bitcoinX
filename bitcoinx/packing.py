@@ -28,7 +28,7 @@ __all__ = (
     'pack_le_int32', 'pack_le_int64',
     'pack_le_uint16', 'pack_le_uint32', 'pack_le_uint64',
     'pack_be_uint16', 'pack_be_uint32', 'pack_be_uint64',
-    'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes', 'pack_list',
+    'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes', 'pack_list', 'varint_len',
     'unpack_le_int32', 'unpack_le_int32_from',
     'unpack_le_int64', 'unpack_le_int64_from',
     'unpack_le_uint16', 'unpack_le_uint16_from',
@@ -91,6 +91,22 @@ unpack_header = struct_header.unpack
 pack_port = pack_be_uint16
 unpack_port = unpack_be_uint16
 hex_to_bytes = bytes.fromhex
+
+
+def varint_len(n):
+    '''Convert an unsigned integer into a binary varint (CompactSize).
+
+    Return a bytes object.'''
+    if n >= 0:
+        if n < 253:
+            return 1
+        if n < 65536:
+            return 3
+        if n < 4294967296:
+            return 5
+        if n <= 18446744073709551615:
+            return 9
+    raise ValueError(f'value {n} out of range for varint')
 
 
 def pack_varint(n):

@@ -35,7 +35,7 @@ from io import BytesIO
 from .consts import JSONFlags
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
-    pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list,
+    pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
     read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list,
 )
 from .script import Script
@@ -161,8 +161,19 @@ class Tx:
         tx_hash = self.hash()
         return hash_to_hex_str(tx_hash) if tx_hash else None
 
+    @staticmethod
+    def size_io(inputs, outputs):
+        '''Return the size of a transaction with the given inputs and outputs.
+
+        Faster than serializing and taking its length.
+        '''
+        # 8 for version and locktime
+        return (varint_len(len(inputs)) + sum(tx_input.size() for tx_input in inputs) +
+                varint_len(len((outputs))) + sum(output.size() for output in outputs) + 8)
+
     def size(self):
-        return len(self.to_bytes())
+        '''Return the size of the transaction.  More efficient than serializing to bytes.'''
+        return self.size_io(self.inputs, self.outputs)
 
     def total_output_value(self):
         '''Return the sum of the output values.'''
@@ -236,6 +247,12 @@ class TxInput:
     def from_hex(cls, hex_str):
         return cls.from_bytes(bytes.fromhex(hex_str))
 
+    def size(self):
+        '''Return the serialized size of the input in bytes.'''
+        n = len(self.script_sig)
+        # 40 for prevout and sequence
+        return 40 + varint_len(n) + n
+
     def is_final(self):
         return self.sequence == 0xffffffff
 
@@ -283,6 +300,12 @@ class TxOutput:
             pack_le_int64(self.value),
             pack_varbytes(bytes(self.script_pubkey)),
         ))
+
+    def size(self):
+        '''Return the serialized size of the output in bytes.'''
+        n = len(self.script_pubkey)
+        # 8 for the value
+        return 8 + varint_len(n) + n
 
     def to_hex(self):
         return self.to_bytes().hex()
