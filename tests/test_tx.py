@@ -132,6 +132,13 @@ class TestTx:
         tx.inputs[4].sequence += 1
         assert not tx.are_inputs_final()
 
+    @pytest.mark.parametrize("nin, nout", ((1, 1), (1, 253), (253, 65536), (65536, 1)))
+    def test_size(self, nin, nout):
+        tx_in = TxInput(bytes(32), 0xffffffff, b'', 0xffffffff)
+        tx_out = TxOutput(0, b'')
+        tx = Tx(2, [tx_in] * nin, [tx_out] * nout, 0)
+        assert tx.size() == len(tx.to_bytes())
+
     @pytest.mark.parametrize("locktime,inputs_final,height,timestamp,answer", (
         # Locktime 0 is always final
         (0, False, 0, 0, True),
@@ -347,6 +354,12 @@ class TestTxInput:
             'c4082f626d67706f6f6c2e636f6d2f5473537148110d9e7fcc3cf74ee70c0200ffffffff'
         )
 
+    @pytest.mark.parametrize("script_len", (0, 253, 65000, 120000))
+    def test_size(self, script_len):
+        txin = TxInput(bytes(32), 0xffffffff, b'', 0xffffffff)
+        txin.script_sig = bytes(script_len)
+        assert txin.size() == len(txin.to_bytes())
+
     @pytest.mark.parametrize("script,json", (
         # Genesis coinbase
         (
@@ -408,6 +421,12 @@ class TestTxOutput:
         assert tx.outputs[0].to_hex() == (
             'f992814a000000001976a914db1aea84aad494d9f5b253327da23c4e51266c9388ac'
         )
+
+    @pytest.mark.parametrize("script_len", (0, 253, 65000, 120000))
+    def test_size(self, script_len):
+        output = TxOutput(0, b'')
+        output.script_pubkey = bytes(script_len)
+        assert output.size() == len(output.to_bytes())
 
     @pytest.mark.parametrize("script,json,coin,extra", (
         # Genesis P2PK output

@@ -37,6 +37,17 @@ def test_pack_funcs(pack_func, case, result):
     assert pack_func(case) == result
 
 
+@pytest.mark.parametrize("value", [case[1] for case in pack_cases if case[0] == 'pack_varint'])
+def test_varint_len(value):
+    assert varint_len(value) == len(pack_varint(value))
+
+
+@pytest.mark.parametrize("value", (-1, 1 << 64))
+def test_varint_len_bad(value):
+    with pytest.raises(ValueError):
+        varint_len(value)
+
+
 @pytest.mark.parametrize("pack_func",
                          [func for func in set(case[0] for case in pack_cases)
                           if not '_int' in func])
