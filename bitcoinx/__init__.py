@@ -1,6 +1,7 @@
 from .address import *
 from .base58 import *
 from .bip32 import *
+from .bip39 import *
 from .chain import *
 from .coin import *
 from .consts import *
@@ -20,6 +21,7 @@ __all__ = sum((
     address.__all__,
     base58.__all__,
     bip32.__all__,
+    bip39.__all__,
     chain.__all__,
     coin.__all__,
     consts.__all__,
