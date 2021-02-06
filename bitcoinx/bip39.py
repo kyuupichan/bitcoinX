@@ -39,8 +39,6 @@ __all__ = ('bip39_mnemonic_to_seed', 'bip39_normalize_mnemonic', 'bip39_is_valid
 
 
 from hashlib import pbkdf2_hmac
-from itertools import accumulate
-from operator import mul
 from os import urandom
 from unicodedata import normalize
 
@@ -105,7 +103,6 @@ def bip39_is_valid_mnemonic(mnemonic, wordlist):
 
     entropy = 0
     mult = 1
-    pairs = []
     for part in reversed(parts):
         entropy += part * mult
         mult *= 2048
