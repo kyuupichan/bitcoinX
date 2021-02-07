@@ -31,11 +31,13 @@ __all__ = (
 )
 
 from functools import partial
+from os import path
 
 from electrumsv_secp256k1 import create_context
 
-CONTEXT = create_context()
 
+CONTEXT = create_context()
+package_dir = path.dirname(path.realpath(__file__))
 
 # Converts big-endian bytes to an integer
 be_bytes_to_int = partial(int.from_bytes, byteorder='big')
@@ -54,3 +56,14 @@ def int_to_le_bytes(value, size=None):
     if size is None:
         size = (value.bit_length() + 7) // 8
     return value.to_bytes(size, 'little')
+
+
+def chunks(items, size):
+    '''Break up items, an iterable, into chunks of length size.'''
+    for i in range(0, len(items), size):
+        yield items[i: i + size]
+
+
+def data_file_path(*parts):
+    '''Return the path to a file in the data/ directory.'''
+    return path.join(package_dir, "data", *parts)

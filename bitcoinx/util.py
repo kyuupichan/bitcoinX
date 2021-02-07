@@ -42,7 +42,7 @@ def map_file(file_name, new_size=None):
 
 # Method decorator.  To be used for calculations that will always deliver the same result.
 # The method cannot take any arguments and should be accessed as an attribute.
-class cachedproperty(object):
+class cachedproperty:
 
     def __init__(self, f):
         self.f = f

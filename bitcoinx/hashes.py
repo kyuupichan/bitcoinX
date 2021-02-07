@@ -28,7 +28,7 @@
 __all__ = (
     'sha1', 'sha256', 'sha512', 'double_sha256',
     'ripemd160', 'hash160',
-    'hmac_digest', 'hmac_sha512_halves',
+    'hmac_digest', 'hmac_sha512', 'hmac_sha512_halves',
     'hash_to_hex_str', 'hex_str_to_hash', 'hash_to_value',
 )
 
@@ -98,6 +98,10 @@ def hex_str_to_hash(x):
     return bytes(reversed(bytes_fromhex(x)))
 
 
+def hmac_sha512(key, msg):
+    return hmac_digest(key, msg, _sha512)
+
+
 def hmac_sha512_halves(key, msg):
-    hmacd = hmac_digest(key, msg, _sha512)
+    hmacd = hmac_sha512(key, msg)
     return hmacd[:32], hmacd[32:]

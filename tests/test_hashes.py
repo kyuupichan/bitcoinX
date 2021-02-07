@@ -1,6 +1,9 @@
+import hashlib
+
 import pytest
 
 from bitcoinx.hashes import *
+
 
 cases = [
     (sha1, b'sha1',
@@ -25,3 +28,9 @@ def test_hash_to_hex_str():
 
 def test_hex_str_to_hash():
     assert hex_str_to_hash('6463626130393837363534333231') == b'1234567890abcd'
+
+
+def test_hmac_sha512():
+    key = b'foo'
+    msg = b'bar'
+    assert hmac_sha512(key, msg) == hmac_digest(key, msg, hashlib.sha512)
