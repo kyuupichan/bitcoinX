@@ -26,6 +26,8 @@ setuptools.setup(
     author='Neil Booth',
     author_email='kyuupichan@gmail.com',
     license='MIT Licence',
+    # Tell setuptools to include data files specified by MANIFEST.in.
+    include_package_data=True,
     url='https://github.com/kyuupichan/bitcoinX',
     download_url=('https://github.com/kyuupichan/bitcoinX/archive/'
                   f'{version}.tar.gz'),
