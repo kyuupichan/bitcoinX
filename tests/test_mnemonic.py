@@ -4,8 +4,8 @@ import os
 import pytest
 
 from bitcoinx import BIP32PrivateKey, Bitcoin
-from bitcoinx.bip39 import *
-from bitcoinx.bip39 import _mnemonic_from_entropy
+from bitcoinx.mnemonic import *
+from bitcoinx.mnemonic import _mnemonic_from_entropy
 
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
