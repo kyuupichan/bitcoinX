@@ -23,7 +23,9 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-'''BIP39 implementation.
+'''Mnemonic handling functionality.
+
+Includes a BIP39 implementation and Electrum-style seed support.
 
 BIP39 is wordlist independent; it just operates on text.  Wordlists are a GUI /
 user-friendliness feature.
