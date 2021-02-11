@@ -9,9 +9,12 @@
 
 
 __all__ = (
-    'Ops', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items', 'item_to_int',
+    'Ops', 'Script', 'ScriptError', 'TruncatedScriptError', 'InterpreterError',
+    'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
+    'PushItemTooLarge', 'DisabledOpcode', 'UnclosedConditionals',
+    'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
+    'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script',
-    'Script', 'ScriptError', 'TruncatedScriptError'
 )
 
 import re
@@ -21,18 +24,49 @@ from functools import partial
 from .consts import JSONFlags
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
-    pack_byte, pack_le_uint16, pack_le_uint32,
-    unpack_le_uint16, unpack_le_uint32,
+    pack_byte, pack_le_uint16, pack_le_uint32, unpack_le_uint16, unpack_le_uint32,
 )
 from .signature import Signature, InvalidSignatureError
 
 
+#
+# Exception Hierarchy
+#
+
 class ScriptError(Exception):
-    pass
+    '''Base class for script errors.'''
 
 
 class TruncatedScriptError(ScriptError):
-    pass
+    '''Raised when a script is truncated because a pushed item is not all present.'''
+
+
+class InterpreterError(ScriptError):
+    '''Base class for interpreter errors.'''
+
+
+class ScriptTooLarge(InterpreterError):
+    '''Raised when a script is too long.'''
+
+
+class TooManyOps(InterpreterError):
+    '''Raised when a script contains too many operations.'''
+
+
+class MinimalPushOpNotUsed(InterpreterError):
+    '''Raised when a stack push happens not using the minimally-encoded push operation.'''
+
+
+class PushItemTooLarge(InterpreterError):
+    '''Raised when an item pushed on the stack is too large.'''
+
+
+class DisabledOpcode(InterpreterError):
+    '''Raised when a disabled opcode is encountered.'''
+
+
+class UnclosedConditionals(InterpreterError):
+    '''Raised when a script contains unterminated if/else/endif conditions.'''
 
 
 class Ops(IntEnum):
@@ -170,9 +204,12 @@ class Ops(IntEnum):
     OP_NOP10 = 0xb9
 
 
+# pylint:disable=E0602
+
 globals().update((f'b_{name}', pack_byte(value)) for name, value in Ops.__members__.items())
 globals().update(Ops.__members__)
 __all__ += tuple(Ops.__members__.keys())
+__all__ += tuple(f'b_{name}' for name in Ops.__members__.keys())
 
 
 def push_item(item):
@@ -233,6 +270,50 @@ def item_to_int(item):
     if item[-1] & 0x80:
         return -le_bytes_to_int(item[:-1] + pack_byte(item[-1] & 0x7f))
     return le_bytes_to_int(item)
+
+
+def int_to_item(value):
+    '''Returns a minimally-encoded stack item of an integer.'''
+    if value > 0:
+        result = int_to_le_bytes(value)
+        if result[-1] & 0x80:
+            result = result + b'\0'
+        return result
+    if value == 0:
+        return b''
+    pos_value = int_to_le_bytes(-value)
+    if pos_value[-1] & 0x80:
+        return pos_value + b'\x80'
+    return pos_value[:-1] + pack_byte(pos_value[-1] + 0x80)
+
+
+def is_item_minimally_encoded(item):
+    '''Return True if item is a minimally-encoded number.'''
+    return int_to_item(item_to_int(item)) == item
+
+
+def minimal_push_opcode(item):
+    '''Returns script bytes to push item on the stack.  Returns an int.'''
+    dlen = len(item)
+    if dlen <= 1:
+        # Values 1...16 and 0x81 can be pushed specially as a single opcode.
+        if dlen == 0:
+            return OP_0
+        value = item[0]
+        if 0 < value <= 16:
+            return OP_1 + value - 1
+        if value == 0x81:
+            return OP_1NEGATE
+
+    if dlen < OP_PUSHDATA1:
+        return dlen
+    if dlen <= 0xff:
+        return OP_PUSHDATA1
+    if dlen <= 0xffff:
+        return OP_PUSHDATA2
+    if dlen <= 0xffffffff:
+        return OP_PUSHDATA4
+    raise ValueError('item is too large')
 
 
 def _to_bytes(item):
@@ -338,9 +419,12 @@ class Script:
         return (isinstance(other, (bytes, bytearray, memoryview))
                 or hasattr(other, '__bytes__')) and self._script == bytes(other)
 
-    def ops(self):
-        '''A generator.  Yields script operations (does not check their validity) as integers, and
-        data pushed on the stack as bytes.  Returns when the end of the script is reached.
+    def ops_and_items(self):
+        '''A generator.  Iterates over the script yielding (op, item) pairs, stopping when the end
+        of the script is reached.
+
+        op is an integer as it might not be a member of Ops.  Data is the data pushed as
+        bytes, or None if the op does not push data.
 
         Raises TruncatedScriptError if the script was truncated.
         '''
@@ -352,7 +436,7 @@ class Script:
             op = script[n]
             n += 1
             if op > OP_16:
-                yield op
+                yield op, None
             elif op <= OP_PUSHDATA4:
                 try:
                     if op < OP_PUSHDATA1:
@@ -369,16 +453,28 @@ class Script:
                     data = script[n: n + dlen]
                     n += dlen
                     assert len(data) == dlen
-                    yield data
+                    yield op, data
                 except Exception:
                     raise TruncatedScriptError from None
             elif op >= OP_1:
-                yield pack_byte(op - OP_1 + 1)
+                yield op, pack_byte(op - OP_1 + 1)
             elif op == OP_1NEGATE:
-                yield b'\x81'
+                yield op, b'\x81'
             else:
                 assert op == OP_RESERVED
-                yield op
+                yield op, None
+
+    def ops(self):
+        '''A generator.  Iterates over the script yielding ops, stopping when the end
+        of the script is reached.
+
+        For push-data opcodes op is the bytes pushed; otherwise it is the op as an integer.
+
+        Raises TruncatedScriptError if the script was truncated.
+        '''
+        for op, data in self.ops_and_items():
+            yield data if data is not None else op
+
 
     @classmethod
     def op_to_asm_word(cls, op, decode_sighash):
@@ -521,3 +617,6 @@ class Script:
         template = bytes(OP_PUSHDATA1 if isinstance(op, bytes) else op for op in stripped_ops)
         items = [op for op in stripped_ops if isinstance(op, bytes)]
         return template, items
+
+
+disabled_opcodes = {OP_2MUL, OP_2DIV}

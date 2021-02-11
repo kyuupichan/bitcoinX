@@ -10,7 +10,7 @@ fail-under=10.0
 
 # Add files or directories to the blacklist. They should be base names, not
 # paths.
-ignore=__init__.py,script.py
+ignore=__init__.py
 
 # Add files or directories matching the regex patterns to the blacklist. The
 # regex matches against base names, not paths.
@@ -221,6 +221,7 @@ disable=blacklisted-name,
         comprehension-escape,
         logging-fstring-interpolation,  # W1203
         protected-access,   # W0212
+        fixme,
 
 # Enable the message, report, category or checker with the given id(s). You can
 # either give multiple identifier separated by comma (,) or put this option
@@ -499,11 +500,7 @@ function-naming-style=snake_case
 #function-rgx=
 
 # Good variable names which should always be accepted, separated by a comma.
-good-names=i,
-           n,
-           e,
-           ex,
-           _
+good-names=i,n,e,ex,op,_
 
 # Good variable names regexes, separated by a comma. If names match any regex,
 # they will always be accepted
