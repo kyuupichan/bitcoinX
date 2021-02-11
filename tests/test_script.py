@@ -5,8 +5,7 @@ import random
 
 from bitcoinx.consts import JSONFlags
 from bitcoinx.script import *
-from bitcoinx.script import disabled_opcodes
-from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet
+from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len
 
 
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
@@ -811,5 +810,145 @@ def test_minimal_push_opcode_too_large():
         minimal_push_opcode(bytes(1<<32))
 
 
-def test_disabled_opcodes():
-    assert disabled_opcodes == {OP_2MUL, OP_2DIV}
+@pytest.fixture(params=(
+    (100_000, 512, 20_000),
+    (1_000_000, 2048, 100_000),
+))
+def policy(request):
+    yield InterpreterPolicy(*request.param)
+
+
+@pytest.fixture(params=(
+    # is_consensus, is_genesis_enabled, is_utxo_after_genesis
+    (False, False, False),
+    (False, True, False),
+    (False, True, True),
+    (True, False, False),
+    (True, True, False),
+    (True, True, True),
+))
+def state(request, policy):
+    is_consensus, is_genesis_enabled, is_utxo_after_genesis = request.param
+    yield InterpreterState(policy, is_consensus=is_consensus,
+                           is_genesis_enabled=is_genesis_enabled,
+                           is_utxo_after_genesis=is_utxo_after_genesis)
+
+
+class TestInterpreterState:
+
+    def test_max_ops_per_script(self, policy):
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = False
+        assert state.max_ops_per_script == state.MAX_OPS_PER_SCRIPT_BEFORE_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = True
+        state.is_consensus = True
+        assert state.max_ops_per_script == state.MAX_OPS_PER_SCRIPT_AFTER_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = True
+        state.is_consensus = False
+        assert state.max_ops_per_script == policy.max_ops_per_script
+
+    def test_max_script_size(self, policy):
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = False
+        assert state.max_script_size == state.MAX_SCRIPT_SIZE_BEFORE_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = True
+        state.is_consensus = True
+        assert state.max_script_size == state.MAX_SCRIPT_SIZE_AFTER_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = True
+        state.is_consensus = False
+        assert state.max_script_size == policy.max_script_size
+
+    def test_max_script_num_length(self, policy):
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = False
+        assert state.max_script_num_length == state.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = True
+        state.is_consensus = True
+        assert state.max_script_num_length == state.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_genesis_enabled = True
+        state.is_consensus = False
+        assert state.max_script_num_length == policy.max_script_num_length
+
+    def test_max_script_element_size(self, policy):
+        state = InterpreterState(policy)
+        state.is_utxo_after_genesis = False
+        assert state.max_script_element_size == state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
+
+        state = InterpreterState(policy)
+        state.is_utxo_after_genesis = True
+        state.is_consensus = True
+        assert state.max_script_element_size == 0xffffffff
+
+        state = InterpreterState(policy)
+        state.is_utxo_after_genesis = True
+        state.is_consensus = False
+        assert state.max_script_element_size == 0xffffffff
+
+    def test_bump_op_count(self, policy):
+        state = InterpreterState(policy)
+        state.bump_op_count(state.max_ops_per_script)
+        with pytest.raises(TooManyOps):
+            state.bump_op_count(1)
+
+    def test_validate_minimal_push_opcode(self, policy):
+        state = InterpreterState(policy, flags=0)
+        state.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
+        state = InterpreterState(policy, flags=InterpreterFlags.REQUIRE_MINIMAL_PUSH_OPCODE)
+        state.validate_minimal_push_opcode(OP_1, b'\1')
+        with pytest.raises(MinimalPushOpNotUsed):
+            state.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
+
+    def test_validate_stack_size(self, policy):
+        state = InterpreterState(policy, is_utxo_after_genesis=True)
+        state.stack = [b''] * state.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+        state.alt_stack = [b'']
+        state.validate_stack_size()
+
+        state = InterpreterState(policy, is_utxo_after_genesis=False)
+        state.stack = [b''] * state.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+        state.alt_stack = []
+        state.validate_stack_size()
+        state.alt_stack.append(b'')
+        with pytest.raises(StackSizeTooLarge):
+            state.validate_stack_size()
+
+
+class TestEvaluateScript:
+
+    def test_max_script_size(self, state):
+        limit = state.max_script_size = min(state.max_script_size, 1_000_000)
+        state.max_script_element_size = max(state.max_script_size, state.max_script_element_size)
+        script = Script() << bytes(state.max_script_size - varint_len(state.max_script_size))
+        evaluate_script(state, script)
+        script = Script() << bytes(state.max_script_size)
+        with pytest.raises(ScriptTooLarge):
+            evaluate_script(state, script)
+
+    def test_max_script_element_size(self, state):
+        state.max_script_size = 2_000_000
+        limit = state.max_script_element_size = min(state.max_script_element_size, 1_000_000)
+        script = Script() << bytes(limit)
+        evaluate_script(state, script)
+        script = Script() << bytes(limit + 1)
+        with pytest.raises(PushItemTooLarge):
+            evaluate_script(state, script)
+
+    def test_max_ops_per_script(self, state):
+        state.max_ops_per_script = 2
+        script = Script() << OP_NOP << OP_NOP << OP_15
+        evaluate_script(state, script)
+        script = Script() << OP_NOP << OP_NOP << OP_NOP
+        with pytest.raises(TooManyOps):
+            evaluate_script(state, script)

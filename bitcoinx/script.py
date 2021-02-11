@@ -10,11 +10,13 @@
 
 __all__ = (
     'Ops', 'Script', 'ScriptError', 'TruncatedScriptError', 'InterpreterError',
+    'StackSizeTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
+    'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
     'PushItemTooLarge', 'DisabledOpcode', 'UnclosedConditionals',
     'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
-    'classify_output_script',
+    'classify_output_script', 'evaluate_script'
 )
 
 import re
@@ -27,11 +29,12 @@ from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32, unpack_le_uint16, unpack_le_uint32,
 )
 from .signature import Signature, InvalidSignatureError
-
+from .util import cachedproperty
 
 #
 # Exception Hierarchy
 #
+
 
 class ScriptError(Exception):
     '''Base class for script errors.'''
@@ -43,6 +46,10 @@ class TruncatedScriptError(ScriptError):
 
 class InterpreterError(ScriptError):
     '''Base class for interpreter errors.'''
+
+
+class ScriptNumberOverflow(InterpreterError):
+    '''Raised when a script number is too long or not minimally encoded.'''
 
 
 class ScriptTooLarge(InterpreterError):
@@ -61,8 +68,16 @@ class PushItemTooLarge(InterpreterError):
     '''Raised when an item pushed on the stack is too large.'''
 
 
+class StackSizeTooLarge(InterpreterError):
+    '''Raised when the stack size it too large.'''
+
+
 class DisabledOpcode(InterpreterError):
     '''Raised when a disabled opcode is encountered.'''
+
+
+class InvalidOpcode(InterpreterError):
+    '''Raised when an invalid opcode is encountered.'''
 
 
 class UnclosedConditionals(InterpreterError):
@@ -475,7 +490,6 @@ class Script:
         for op, data in self.ops_and_items():
             yield data if data is not None else op
 
-
     @classmethod
     def op_to_asm_word(cls, op, decode_sighash):
         '''Convert a single opcode, or data push, as returned by ops(), to a human-readable
@@ -619,4 +633,185 @@ class Script:
         return template, items
 
 
-disabled_opcodes = {OP_2MUL, OP_2DIV}
+class SmallNum:
+    '''Legacy Bitcoin Core mess.'''
+    # TODO: needs to handle arithmetic operations and get_int().
+
+    def __init__(self, value):
+        assert -(1 << 63) <= value < (1 << 63)
+        self.value = value
+
+    @classmethod
+    def from_item(self, item):
+        '''Insane.'''
+        value = le_bytes_to_int(item[:8])
+
+        if item[-1] & 0x80:
+            return -(value & 0x7fffffffffffffff)
+
+        if value & 0x8000000000000000:
+            value -= 0x10000000000000000
+
+        return value
+
+
+UINT_MAX = 0xffffffff
+
+
+class InterpreterPolicy:
+    '''Policy rules fixed over the node session.'''
+
+    def __init__(self, max_script_size, max_script_num_length, max_ops_per_script):
+        self.max_script_size = max_script_size
+        self.max_script_num_length = max_script_num_length
+        self.max_ops_per_script = max_ops_per_script
+
+
+class InterpreterFlags(IntEnum):
+
+    REQUIRE_MINIMAL_PUSH_OPCODE = 1 << 0
+
+
+class InterpreterState:
+    '''Things that vary per evaluation, typically because they're a function of the
+    transaction input.'''
+
+    MAX_SCRIPT_SIZE_BEFORE_GENESIS = 10_000
+    MAX_SCRIPT_SIZE_AFTER_GENESIS = UINT_MAX    # limited by P2P message size
+    MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS = 4
+    MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS = 750_000
+    MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS = 520
+    MAX_STACK_ELEMENTS_BEFORE_GENESIS = 1_000
+    MAX_OPS_PER_SCRIPT_BEFORE_GENESIS = 500
+    MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT_MAX
+
+    def __init__(self, policy, *, flags=0, is_consensus=False, is_genesis_enabled=True,
+                 is_utxo_after_genesis=True, sig_checker=None):
+        # These inputs must not be changed after construction because of caching
+        self.policy = policy
+        self.flags = flags
+        self.is_consensus = is_consensus
+        self.is_genesis_enabled = is_genesis_enabled
+        self.is_utxo_after_genesis = is_utxo_after_genesis
+        self.sig_checker = sig_checker
+        # False is not currently supported but I think this is a function of is_genesis_enabled
+        self.big_num = True
+        # These are updated by the interpreter whilst running
+        self.stack = []
+        self.alt_stack = []
+        self.execute_stack = []
+        self.script_code = None
+        self.op_count = 0
+        self.non_top_level_return_after_genesis = False
+
+    def bump_op_count(self, bump):
+        self.op_count += bump
+        if self.op_count > self.max_ops_per_script:
+            raise TooManyOps(f'op count exceeds the limit of {self.max_ops_per_script:,d}')
+
+    def validate_minimal_push_opcode(self, op, item):
+        if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH_OPCODE:
+            expected_op = minimal_push_opcode(item)
+            if op != expected_op:
+                raise MinimalPushOpNotUsed(f'item not pushed with minimal opcode {expected_op}')
+
+    def validate_stack_size(self):
+        if self.is_utxo_after_genesis:
+            return
+        stack_size = len(self.stack) + len(self.alt_stack)
+        limit = self.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+        if stack_size > limit:
+            raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
+
+    # def item_to_int(self, item):
+    #     if len(item) > self.max_num_size:
+    #         raise ScriptNumberOverflow(f'number encoding has {len(item):,d} bytes exceeding '
+    #                                    f'the limit of {self.max_num_size:,d} bytes')
+
+    #     if self.require_minimal_data and not is_minimally_encoded(item):
+    #         raise ScriptNumberOverflow(f'number is not minimally encoded: {item.hex()}')
+
+    #     if big_num:
+    #         return item_to_int(item)
+    #     else:
+    #         return SmallNum.from_item(item)
+
+    @cachedproperty
+    def max_ops_per_script(self):
+        if self.is_genesis_enabled:
+            if self.is_consensus:
+                return self.MAX_OPS_PER_SCRIPT_AFTER_GENESIS
+            return self.policy.max_ops_per_script
+        return self.MAX_OPS_PER_SCRIPT_BEFORE_GENESIS
+
+    @cachedproperty
+    def max_script_size(self):
+        if self.is_genesis_enabled:
+            if self.is_consensus:
+                return self.MAX_SCRIPT_SIZE_AFTER_GENESIS
+            return self.policy.max_script_size
+        return self.MAX_SCRIPT_SIZE_BEFORE_GENESIS
+
+    @cachedproperty
+    def max_script_element_size(self):
+        if self.is_utxo_after_genesis:
+            # No limit.  However, effectively limited by max_script_size.
+            return UINT_MAX
+        return self.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
+
+    @cachedproperty
+    def max_script_num_length(self):
+        if self.is_genesis_enabled:
+            if self.is_consensus:
+                return self.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
+            return self.policy.max_script_num_length
+        return self.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
+
+
+def evaluate_script(state, script):
+
+    if len(script) > state.max_script_size:
+        raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
+                             f'{state.max_script_size:,d} bytes')
+
+    state.script_code = script
+    state.op_count = 0
+    state.non_top_level_return_after_genesis = False
+
+    for op, item in script.ops_and_items():
+        # Check pushitem size first
+        if item is not None and len(item) > state.max_script_element_size:
+            raise PushItemTooLarge(f'push item length {len(item):,d} exceeds the limit of '
+                                   f'{state.max_script_element_size:,d} bytes')
+
+        execute = (all(state.execute_stack)
+                   and (not state.non_top_level_return_after_genesis or op == OP_RETURN))
+
+        # Pushitem and OP_RESERVED do not count towards op count.
+        if op > Ops.OP_16:
+            state.bump_op_count(1)
+
+        # Some op codes are disabled.  For pre-genesis UTXOs these were an error in
+        # unevaluated branches; for post-genesis UTXOs only if evaluated.
+        if op in {OP_2MUL, OP_2DIV} and (execute or not state.is_utxo_after_genesis):
+            raise DisabledOpcode(f'{Ops(op).name} is disabled')
+
+        if execute and item is not None:
+            state.validate_minimal_push_opcode(op, item)
+            state.stack.append(op)
+        elif execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
+            #
+            # Stuff
+            #
+            if op == OP_NOP:
+                pass
+            # Post-genesis UTXOs permit OP_VER in unexecuted branches
+            elif op in {OP_VERNOTIF, OP_VERIF} and state.is_utxo_after_genesis and not execute:
+                pass
+            else:
+                raise InvalidOpcode('invalid opcode: {op}')
+
+        state.validate_stack_size()
+
+    if state.execute_stack:
+        raise UnclosedConditionals('unterminated if/else/endif condition evaluating script')
