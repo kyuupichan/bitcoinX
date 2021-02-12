@@ -708,6 +708,9 @@ class InterpreterState:
         self.sig_checker = sig_checker
         # False is not currently supported but I think this is a function of is_genesis_enabled
         self.big_num = True
+        self.reset()
+
+    def reset(self):
         # These are updated by the interpreter whilst running
         self.stack = []
         self.alt_stack = []
@@ -874,19 +877,17 @@ def handle_FROMALTSTACK(state):
     state.stack.append(state.alt_stack.pop())
 
 
-# def handle_DROP(state):
-#     # (x -- )
-#     if not state.stack:
-#         raise InvalidStackOperationError()
-#     state.stack.pop()
+def handle_DROP(state):
+    # (x -- )
+    state.require_stack_depth(1)
+    state.stack.pop()
 
 
-# def handle_2DROP(state):
-#     # (x1 x2 -- )
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     state.stack.pop()
-#     state.stack.pop()
+def handle_2DROP(state):
+    # (x1 x2 -- )
+    state.require_stack_depth(2)
+    state.stack.pop()
+    state.stack.pop()
 
 
 def handle_DUP(state):
@@ -1125,9 +1126,10 @@ op_handlers[OP_NOP] = handle_NOP
 #
 op_handlers[OP_TOALTSTACK] = handle_TOALTSTACK
 op_handlers[OP_FROMALTSTACK] = handle_FROMALTSTACK
+op_handlers[OP_DROP] = handle_DROP
+op_handlers[OP_2DROP] = handle_2DROP
 op_handlers[OP_DUP] = handle_DUP
 
-    # OP_2DROP = 0x6d
     # OP_2DUP = 0x6e
     # OP_3DUP = 0x6f
     # OP_2OVER = 0x70
@@ -1135,7 +1137,6 @@ op_handlers[OP_DUP] = handle_DUP
     # OP_2SWAP = 0x72
     # OP_IFDUP = 0x73
     # OP_DEPTH = 0x74
-    # OP_DROP = 0x75
     # OP_DUP = 0x76
     # OP_NIP = 0x77
     # OP_OVER = 0x78
