@@ -715,10 +715,13 @@ class InterpreterState:
             if op != expected_op:
                 raise MinimalPushOpNotUsed(f'item not pushed with minimal opcode {expected_op}')
 
+    def stack_size(self):
+        return len(self.stack) + len(self.alt_stack)
+
     def validate_stack_size(self):
         if self.is_utxo_after_genesis:
             return
-        stack_size = len(self.stack) + len(self.alt_stack)
+        stack_size = self.stack_size()
         limit = self.MAX_STACK_ELEMENTS_BEFORE_GENESIS
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
@@ -809,7 +812,7 @@ def evaluate_script(state, script):
             elif op in {OP_VERNOTIF, OP_VERIF} and state.is_utxo_after_genesis and not execute:
                 pass
             else:
-                raise InvalidOpcode('invalid opcode: {op}')
+                raise InvalidOpcode(f'invalid opcode: {op}')
 
         state.validate_stack_size()
 
