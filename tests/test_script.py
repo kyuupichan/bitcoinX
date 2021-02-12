@@ -4,6 +4,7 @@ import pytest
 import random
 
 from bitcoinx.consts import JSONFlags
+from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from bitcoinx.script import *
 from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len
 
@@ -1000,4 +1001,20 @@ class TestEvaluateScript:
         script = Script() << OP_10 << OP_TOALTSTACK << OP_8 << OP_FROMALTSTACK
         evaluate_script(state, script)
         assert state.stack == [b'\x08', b'\x0a']
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("hash_op,hash_func", (
+        (OP_RIPEMD160, ripemd160),
+        (OP_SHA1, sha1),
+        (OP_SHA256, sha256),
+        (OP_HASH160, hash160),
+        (OP_HASH256, double_sha256),
+    ))
+    def test_RIPEMD160(self, state, hash_op, hash_func):
+        script = Script() << hash_op
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        script = Script() << b'foo' << hash_op
+        evaluate_script(state, script)
+        assert state.stack == [hash_func(b'foo')]
         assert not state.alt_stack

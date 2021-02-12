@@ -24,6 +24,7 @@ from enum import IntEnum
 from functools import partial
 
 from .consts import JSONFlags
+from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32, unpack_le_uint16, unpack_le_uint32,
@@ -720,14 +721,14 @@ class InterpreterState:
         if self.op_count > self.max_ops_per_script:
             raise TooManyOps(f'op count exceeds the limit of {self.max_ops_per_script:,d}')
 
-    def require_depth(self, depth):
+    def require_stack_depth(self, depth):
         if len(self.stack) < depth:
             raise InvalidStackOperation(f'stack depth {len(self.stack)} less than required '
                                         f'depth of {depth}')
 
     def require_alt_stack(self):
         if not self.alt_stack:
-            raise InvalidStackOperation(f'alt stack is empty')
+            raise InvalidStackOperation('alt stack is empty')
 
     def validate_minimal_push_opcode(self, op, item):
         if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH_OPCODE:
@@ -864,7 +865,7 @@ def handle_NOP(_state):
 #
 
 def handle_TOALTSTACK(state):
-    state.require_depth(1)
+    state.require_stack_depth(1)
     state.alt_stack.append(state.stack.pop())
 
 
@@ -890,7 +891,7 @@ def handle_FROMALTSTACK(state):
 
 def handle_DUP(state):
     # (x -- x x)
-    state.require_depth(1)
+    state.require_stack_depth(1)
     state.stack.append(state.stack[-1])
 
 
@@ -1042,16 +1043,14 @@ def handle_DUP(state):
 #     state.stack.append(bools[mn <= x <= mx])
 
 
-# #
-# # Crypto.  TODO: OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH256, OP_CODESEPARATOR,
-# #                OP_CHCEKMULTISIG, OP_CHECKMULTISIGVERIFY
-# #
+#
+# Crypto
+#
 
-# def handle_HASH160(state):
-#     # (x -- x x)
-#     if not state.stack:
-#         raise InvalidStackOperationError()
-#     state.stack.append(hash160(state.stack.pop()))
+def handle_hash(state, hash_func):
+    # (x -- x x)
+    state.require_stack_depth(1)
+    state.stack.append(hash_func(state.stack.pop()))
 
 
 # def handle_CHECKSIG(state):
@@ -1114,10 +1113,19 @@ def invalid_opcode(_state, op):
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
-op_handlers[OP_DUP] = handle_DUP
+
+#
+# Control
+#
 op_handlers[OP_NOP] = handle_NOP
+
+
+#
+# Stack Operations
+#
 op_handlers[OP_TOALTSTACK] = handle_TOALTSTACK
 op_handlers[OP_FROMALTSTACK] = handle_FROMALTSTACK
+op_handlers[OP_DUP] = handle_DUP
 
     # OP_2DROP = 0x6d
     # OP_2DUP = 0x6e
@@ -1186,12 +1194,17 @@ op_handlers[OP_FROMALTSTACK] = handle_FROMALTSTACK
 
     # OP_WITHIN = 0xa5
 
+#
+# Crypto
+#
+
+op_handlers[OP_RIPEMD160] = partial(handle_hash, hash_func=ripemd160)
+op_handlers[OP_SHA1] = partial(handle_hash, hash_func=sha1)
+op_handlers[OP_SHA256] = partial(handle_hash, hash_func=sha256)
+op_handlers[OP_HASH160] = partial(handle_hash, hash_func=hash160)
+op_handlers[OP_HASH256] = partial(handle_hash, hash_func=double_sha256)
+
     # # crypto
-    # OP_RIPEMD160 = 0xa6
-    # OP_SHA1 = 0xa7
-    # OP_SHA256 = 0xa8
-    # OP_HASH160 = 0xa9
-    # OP_HASH256 = 0xaa
     # OP_CODESEPARATOR = 0xab
     # OP_CHECKSIG = 0xac
     # OP_CHECKSIGVERIFY = 0xad
