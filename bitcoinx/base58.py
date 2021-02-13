@@ -1,9 +1,9 @@
 # Copyright (c) 2017-2019, Neil Booth
 #
-# All rights reserved.
+# All right reserved.
 #
-# See the file "LICENCE" for information about the copyright
-# and warranty status of this software.
+# Licensed under the the Open BSV License version 3; see LICENCE for details.
+#
 
 '''Base58 encoding.'''
 
