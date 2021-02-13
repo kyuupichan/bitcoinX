@@ -1344,6 +1344,22 @@ class TestEvaluateScript:
         script = Script() << 1 << opcode << OP_ENDIF
         evaluate_script(state, script)
 
+    @pytest.mark.parametrize("push", (OP_1, OP_10, OP_1NEGATE, b'foo', b'\1\0', b'\0\1'))
+    def test_VERIFY(self, state, push):
+        self.require_stack(state, 1, OP_VERIFY)
+        script = Script() << push << OP_VERIFY
+        evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    @pytest.mark.parametrize("zero", zeroes)
+    def test_VERIFY_failed(self, state, zero):
+        script = Script() << zero << OP_VERIFY
+        with pytest.raises(VerifyFailed):
+            evaluate_script(state, script)
+        assert state.stack == [zero]
+        assert state.alt_stack == []
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
