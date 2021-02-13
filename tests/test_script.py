@@ -1158,6 +1158,15 @@ class TestEvaluateScript:
         assert state.stack == [datas[-1]] + list(datas)
         assert not state.alt_stack
 
+    def test_ROT(self, state):
+        self.require_stack(state, 3, OP_ROT)
+        push_datas = [self.random_push_data() for _ in range(6)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_ROT
+        evaluate_script(state, script)
+        assert state.stack == list(datas[:3]) + list(datas[-2:]) + [datas[-3]]
+        assert not state.alt_stack
+
     def test_PICK(self, state):
         # If not 2 items; no pop
         self.require_stack(state, 2, OP_PICK)
