@@ -1,4 +1,5 @@
 import os
+import random
 
 import pytest
 import random
@@ -976,83 +977,83 @@ class TestEvaluateScript:
     def xtest_test_execute_stack(self, state):
         pass
 
-    def test_DROP(self, state):
-        script = Script() << OP_DROP
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
-        assert not state.stack
-        state.reset()
+    @classmethod
+    def setup_class(cls):
+        cls._random_pushes = [
+            OP_0, OP_1, OP_2, OP_3, OP_4, OP_5, OP_6, OP_7, OP_8, OP_9, OP_10,
+            OP_11, OP_12, OP_13, OP_14, OP_15, OP_16, OP_1NEGATE
+        ]
+        # Avoid breaking small limits for some states
+        cls._random_pushes.extend(os.urandom(random.randrange(1, 500)) for _ in range(10))
 
-        script = Script() << OP_14 << OP_DROP
+    def random_push_data(self):
+        push = random.choice(self._random_pushes)
+        if isinstance(push, bytes):
+            return push, push
+        if push == OP_0:
+            return push, b''
+        if push >= OP_1:
+            return push, pack_byte(push - OP_1 + 1)
+        assert push == OP_1NEGATE
+        return push, b'\x81'
+
+    def random_push(self):
+        return self.random_push_data()[0]
+
+    def require_stack(self, state, size, op):
+        # Create a stack of size n and assert failure
+        for n in range(size):
+            script = Script()
+            for _ in range(n):
+                script <<= self.random_push()
+            script <<= op
+            with pytest.raises(InvalidStackOperation):
+                evaluate_script(state, script)
+            assert len(state.stack) == n
+            state.reset()
+
+    def test_DROP(self, state):
+        self.require_stack(state, 1, OP_DROP)
+        script = Script() << self.random_push() << OP_DROP
         evaluate_script(state, script)
         assert not state.stack
         assert not state.alt_stack
 
     def test_2DROP(self, state):
-        script = Script() << OP_2DROP
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
-        assert not state.stack
-        state.reset()
-
-        script = Script() << b'foo' << OP_2DROP
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
-        assert state.stack == [b'foo']
-        state.reset()
-
-        script = Script() << b'foo' << b'bar' << OP_2DROP
+        self.require_stack(state, 2, OP_2DROP)
+        script = Script() << self.random_push() << self.random_push() << OP_2DROP
         evaluate_script(state, script)
         assert not state.stack
         assert not state.alt_stack
 
     def test_DUP(self, state):
-        script = Script() << OP_DUP
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
-        script = Script() << OP_14 << OP_DUP
+        self.require_stack(state, 1, OP_DUP)
+        push, data = self.random_push_data()
+        script = Script() << push << OP_DUP
         evaluate_script(state, script)
-        assert state.stack == [b'\x0e', b'\x0e']
+        assert state.stack == [data] * 2
         assert not state.alt_stack
 
     def test_2DUP(self, state):
-        script = Script() << OP_2DUP
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
-        assert not state.stack
-        state.reset()
-
-        script = Script() << b'foo' << OP_2DUP
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
-        assert state.stack == [b'foo']
-        state.reset()
-
-        script = Script() << OP_0 << OP_1 << OP_2DUP
+        self.require_stack(state, 2, OP_2DUP)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script() << pushes[0] << pushes[1] << OP_2DUP
         evaluate_script(state, script)
-        assert state.stack == [b'', b'\1', b'', b'\1']
+        assert state.stack == list(datas) * 2
         assert not state.alt_stack
 
     def test_3DUP(self, state):
-        for size in range(3):
-            script = Script()
-            for _ in range(size):
-                script <<= OP_2
-            script <<= OP_3DUP
-            with pytest.raises(InvalidStackOperation):
-                evaluate_script(state, script)
-            assert state.stack == [b'\2'] * size
-            state.reset()
-
-        script = Script() << OP_0 << OP_1 << OP_2 << OP_3DUP
+        self.require_stack(state, 3, OP_3DUP)
+        push_datas = [self.random_push_data() for _ in range(3)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script() << pushes[0] << pushes[1] << pushes[2] << OP_3DUP
         evaluate_script(state, script)
-        assert state.stack == [b'', b'\1', b'\2', b'', b'\1', b'\2']
+        assert state.stack == list(datas) * 2
         assert not state.alt_stack
 
     def test_TOALTSTACK(self, state):
-        script = Script() << OP_TOALTSTACK
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
+        self.require_stack(state, 1, OP_TOALTSTACK)
         script = Script() << OP_12 << OP_TOALTSTACK
         evaluate_script(state, script)
         assert not state.stack
@@ -1075,9 +1076,7 @@ class TestEvaluateScript:
         (OP_HASH256, double_sha256),
     ))
     def test_RIPEMD160(self, state, hash_op, hash_func):
-        script = Script() << hash_op
-        with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
+        self.require_stack(state, 1, hash_op)
         script = Script() << b'foo' << hash_op
         evaluate_script(state, script)
         assert state.stack == [hash_func(b'foo')]
