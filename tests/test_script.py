@@ -1158,6 +1158,62 @@ class TestEvaluateScript:
         assert state.stack == [datas[-1]] + list(datas)
         assert not state.alt_stack
 
+    def test_PICK(self, state):
+        # If not 2 items; no pop
+        self.require_stack(state, 2, OP_PICK)
+
+        # Test good pick
+        count = random.randrange(1, 8)
+        n = random.randrange(0, count)
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_PICK
+        evaluate_script(state, script)
+        assert state.stack == list(datas) + [datas[-(n + 1)]]
+        assert not state.alt_stack
+        state.reset()
+
+        # Test bad pick
+        n = random.choice([-1, count])
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_PICK
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert state.stack == list(datas)   # All intact, just n is popped
+        assert not state.alt_stack
+
+    def test_ROLL(self, state):
+        # If not 2 items; no pop
+        self.require_stack(state, 2, OP_ROLL)
+
+        # Test good roll
+        count = random.randrange(1, 8)
+        n = random.randrange(0, count)
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_ROLL
+        evaluate_script(state, script)
+        expected = list(datas)
+        expected.append(expected.pop(-(n + 1)))
+        assert state.stack == expected
+        assert not state.alt_stack
+        state.reset()
+
+        # Test bad roll
+        n = random.choice([-1, count])
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_ROLL
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert state.stack == list(datas)   # All intact, just n is popped
+        assert not state.alt_stack
+
     def test_TOALTSTACK(self, state):
         self.require_stack(state, 1, OP_TOALTSTACK)
         script = Script() << OP_12 << OP_TOALTSTACK

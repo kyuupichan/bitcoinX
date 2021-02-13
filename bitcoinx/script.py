@@ -750,6 +750,10 @@ class InterpreterState:
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
 
+    def to_number(self, item):
+        # FIXME: handle pre-genesis numbers
+        return item_to_int(item)
+
     # def item_to_int(self, item):
     #     if len(item) > self.max_num_size:
     #         raise ScriptNumberOverflow(f'number encoding has {len(item):,d} bytes exceeding '
@@ -949,10 +953,23 @@ def handle_TUCK(state):
     state.stack.insert(-2, state.stack[-1])
 
 
+def handle_PICK_ROLL(state, pick):
+    # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
+    # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
+    state.require_stack_depth(2)
+    n = state.to_number(state.stack[-1])
+    state.stack.pop()
+    if not (0 <= n < len(state.stack)):
+        raise InvalidStackOperation()
+    if pick:
+        state.stack.append(state.stack[-(n + 1)])
+    else:
+        state.stack.append(state.stack.pop(-(n + 1)))
+
+
 # def handle_SIZE(state):
 #     # ( x -- x size(x) )
 #     if not state.stack:
-#         raise InvalidStackOperationError()
 #     state.stack.append(len(state.stack[-1]))
 
 
@@ -1112,8 +1129,8 @@ op_handlers[OP_2SWAP] = handle_2SWAP
 op_handlers[OP_IFDUP] = handle_IFDUP
 op_handlers[OP_DEPTH] = handle_DEPTH
 op_handlers[OP_NIP] = handle_NIP
-# OP_PICK = 0x79
-# OP_ROLL = 0x7a
+op_handlers[OP_PICK] = partial(handle_PICK_ROLL, pick=True)
+op_handlers[OP_ROLL] = partial(handle_PICK_ROLL, pick=False)
 # OP_ROT = 0x7b
 op_handlers[OP_SWAP] = handle_SWAP
 op_handlers[OP_TUCK] = handle_TUCK
