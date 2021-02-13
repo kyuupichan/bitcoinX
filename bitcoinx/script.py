@@ -12,8 +12,8 @@ __all__ = (
     'Ops', 'Script', 'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
-    'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
-    'PushItemTooLarge', 'DisabledOpcode', 'UnclosedConditionals', 'InvalidStackOperation',
+    'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
+    'PushItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -22,6 +22,8 @@ __all__ = (
 import re
 from enum import IntEnum
 from functools import partial
+
+import attr
 
 from .consts import JSONFlags
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
@@ -35,8 +37,6 @@ from .util import cachedproperty
 #
 # Exception Hierarchy
 #
-
-
 class ScriptError(Exception):
     '''Base class for script errors.'''
 
@@ -77,6 +77,10 @@ class StackSizeTooLarge(InterpreterError):
     '''Raised when the stack size it too large.'''
 
 
+class MinimalIfError(InterpreterError):
+    '''Raised when the top of stack is not boolean processing OP_IF or OP_NOTIF.'''
+
+
 class DisabledOpcode(InterpreterError):
     '''Raised when a disabled opcode is encountered.'''
 
@@ -85,8 +89,9 @@ class InvalidOpcode(InterpreterError):
     '''Raised when an invalid opcode is encountered.'''
 
 
-class UnclosedConditionals(InterpreterError):
-    '''Raised when a script contains unterminated if/else/endif conditions.'''
+class UnbalancedConditional(InterpreterError):
+    '''Raised when a script contains unepxected OP_ELSE, OP_ENDIF conditionals, or if
+    open condition blocks are unterminated.'''
 
 
 class Ops(IntEnum):
@@ -668,6 +673,15 @@ class SmallNum:
 
 
 UINT_MAX = 0xffffffff
+bool_items = [b'', b'\1']
+
+
+@attr.s(slots=True)
+class Condition:
+    '''Represents an open condition block whilst executing.'''
+    opcode = attr.ib()       # OP_IF or OP_NOTIF
+    execute = attr.ib()      # True or False; flips on OP_ELSE
+    seen_else = attr.ib()    # True or False
 
 
 class InterpreterPolicy:
@@ -680,8 +694,10 @@ class InterpreterPolicy:
 
 
 class InterpreterFlags(IntEnum):
-
+    # Require most compact opcode for pushing stack data
     REQUIRE_MINIMAL_PUSH_OPCODE = 1 << 0
+    # Top of stack on OP_IF and OP_ENDIF must be boolean.
+    REQUIRE_MINIMAL_IF = 1 << 1
 
 
 class InterpreterState:
@@ -714,7 +730,8 @@ class InterpreterState:
         # These are updated by the interpreter whilst running
         self.stack = []
         self.alt_stack = []
-        self.execute_stack = []
+        self.conditions = []
+        self.execute = False
         self.script_code = None
         self.op_count = 0
         self.non_top_level_return_after_genesis = False
@@ -750,7 +767,7 @@ class InterpreterState:
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
 
-    def to_number(self, item):
+    def to_number(self, item, *, size_t_limited=False):
         # FIXME: handle pre-genesis numbers
         return item_to_int(item)
 
@@ -815,8 +832,8 @@ def evaluate_script(state, script):
             raise PushItemTooLarge(f'push item length {len(item):,d} exceeds the limit of '
                                    f'{state.max_script_element_size:,d} bytes')
 
-        execute = (all(state.execute_stack)
-                   and (not state.non_top_level_return_after_genesis or op == OP_RETURN))
+        state.execute = (all(condition.execute for condition in state.conditions)
+                         and (not state.non_top_level_return_after_genesis or op == OP_RETURN))
 
         # Pushitem and OP_RESERVED do not count towards op count.
         if op > Ops.OP_16:
@@ -824,19 +841,20 @@ def evaluate_script(state, script):
 
         # Some op codes are disabled.  For pre-genesis UTXOs these were an error in
         # unevaluated branches; for post-genesis UTXOs only if evaluated.
-        if op in {OP_2MUL, OP_2DIV} and (execute or not state.is_utxo_after_genesis):
+        if op in {OP_2MUL, OP_2DIV} and (state.execute or not state.is_utxo_after_genesis):
             raise DisabledOpcode(f'{Ops(op).name} is disabled')
 
-        if execute and item is not None:
+        if state.execute and item is not None:
             state.validate_minimal_push_opcode(op, item)
             state.stack.append(item)
-        elif execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
+        elif state.execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
             op_handlers[op](state)
 
         state.validate_stack_size()
 
-    if state.execute_stack:
-        raise UnclosedConditionals('unterminated if/else/endif condition evaluating script')
+    if state.conditions:
+        raise UnbalancedConditional(f'unterminated {state.conditions[-1].opcode.name} '
+                                    'at end of script')
 
 
 #
@@ -856,14 +874,40 @@ def handle_NOP(_state):
     pass
 
 
+def handle_IF(state, opcode):
+    execute = False
+    if state.execute:
+        state.require_stack_depth(1)
+        top = state.stack[-1]
+        if state.flags & InterpreterFlags.REQUIRE_MINIMAL_IF:
+            if state.stack[-1] not in bool_items:
+                raise MinimalIfError('top of stack not True or False')
+        state.stack.pop()
+        execute = cast_to_bool(top)
+        if opcode == OP_NOTIF:
+            execute = not execute
+    state.conditions.append(Condition(opcode, execute, False))
+
+
+def handle_ELSE(state):
+    top_condition = state.conditions[-1] if state.conditions else None
+    # Only one ELSE is allowed per condition block after genesis
+    if not top_condition or (top_condition.seen_else and state.is_utxo_after_genesis):
+        raise UnbalancedConditional('unexpected OP_ELSE')
+    top_condition.execute = not top_condition.execute
+    top_condition.seen_else = True
+
+
+def handle_ENDIF(state):
+    # Only one ELSE is allowed per condition block after genesis
+    if not state.conditions:
+        raise UnbalancedConditional('unexpected OP_ENDIF')
+    state.conditions.pop()
+
 #
 # # Post-genesis UTXOs permit OP_VER in unexecuted branches
 # elif op in {OP_VERNOTIF, OP_VERIF} and state.is_utxo_after_genesis and not execute:
 #  pass
-
-
-# TODO: OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_NOP1 .. OP_NOP_10, OP_IF, OP_NOTIF
-#       OP_ELSE, OP_ENDIF, OP_RETURN
 
 
 #
@@ -963,8 +1007,7 @@ def handle_PICK_ROLL(state, pick):
     # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
     # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
     state.require_stack_depth(2)
-    # FIXME: what about to_size_t_limited()?  At first glance seems to do nothing
-    n = state.to_number(state.stack[-1])
+    n = state.to_number(state.stack[-1], size_t_limited=True)
     state.stack.pop()
     if not (0 <= n < len(state.stack)):
         raise InvalidStackOperation()
@@ -1117,6 +1160,15 @@ op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
 # Control
 #
 op_handlers[OP_NOP] = handle_NOP
+# OP_VER = 0x62
+op_handlers[OP_IF] = partial(handle_IF, opcode=OP_IF)
+op_handlers[OP_NOTIF] = partial(handle_IF, opcode=OP_NOTIF)
+#    OP_VERIF = 0x65
+#    OP_VERNOTIF = 0x66
+op_handlers[OP_ELSE] = handle_ELSE
+op_handlers[OP_ENDIF] = handle_ENDIF
+#    OP_VERIFY = 0x69
+#    OP_RETURN = 0x6a
 
 
 #
