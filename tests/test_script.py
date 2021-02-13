@@ -1015,6 +1015,40 @@ class TestEvaluateScript:
         assert state.stack == [b'\x0e', b'\x0e']
         assert not state.alt_stack
 
+    def test_2DUP(self, state):
+        script = Script() << OP_2DUP
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert not state.stack
+        state.reset()
+
+        script = Script() << b'foo' << OP_2DUP
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert state.stack == [b'foo']
+        state.reset()
+
+        script = Script() << OP_0 << OP_1 << OP_2DUP
+        evaluate_script(state, script)
+        assert state.stack == [b'', b'\1', b'', b'\1']
+        assert not state.alt_stack
+
+    def test_3DUP(self, state):
+        for size in range(3):
+            script = Script()
+            for _ in range(size):
+                script <<= OP_2
+            script <<= OP_3DUP
+            with pytest.raises(InvalidStackOperation):
+                evaluate_script(state, script)
+            assert state.stack == [b'\2'] * size
+            state.reset()
+
+        script = Script() << OP_0 << OP_1 << OP_2 << OP_3DUP
+        evaluate_script(state, script)
+        assert state.stack == [b'', b'\1', b'\2', b'', b'\1', b'\2']
+        assert not state.alt_stack
+
     def test_TOALTSTACK(self, state):
         script = Script() << OP_TOALTSTACK
         with pytest.raises(InvalidStackOperation):

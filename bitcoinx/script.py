@@ -862,11 +862,9 @@ def handle_NOP(_state):
 #       OP_ELSE, OP_ENDIF, OP_RETURN
 
 
-
 #
 # Stack operations
 #
-
 def handle_TOALTSTACK(state):
     state.require_stack_depth(1)
     state.alt_stack.append(state.stack.pop())
@@ -890,32 +888,10 @@ def handle_2DROP(state):
     state.stack.pop()
 
 
-def handle_DUP(state):
-    # (x -- x x)
-    state.require_stack_depth(1)
-    state.stack.append(state.stack[-1])
-
-
-# def handle_2DUP(state):
-#     # (x1 x2 -- x1 x2 x1 x2)
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack[-2]
-#     x2 = state.stack[-1]
-#     state.stack.append(x1)
-#     state.stack.append(x2)
-
-
-# def handle_3DUP(state):
-#     # (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
-#     if len(state.stack) < 3:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack[-3]
-#     x2 = state.stack[-2]
-#     x3 = state.stack[-1]
-#     state.stack.append(x1)
-#     state.stack.append(x2)
-#     state.stack.append(x3)
+def handle_nDUP(state, n):
+    # (x -- x x) or (x1 x2 -- x1 x2 x1 x2) or (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
+    state.require_stack_depth(n)
+    state.stack.extend(state.stack[-n:])
 
 
 # def handle_2OVER(state):
@@ -1128,72 +1104,71 @@ op_handlers[OP_TOALTSTACK] = handle_TOALTSTACK
 op_handlers[OP_FROMALTSTACK] = handle_FROMALTSTACK
 op_handlers[OP_DROP] = handle_DROP
 op_handlers[OP_2DROP] = handle_2DROP
-op_handlers[OP_DUP] = handle_DUP
+op_handlers[OP_DUP] = partial(handle_nDUP, n=1)
+op_handlers[OP_2DUP] = partial(handle_nDUP, n=2)
+op_handlers[OP_3DUP] = partial(handle_nDUP, n=3)
 
-    # OP_2DUP = 0x6e
-    # OP_3DUP = 0x6f
-    # OP_2OVER = 0x70
-    # OP_2ROT = 0x71
-    # OP_2SWAP = 0x72
-    # OP_IFDUP = 0x73
-    # OP_DEPTH = 0x74
-    # OP_DUP = 0x76
-    # OP_NIP = 0x77
-    # OP_OVER = 0x78
-    # OP_PICK = 0x79
-    # OP_ROLL = 0x7a
-    # OP_ROT = 0x7b
-    # OP_SWAP = 0x7c
-    # OP_TUCK = 0x7d
+# OP_2OVER = 0x70
+# OP_2ROT = 0x71
+# OP_2SWAP = 0x72
+# OP_IFDUP = 0x73
+# OP_DEPTH = 0x74
+# OP_NIP = 0x77
+# OP_OVER = 0x78
+# OP_PICK = 0x79
+# OP_ROLL = 0x7a
+# OP_ROT = 0x7b
+# OP_SWAP = 0x7c
+# OP_TUCK = 0x7d
 
-    # # splice ops
-    # OP_CAT = 0x7e
-    # OP_SPLIT = 0x7f    # after monolith upgrade (May 2018)
-    # OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
-    # OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
-    # OP_SIZE = 0x82
+# # splice ops
+# OP_CAT = 0x7e
+# OP_SPLIT = 0x7f# after monolith upgrade (May 2018)
+# OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
+# OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
+# OP_SIZE = 0x82
 
-    # # bit logic
-    # OP_INVERT = 0x83
-    # OP_AND = 0x84
-    # OP_OR = 0x85
-    # OP_XOR = 0x86
-    # OP_EQUAL = 0x87
-    # OP_EQUALVERIFY = 0x88
-    # OP_RESERVED1 = 0x89
-    # OP_RESERVED2 = 0x8a
+# # bit logic
+# OP_INVERT = 0x83
+# OP_AND = 0x84
+# OP_OR = 0x85
+# OP_XOR = 0x86
+# OP_EQUAL = 0x87
+# OP_EQUALVERIFY = 0x88
+# OP_RESERVED1 = 0x89
+# OP_RESERVED2 = 0x8a
 
-    # # numeric
-    # OP_1ADD = 0x8b
-    # OP_1SUB = 0x8c
-    # OP_2MUL = 0x8d
-    # OP_2DIV = 0x8e
-    # OP_NEGATE = 0x8f
-    # OP_ABS = 0x90
-    # OP_NOT = 0x91
-    # OP_0NOTEQUAL = 0x92
+# # numeric
+# OP_1ADD = 0x8b
+# OP_1SUB = 0x8c
+# OP_2MUL = 0x8d
+# OP_2DIV = 0x8e
+# OP_NEGATE = 0x8f
+# OP_ABS = 0x90
+# OP_NOT = 0x91
+# OP_0NOTEQUAL = 0x92
 
-    # OP_ADD = 0x93
-    # OP_SUB = 0x94
-    # OP_MUL = 0x95
-    # OP_DIV = 0x96
-    # OP_MOD = 0x97
-    # OP_LSHIFT = 0x98
-    # OP_RSHIFT = 0x99
+# OP_ADD = 0x93
+# OP_SUB = 0x94
+# OP_MUL = 0x95
+# OP_DIV = 0x96
+# OP_MOD = 0x97
+# OP_LSHIFT = 0x98
+# OP_RSHIFT = 0x99
 
-    # OP_BOOLAND = 0x9a
-    # OP_BOOLOR = 0x9b
-    # OP_NUMEQUAL = 0x9c
-    # OP_NUMEQUALVERIFY = 0x9d
-    # OP_NUMNOTEQUAL = 0x9e
-    # OP_LESSTHAN = 0x9f
-    # OP_GREATERTHAN = 0xa0
-    # OP_LESSTHANOREQUAL = 0xa1
-    # OP_GREATERTHANOREQUAL = 0xa2
-    # OP_MIN = 0xa3
-    # OP_MAX = 0xa4
+# OP_BOOLAND = 0x9a
+# OP_BOOLOR = 0x9b
+# OP_NUMEQUAL = 0x9c
+# OP_NUMEQUALVERIFY = 0x9d
+# OP_NUMNOTEQUAL = 0x9e
+# OP_LESSTHAN = 0x9f
+# OP_GREATERTHAN = 0xa0
+# OP_LESSTHANOREQUAL = 0xa1
+# OP_GREATERTHANOREQUAL = 0xa2
+# OP_MIN = 0xa3
+# OP_MAX = 0xa4
 
-    # OP_WITHIN = 0xa5
+# OP_WITHIN = 0xa5
 
 #
 # Crypto
@@ -1205,22 +1180,22 @@ op_handlers[OP_SHA256] = partial(handle_hash, hash_func=sha256)
 op_handlers[OP_HASH160] = partial(handle_hash, hash_func=hash160)
 op_handlers[OP_HASH256] = partial(handle_hash, hash_func=double_sha256)
 
-    # # crypto
-    # OP_CODESEPARATOR = 0xab
-    # OP_CHECKSIG = 0xac
-    # OP_CHECKSIGVERIFY = 0xad
-    # OP_CHECKMULTISIG = 0xae
-    # OP_CHECKMULTISIGVERIFY = 0xaf
+# # crypto
+# OP_CODESEPARATOR = 0xab
+# OP_CHECKSIG = 0xac
+# OP_CHECKSIGVERIFY = 0xad
+# OP_CHECKMULTISIG = 0xae
+# OP_CHECKMULTISIGVERIFY = 0xaf
 
-    # # expansion
-    # OP_CHECKLOCKTIMEVERIFY = 0xb1
-    # OP_NOP2 = OP_CHECKLOCKTIMEVERIFY
-    # OP_CHECKSEQUENCEVERIFY = 0xb2
-    # OP_NOP3 = OP_CHECKSEQUENCEVERIFY
-    # OP_NOP4 = 0xb3
-    # OP_NOP5 = 0xb4
-    # OP_NOP6 = 0xb5
-    # OP_NOP7 = 0xb6
-    # OP_NOP8 = 0xb7
-    # OP_NOP9 = 0xb8
-    # OP_NOP10 = 0xb9
+# # expansion
+# OP_CHECKLOCKTIMEVERIFY = 0xb1
+# OP_NOP2 = OP_CHECKLOCKTIMEVERIFY
+# OP_CHECKSEQUENCEVERIFY = 0xb2
+# OP_NOP3 = OP_CHECKSEQUENCEVERIFY
+# OP_NOP4 = 0xb3
+# OP_NOP5 = 0xb4
+# OP_NOP6 = 0xb5
+# OP_NOP7 = 0xb6
+# OP_NOP8 = 0xb7
+# OP_NOP9 = 0xb8
+# OP_NOP10 = 0xb9
