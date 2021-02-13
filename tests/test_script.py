@@ -1038,7 +1038,7 @@ class TestEvaluateScript:
         self.require_stack(state, 2, OP_2DUP)
         push_datas = [self.random_push_data() for _ in range(2)]
         pushes, datas = list(zip(*push_datas))
-        script = Script() << pushes[0] << pushes[1] << OP_2DUP
+        script = Script().push_many(pushes) << OP_2DUP
         evaluate_script(state, script)
         assert state.stack == list(datas) * 2
         assert not state.alt_stack
@@ -1047,9 +1047,27 @@ class TestEvaluateScript:
         self.require_stack(state, 3, OP_3DUP)
         push_datas = [self.random_push_data() for _ in range(3)]
         pushes, datas = list(zip(*push_datas))
-        script = Script() << pushes[0] << pushes[1] << pushes[2] << OP_3DUP
+        script = Script().push_many(pushes) << OP_3DUP
         evaluate_script(state, script)
         assert state.stack == list(datas) * 2
+        assert not state.alt_stack
+
+    def test_OVER(self, state):
+        self.require_stack(state, 2, OP_OVER)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_OVER
+        evaluate_script(state, script)
+        assert state.stack == [datas[0], datas[1], datas[0]]
+        assert not state.alt_stack
+
+    def test_2OVER(self, state):
+        self.require_stack(state, 4, OP_2OVER)
+        push_datas = [self.random_push_data() for _ in range(4)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2OVER
+        evaluate_script(state, script)
+        assert state.stack == list(datas + datas[:2])
         assert not state.alt_stack
 
     def test_TOALTSTACK(self, state):
