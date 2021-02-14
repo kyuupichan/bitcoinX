@@ -875,11 +875,22 @@ def evaluate_script(state, script):
 # Control
 #
 
+def opcode_name(op):
+    try:
+        return Ops(op).name
+    except ValueError:
+        return str(op)
+
+
+def invalid_opcode(_state, op):
+    raise InvalidOpcode(f'invalid opcode {opcode_name(op)}')
+
+
 def handle_NOP(_state):
     pass
 
 
-def handle_IF(state, opcode):
+def handle_IF(state, op):
     execute = False
     if state.execute:
         state.require_stack_depth(1)
@@ -889,9 +900,9 @@ def handle_IF(state, opcode):
                 raise MinimalIfError('top of stack not True or False')
         state.stack.pop()
         execute = cast_to_bool(top)
-        if opcode == OP_NOTIF:
+        if op == OP_NOTIF:
             execute = not execute
-    state.conditions.append(Condition(opcode, execute, False))
+    state.conditions.append(Condition(op, execute, False))
 
 
 def handle_ELSE(state):
@@ -908,6 +919,13 @@ def handle_ENDIF(state):
     if not state.conditions:
         raise UnbalancedConditional('unexpected OP_ENDIF')
     state.conditions.pop()
+
+
+def handle_VERIF(state, op):
+    # Post-genesis UTXOs permit OP_VERIF and OP_NOTVERIF in unexecuted branches
+    if state.is_utxo_after_genesis and not state.execute:
+        return
+    invalid_opcode(state, op)
 
 
 def handle_VERIFY(state):
@@ -929,12 +947,6 @@ def handle_RETURN(state):
             state.finished = True
     else:
         raise OpReturnError('OP_RETURN encountered')
-
-
-#
-# # Post-genesis UTXOs permit OP_VER in unexecuted branches
-# elif op in {OP_VERNOTIF, OP_VERIF} and state.is_utxo_after_genesis and not execute:
-#  pass
 
 
 #
@@ -1177,10 +1189,6 @@ def handle_hash(state, hash_func):
 # #
 
 
-def invalid_opcode(_state, op):
-    raise InvalidOpcode(f'invalid opcode: {op}')
-
-
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
 
 #
@@ -1188,10 +1196,10 @@ op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
 #
 op_handlers[OP_NOP] = handle_NOP
 # OP_VER = 0x62
-op_handlers[OP_IF] = partial(handle_IF, opcode=OP_IF)
-op_handlers[OP_NOTIF] = partial(handle_IF, opcode=OP_NOTIF)
-#    OP_VERIF = 0x65
-#    OP_VERNOTIF = 0x66
+op_handlers[OP_IF] = partial(handle_IF, op=OP_IF)
+op_handlers[OP_NOTIF] = partial(handle_IF, op=OP_NOTIF)
+op_handlers[OP_VERIF] = partial(handle_VERIF, op=OP_VERIF)
+op_handlers[OP_VERNOTIF] = partial(handle_VERIF, op=OP_VERNOTIF)
 op_handlers[OP_ELSE] = handle_ELSE
 op_handlers[OP_ENDIF] = handle_ENDIF
 op_handlers[OP_VERIFY] = handle_VERIFY
