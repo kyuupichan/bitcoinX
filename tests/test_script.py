@@ -1360,6 +1360,100 @@ class TestEvaluateScript:
         assert state.stack == [zero]
         assert state.alt_stack == []
 
+    def test_RETURN_immediate(self, state):
+        script = Script() << OP_RETURN
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_not_immediate(self, state):
+        script = Script() << OP_1 << OP_RETURN
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == [b'\1']
+        assert state.alt_stack == []
+
+    def test_RETURN_unbalanced_IF(self, state):
+        # Unabalanced ifs after a post-genesis top-level OP_RETURN are fine
+        script = Script() << OP_1 << OP_RETURN << OP_IF
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == [b'\1']
+        assert state.alt_stack == []
+
+    def test_RETURN_invalid_opcode(self, state):
+        # Invalid opcodes after a post-genesis top-level OP_RETURN are fine
+        script = Script() << OP_0 << OP_RETURN << OP_RESERVED
+        script = Script(script.to_bytes() + b'\0xff')
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == [b'']
+        assert state.alt_stack == []
+
+    def test_RETURN_unexecuted(self, state):
+        # Unexecuted OP_RETURN ignored pre- and post-genesis
+        script = Script() << OP_0 << OP_IF << OP_RETURN << OP_ENDIF
+        evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_invalid_grammar(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_IF
+        if state.is_utxo_after_genesis:
+            with pytest.raises(UnbalancedConditional):
+                evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_OP_RETURN_invalid_grammar(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RETURN << OP_IF
+        if state.is_utxo_after_genesis:
+            # The unabalanced conditional is ignored as the top-level OP_RETURN stops execution
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_invalid_opcode_executed(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RESERVED
+        if state.is_utxo_after_genesis:
+            # It's OK; only check IF grammar
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_invalid_opcode_unuexecuted(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ELSE << OP_RESERVED << OP_ENDIF
+        if state.is_utxo_after_genesis:
+            # It's OK as unexecuted
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(OpReturnError):
+                evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
