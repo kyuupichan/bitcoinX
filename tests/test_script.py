@@ -1511,6 +1511,38 @@ class TestEvaluateScript:
             with pytest.raises(ItemTooLarge):
                 evaluate_script(state, script)
 
+    def test_SPLIT(self, state):
+        self.require_stack(state, 2, OP_SPLIT)
+        script = Script() << b'foobarbaz' << OP_3 << OP_SPLIT
+        evaluate_script(state, script)
+        assert state.stack == [b'foo', b'barbaz']
+        assert state.alt_stack == []
+
+    def test_SPLIT_0(self, state):
+        script = Script() << b'foobar' << OP_0 << OP_SPLIT
+        evaluate_script(state, script)
+        assert state.stack == [b'', b'foobar']
+        assert state.alt_stack == []
+
+    def test_SPLIT_6(self, state):
+        script = Script() << b'foobar' << OP_6 << OP_SPLIT
+        evaluate_script(state, script)
+        assert state.stack == [b'foobar', b'']
+        assert state.alt_stack == []
+
+    def test_SPLIT_M1(self, state):
+        script = Script() << b'foobar' << OP_1NEGATE << OP_SPLIT
+        with pytest.raises(InvalidSplit) as e:
+            evaluate_script(state, script)
+        assert 'cannot split item of length 6 at position -1' in str(e.value)
+
+    def test_SPLIT_past(self, state):
+        script = Script() << b'foobar' << OP_7 << OP_SPLIT
+        with pytest.raises(InvalidSplit) as e:
+            evaluate_script(state, script)
+        assert 'cannot split item of length 6 at position 7' in str(e.value)
+
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
