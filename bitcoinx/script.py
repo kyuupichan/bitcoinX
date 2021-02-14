@@ -15,7 +15,7 @@ __all__ = (
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
-    'InvalidNumber', 'InvalidOperandSize',
+    'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -117,6 +117,10 @@ class UnbalancedConditional(InterpreterError):
 
 class VerifyFailed(InterpreterError):
     '''OP_VERIFY was executed and the top of stack was zero.'''
+
+
+class EqualVerifyFailed(VerifyFailed):
+    '''OP_EQUALVERIFY was executed and it failed.'''
 
 
 class OpReturnError(InterpreterError):
@@ -1121,22 +1125,18 @@ def handle_binary_bitop(state, binop):
     state.stack[-1] = bytes(binop(b1, b2) for b1, b2 in zip(x1, x2))
 
 
-# # TODO: OP_LSHIFT, O_RSHIFT
+def handle_EQUAL(state):
+    # (x1 x2 -- bool).   Bitwise equality
+    state.require_stack_depth(2)
+    state.stack.append(bool_items[state.stack.pop() == state.stack.pop()])
 
 
-# def handle_EQUAL(state):
-#     # (x1 x2 -- bool).   Bitwise equality
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     state.stack.append(bools[state.stack.pop() == state.stack.pop()])
-
-
-# def handle_EQUALVERIFY(state):
-#     # (x1 x2 -- )
-#     handle_EQUAL(state)
-#     if state.stack[-1] == b_OP_0:
-#         raise EQUALVERIFYError()
-#     state.stack.pop()
+def handle_EQUALVERIFY(state):
+    # (x1 x2 -- )
+    handle_EQUAL(state)
+    if not cast_to_bool(state.stack[-1]):
+        raise EqualVerifyFailed()
+    state.stack.pop()
 
 
 # #
@@ -1303,10 +1303,12 @@ op_handlers[OP_INVERT] = handle_INVERT
 op_handlers[OP_AND] = partial(handle_binary_bitop, binop=operator.and_)
 op_handlers[OP_OR] = partial(handle_binary_bitop, binop=operator.or_)
 op_handlers[OP_XOR] = partial(handle_binary_bitop, binop=operator.xor)
-# OP_EQUAL = 0x87
-# OP_EQUALVERIFY = 0x88
-# OP_RESERVED1 = 0x89
-# OP_RESERVED2 = 0x8a
+op_handlers[OP_EQUAL] = handle_EQUAL
+op_handlers[OP_EQUALVERIFY] = handle_EQUALVERIFY
+# OP_LSHIFT = 0x98
+# OP_RSHIFT = 0x99
+# OP_RESERVED1 and OP_RESERVED2 become the default invalid opcode handler
+
 
 # # numeric
 # OP_1ADD = 0x8b
@@ -1323,8 +1325,6 @@ op_handlers[OP_XOR] = partial(handle_binary_bitop, binop=operator.xor)
 # OP_MUL = 0x95
 # OP_DIV = 0x96
 # OP_MOD = 0x97
-# OP_LSHIFT = 0x98
-# OP_RSHIFT = 0x99
 
 # OP_BOOLAND = 0x9a
 # OP_BOOLOR = 0x9b
