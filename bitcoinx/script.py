@@ -13,7 +13,7 @@ __all__ = (
     'StackSizeTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
-    'PushItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
+    'ItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
@@ -72,7 +72,7 @@ class MinimalPushOpNotUsed(InterpreterError):
     '''Raised when a stack push happens not using the minimally-encoded push operation.'''
 
 
-class PushItemTooLarge(InterpreterError):
+class ItemTooLarge(InterpreterError):
     '''Raised when an item pushed on the stack is too large.'''
 
 
@@ -771,6 +771,14 @@ class InterpreterState:
     def stack_size(self):
         return len(self.stack) + len(self.alt_stack)
 
+    def validate_item_size(self, item):
+        # No limit for post-genesis UTXOs.
+        if not self.is_utxo_after_genesis:
+            limit = self.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
+            if len(item) > limit:
+                raise ItemTooLarge(f'item length {len(item):,d} exceeds the limit of '
+                                   f'{limit:,d} bytes')
+
     def validate_stack_size(self):
         if self.is_utxo_after_genesis:
             return
@@ -813,13 +821,6 @@ class InterpreterState:
         return self.MAX_SCRIPT_SIZE_BEFORE_GENESIS
 
     @cachedproperty
-    def max_script_element_size(self):
-        if self.is_utxo_after_genesis:
-            # No limit.  However, effectively limited by max_script_size.
-            return UINT_MAX
-        return self.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
-
-    @cachedproperty
     def max_script_num_length(self):
         if self.is_genesis_enabled:
             if self.is_consensus:
@@ -840,9 +841,8 @@ def evaluate_script(state, script):
 
     for op, item in script.ops_and_items():
         # Check pushitem size first
-        if item is not None and len(item) > state.max_script_element_size:
-            raise PushItemTooLarge(f'push item length {len(item):,d} exceeds the limit of '
-                                   f'{state.max_script_element_size:,d} bytes')
+        if item is not None:
+            state.validate_item_size(item)
 
         state.execute = (all(condition.execute for condition in state.conditions)
                          and (not state.non_top_level_return_after_genesis or op == OP_RETURN))
@@ -1157,19 +1157,17 @@ def handle_hash(state, hash_func):
 #     state.stack.pop()
 
 
-# #
-# # Byte string operations
-# #
+#
+# Byte string operations
+#
 
-# def handle_CAT(state):
-#     # (x1 x2 -- out)
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack[-2]
-#     x2 = state.stack[-1]
-#     # FIXME: stack check
-#     state.stack.pop()
-#     state.stack[-1] = x1 + x2
+def handle_CAT(state):
+    # (x1 x2 -- x1x2 )
+    state.require_stack_depth(2)
+    item = state.stack[-2] + state.stack[-1]
+    state.validate_item_size(item)
+    state.stack.pop()
+    state.stack[-1] = item
 
 
 # def handle_SPLIT(state):
@@ -1206,7 +1204,7 @@ op_handlers[OP_VERIFY] = handle_VERIFY
 op_handlers[OP_RETURN] = handle_RETURN
 
 #
-# Stack Operations
+# Stack operations
 #
 op_handlers[OP_TOALTSTACK] = handle_TOALTSTACK
 op_handlers[OP_FROMALTSTACK] = handle_FROMALTSTACK
@@ -1228,8 +1226,10 @@ op_handlers[OP_ROT] = handle_ROT
 op_handlers[OP_SWAP] = handle_SWAP
 op_handlers[OP_TUCK] = handle_TUCK
 
-# # splice ops
-# OP_CAT = 0x7e
+#
+# Byte-string operations
+#
+op_handlers[OP_CAT] = handle_CAT
 # OP_SPLIT = 0x7f# after monolith upgrade (May 2018)
 # OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
 # OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
