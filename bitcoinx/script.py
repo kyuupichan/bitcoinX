@@ -15,12 +15,13 @@ __all__ = (
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
-    'InvalidNumber',
+    'InvalidNumber', 'InvalidOperandSize',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
 )
 
+import operator
 import re
 from enum import IntEnum
 from functools import partial
@@ -83,6 +84,10 @@ class ImpossibleEncoding(InterpreterError):
 
 class InvalidNumber(InterpreterError):
     '''Raised when an OP_BIN2NUM result exceeds the maximum number size.'''
+
+
+class InvalidOperandSize(InterpreterError):
+    '''Raised when the operands to a binary operator are of invalid sizes.'''
 
 
 class StackSizeTooLarge(InterpreterError):
@@ -713,7 +718,7 @@ class SmallNum:
 
 
 UINT32_MAX = 0xffffffff
-INT32_MAX  = 0x7fffffff
+INT32_MAX = 0x7fffffff
 bool_items = [b'', b'\1']
 
 
@@ -1095,21 +1100,25 @@ def handle_PICK_ROLL(state, op):
         state.stack.append(state.stack.pop(-(n + 1)))
 
 
-# #
-# # Bitwise logic
-# #
+#
+# Bitwise logic
+#
 
-# def handle_AND(state):
-#     # (x1 x2 -- out)
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack[-1]
-#     x2 = state.stack[-2]
-#     if len(x1) != len(x2):
-#         raise InvalidOperandSizeError()
-#     x3 = bytes(b1 & b2 for b1, b2 in zip(x1, x2))
-#     state.stack.pop()
-#     state.stack[-1] = x3
+def handle_INVERT(state):
+    # (x -- out)
+    state.require_stack_depth(1)
+    state.stack[-1] = bytes(x ^ 255 for x in state.stack[-1])
+
+
+def handle_binary_bitop(state, binop):
+    # (x1 x2 -- out)
+    state.require_stack_depth(2)
+    x1 = state.stack[-2]
+    x2 = state.stack[-1]
+    if len(x1) != len(x2):
+        raise InvalidOperandSize('operands to bitwise operator must have same size')
+    state.stack.pop()
+    state.stack[-1] = bytes(binop(b1, b2) for b1, b2 in zip(x1, x2))
 
 
 # # TODO: OP_LSHIFT, O_RSHIFT
@@ -1287,11 +1296,13 @@ op_handlers[OP_NUM2BIN] = handle_NUM2BIN
 op_handlers[OP_BIN2NUM] = handle_BIN2NUM
 op_handlers[OP_SIZE] = handle_SIZE
 
-# # bit logic
-# OP_INVERT = 0x83
-# OP_AND = 0x84
-# OP_OR = 0x85
-# OP_XOR = 0x86
+#
+# Bitwise logic
+#
+op_handlers[OP_INVERT] = handle_INVERT
+op_handlers[OP_AND] = partial(handle_binary_bitop, binop=operator.and_)
+op_handlers[OP_OR] = partial(handle_binary_bitop, binop=operator.or_)
+op_handlers[OP_XOR] = partial(handle_binary_bitop, binop=operator.xor)
 # OP_EQUAL = 0x87
 # OP_EQUALVERIFY = 0x88
 # OP_RESERVED1 = 0x89

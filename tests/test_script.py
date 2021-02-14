@@ -1653,6 +1653,75 @@ class TestEvaluateScript:
         assert state.stack == [value, int_to_item(len(value))]
         assert not state.alt_stack
 
+    @pytest.mark.parametrize("value,result", (
+        (b'', b''),
+        (b'\1\2', b'\xfe\xfd'),
+        (bytes(range(256)), bytes(255 - x for x in range(256))),
+    ))
+    def test_INVERT(self, state, value, result):
+        self.require_stack(state, 1, OP_INVERT)
+        script = Script() << value << OP_INVERT
+        evaluate_script(state, script)
+        assert state.stack == [result]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2,result", (
+        ('', '', ''),
+        ('01', '07', '01'),
+        ('01', '0700', None),
+        ('011f', '07ff', '011f'),
+        ('f1f1f1f1f1f1f1f1', '7777777777777777', '7171717171717171'),
+    ))
+    def test_AND(self, state, x1, x2, result):
+        self.require_stack(state, 1, OP_AND)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_AND
+        if result is None:
+            with pytest.raises(InvalidOperandSize):
+                evaluate_script(state, script)
+            assert len(state.stack) == 2
+        else:
+            evaluate_script(state, script)
+            assert state.stack == [bytes.fromhex(result)]
+            assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2,result", (
+        ('', '', ''),
+        ('01', '07', '07'),
+        ('01', '0700', None),
+        ('011f', '07ff', '07ff'),
+        ('f1f1f1f1f1f1f1f1', '7777777777777777', 'f7f7f7f7f7f7f7f7'),
+    ))
+    def test_OR(self, state, x1, x2, result):
+        self.require_stack(state, 1, OP_OR)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_OR
+        if result is None:
+            with pytest.raises(InvalidOperandSize):
+                evaluate_script(state, script)
+            assert len(state.stack) == 2
+        else:
+            evaluate_script(state, script)
+            assert state.stack == [bytes.fromhex(result)]
+            assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2,result", (
+        ('', '', ''),
+        ('01', '07', '06'),
+        ('01', '0700', None),
+        ('011f', '07ff', '06e0'),
+        ('f1f1f1f1f1f1f1f1', '7777777777777777', '8686868686868686'),
+    ))
+    def test_XOR(self, state, x1, x2, result):
+        self.require_stack(state, 1, OP_XOR)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_XOR
+        if result is None:
+            with pytest.raises(InvalidOperandSize):
+                evaluate_script(state, script)
+            assert len(state.stack) == 2
+        else:
+            evaluate_script(state, script)
+            assert state.stack == [bytes.fromhex(result)]
+            assert not state.alt_stack
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
