@@ -1232,10 +1232,11 @@ def handle_BIN2NUM(state):
     state.validate_number_length(len(state.stack[-1]))
 
 
-# def handle_SIZE(state):
-#     # ( x -- x size(x) )
-#     if not state.stack:
-#     state.stack.append(len(state.stack[-1]))
+def handle_SIZE(state):
+    # ( x -- x size(x) )
+    state.require_stack_depth(1)
+    size = len(state.stack[-1])
+    state.stack.append(int_to_item(size))
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
@@ -1278,13 +1279,13 @@ op_handlers[OP_SWAP] = handle_SWAP
 op_handlers[OP_TUCK] = handle_TUCK
 
 #
-# Byte-string operations
+# Byte string operations
 #
 op_handlers[OP_CAT] = handle_CAT
 op_handlers[OP_SPLIT] = handle_SPLIT
 op_handlers[OP_NUM2BIN] = handle_NUM2BIN
 op_handlers[OP_BIN2NUM] = handle_BIN2NUM
-# op_handlers[OP_SIZE] = handle_SIZE
+op_handlers[OP_SIZE] = handle_SIZE
 
 # # bit logic
 # OP_INVERT = 0x83
