@@ -742,6 +742,28 @@ def test_item_to_int(value, encoding, is_minimal):
     assert is_item_minimally_encoded(encoding) is is_minimal
 
 
+@pytest.mark.parametrize("value,size,encoding", (
+    (0, 0, b''),
+    (0, 1, b'\0'),
+    (0, 4, bytes(4)),
+    (5, 0, None),
+    (5, 1, b'\5'),
+    (5, 2, b'\5\0'),
+    (-1, 0, None),
+    (-1, 1, b'\x81'),
+    (-1, 2, b'\1\x80'),
+    (-127, 1, b'\xff'),
+    (-128, 1, None),
+    (-128, 2, b'\x80\x80'),
+))
+def test_int_to_item_size(value, size, encoding):
+    if encoding is None:
+        with pytest.raises(ImpossibleEncoding):
+            int_to_item(value, size)
+    else:
+        assert int_to_item(value, size) == encoding
+
+
 @pytest.mark.parametrize("script,ops", (
     (bytes([OP_RESERVED, OP_DUP, OP_NOP, OP_15, OP_HASH160, OP_1NEGATE]) + push_item(b'BitcoinSV'),
      [OP_RESERVED, OP_DUP, OP_NOP, b'\x0f', OP_HASH160, b'\x81', b'BitcoinSV']),
@@ -907,19 +929,19 @@ class TestInterpreterState:
     def test_validate_item_size(self, policy):
         state = InterpreterState(policy)
         state.is_utxo_after_genesis = False
-        state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS))
-        with pytest.raises(ItemTooLarge):
-            state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1))
+        state.validate_item_size(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
+        with pytest.raises(InvalidPushSize):
+            state.validate_item_size(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1)
 
         state = InterpreterState(policy)
         state.is_utxo_after_genesis = True
         state.is_consensus = True
-        state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1))
+        state.validate_item_size(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1)
 
         state = InterpreterState(policy)
         state.is_utxo_after_genesis = True
         state.is_consensus = False
-        state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1))
+        state.validate_item_size(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1)
 
     def test_bump_op_count(self, policy):
         state = InterpreterState(policy)
@@ -1508,7 +1530,7 @@ class TestEvaluateScript:
         if state.is_utxo_after_genesis:
             evaluate_script(state, script)
         else:
-            with pytest.raises(ItemTooLarge):
+            with pytest.raises(InvalidPushSize):
                 evaluate_script(state, script)
 
     def test_SPLIT(self, state):
@@ -1542,6 +1564,81 @@ class TestEvaluateScript:
             evaluate_script(state, script)
         assert 'cannot split item of length 6 at position 7' in str(e.value)
 
+    def test_NUM2BIN_stack(self, state):
+        self.require_stack(state, 2, OP_NUM2BIN)
+
+    @pytest.mark.parametrize("value,size,result", (
+        ('00', -3, None),
+        ('00', 0x80000000, None),
+        ('', 0, ''),
+        ('', 1, '00'),
+        ('', 7, '00000000000000'),
+        ('01', 1, '01'),
+        ('aa', 1, 'aa'),
+        ('aa', 2, '2a80'),
+        ('aa', 10, '2a000000000000000080'),
+        ('abcdef4280', 4, 'abcdefc2'),
+        ('80', 0, ''),
+        ('80', 3, '000000'),
+    ))
+    def test_NUM2BIN(self, state, value, size, result):
+        value = bytes.fromhex(value)
+        script = Script() << value << size << OP_NUM2BIN
+        if result is None:
+            with pytest.raises(InvalidPushSize) as e:
+                evaluate_script(state, script)
+            assert f'invalid size {size:,d} in OP_NUM2BIN operation' == str(e.value)
+            assert len(state.stack) == 2
+        else:
+            evaluate_script(state, script)
+            assert len(state.stack) == 1
+            assert state.stack[0].hex() == result
+            assert not state.alt_stack
+
+    def test_NUM2BIN_oversized(self, state):
+        value = b'\x01'
+        size = state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1
+        script = Script() << value << size << OP_NUM2BIN
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+            assert len(state.stack) == 1
+            assert state.stack[0] == b'\1' + bytes(520)
+        else:
+            with pytest.raises(InvalidPushSize) as e:
+                evaluate_script(state, script)
+            assert 'item length 521 exceeds' in str(e.value)
+            assert len(state.stack) == 2
+
+    def test_BIN2NUM_stack(self, state):
+        self.require_stack(state, 1, OP_BIN2NUM)
+
+    @pytest.mark.parametrize("value,result", (
+        ('00', ''),
+        ('ffffff7f', 'ffffff7f'),
+        ('ffffffff', 'ffffffff'),
+        ('ffffffff00', 'ffffffff00'),
+        ('ffffff7f80', 'ffffffff'),
+        ('0100000000', '01'),
+        ('fe00000000', 'fe00'),
+        ('0f00', '0f'),
+        ('0f80', '8f'),
+        ('0100800000', '01008000'),
+        ('0100800080', '01008080'),
+        ('01000f0000', '01000f'),
+        ('01000f0080', '01008f'),
+    ))
+    def test_BIN2NUM(self, state, value, result):
+        value = bytes.fromhex(value)
+        script = Script() << value << OP_BIN2NUM
+        if len(result) // 2 > state.max_script_num_length:
+            with pytest.raises(InvalidNumber):
+                evaluate_script(state, script)
+        else:
+            evaluate_script(state, script)
+        # Stack contains the result even on failure
+        assert len(state.stack) == 1
+        assert state.stack[0].hex() == result
+        assert not state.alt_stack
 
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),

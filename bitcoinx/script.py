@@ -13,8 +13,9 @@ __all__ = (
     'StackSizeTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
-    'ItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
-    'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit',
+    'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
+    'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
+    'InvalidNumber',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -72,8 +73,16 @@ class MinimalPushOpNotUsed(InterpreterError):
     '''Raised when a stack push happens not using the minimally-encoded push operation.'''
 
 
-class ItemTooLarge(InterpreterError):
-    '''Raised when an item pushed on the stack is too large.'''
+class InvalidPushSize(InterpreterError):
+    '''Raised when an item size is negative or too large.'''
+
+
+class ImpossibleEncoding(InterpreterError):
+    '''Raised when an OP_NUM2BIN encoding will not fit in the required size.'''
+
+
+class InvalidNumber(InterpreterError):
+    '''Raised when an OP_BIN2NUM result exceeds the maximum number size.'''
 
 
 class StackSizeTooLarge(InterpreterError):
@@ -168,11 +177,11 @@ class Ops(IntEnum):
     OP_SWAP = 0x7c
     OP_TUCK = 0x7d
 
-    # splice ops
+    # bit string ops
     OP_CAT = 0x7e
-    OP_SPLIT = 0x7f    # after monolith upgrade (May 2018)
-    OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
-    OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
+    OP_SPLIT = 0x7f
+    OP_NUM2BIN = 0x80
+    OP_BIN2NUM = 0x81
     OP_SIZE = 0x82
 
     # bit logic
@@ -312,24 +321,40 @@ def item_to_int(item):
     return le_bytes_to_int(item)
 
 
-def int_to_item(value):
-    '''Returns a minimally-encoded stack item of an integer.'''
-    if value > 0:
-        result = int_to_le_bytes(value)
-        if result[-1] & 0x80:
-            result = result + b'\0'
-        return result
-    if value == 0:
-        return b''
-    pos_value = int_to_le_bytes(-value)
-    if pos_value[-1] & 0x80:
-        return pos_value + b'\x80'
-    return pos_value[:-1] + pack_byte(pos_value[-1] + 0x80)
+def int_to_item(value, size=None):
+    '''Returns an encoded stack item of an integer.  If size is None this is minimally
+    encoded, othewise it is fit to that many bytes, raising ImpossibleEncoding if it
+    cannot be done.
+    '''
+    try:
+        encoding = int_to_le_bytes(abs(value), size)
+    except OverflowError:
+        pass
+    else:
+        if value == 0:
+            return encoding
+        if value > 0:
+            if encoding[-1] < 0x80:
+                return encoding
+            if size is None:
+                return encoding + b'\0'
+        else:
+            if encoding[-1] < 0x80:
+                return encoding[:-1] + pack_byte(encoding[-1] | 0x80)
+            if size is None:
+                return encoding + b'\x80'
+
+    raise ImpossibleEncoding(f'value cannot be encoded in {size:,d} bytes')
+
+
+def minimal_encoding(item):
+    '''Return the minimal encoding of the number represented by item.'''
+    return int_to_item(item_to_int(item))
 
 
 def is_item_minimally_encoded(item):
     '''Return True if item is a minimally-encoded number.'''
-    return int_to_item(item_to_int(item)) == item
+    return minimal_encoding(item) == item
 
 
 def minimal_push_opcode(item):
@@ -687,7 +712,8 @@ class SmallNum:
         return value
 
 
-UINT_MAX = 0xffffffff
+UINT32_MAX = 0xffffffff
+INT32_MAX  = 0x7fffffff
 bool_items = [b'', b'\1']
 
 
@@ -720,13 +746,13 @@ class InterpreterState:
     transaction input.'''
 
     MAX_SCRIPT_SIZE_BEFORE_GENESIS = 10_000
-    MAX_SCRIPT_SIZE_AFTER_GENESIS = UINT_MAX    # limited by P2P message size
+    MAX_SCRIPT_SIZE_AFTER_GENESIS = UINT32_MAX    # limited by P2P message size
     MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS = 4
     MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS = 750_000
     MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS = 520
     MAX_STACK_ELEMENTS_BEFORE_GENESIS = 1_000
     MAX_OPS_PER_SCRIPT_BEFORE_GENESIS = 500
-    MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT_MAX
+    MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT32_MAX
 
     def __init__(self, policy, *, flags=0, is_consensus=False, is_genesis_enabled=True,
                  is_utxo_after_genesis=True, sig_checker=None):
@@ -775,13 +801,13 @@ class InterpreterState:
     def stack_size(self):
         return len(self.stack) + len(self.alt_stack)
 
-    def validate_item_size(self, item):
+    def validate_item_size(self, size):
         # No limit for post-genesis UTXOs.
         if not self.is_utxo_after_genesis:
             limit = self.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
-            if len(item) > limit:
-                raise ItemTooLarge(f'item length {len(item):,d} exceeds the limit of '
-                                   f'{limit:,d} bytes')
+            if size > limit:
+                raise InvalidPushSize(f'item length {size:,d} exceeds the limit '
+                                      f'of {limit:,d} bytes')
 
     def validate_stack_size(self):
         if self.is_utxo_after_genesis:
@@ -790,6 +816,12 @@ class InterpreterState:
         limit = self.MAX_STACK_ELEMENTS_BEFORE_GENESIS
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
+
+    def validate_number_length(self, size):
+        limit = self.max_script_num_length
+        if size > limit:
+            raise InvalidNumber(f'number of length {size:,d} exceeds the limit '
+                                f'of {limit:,d} bytes')
 
     def to_number(self, item):
         # FIXME: handle pre-genesis numbers
@@ -847,7 +879,7 @@ def evaluate_script(state, script):
     for op, item in script.ops_and_items():
         # Check pushitem size first
         if item is not None:
-            state.validate_item_size(item)
+            state.validate_item_size(len(item))
 
         state.execute = (all(condition.execute for condition in state.conditions)
                          and (not state.non_top_level_return_after_genesis or op == OP_RETURN))
@@ -1063,12 +1095,6 @@ def handle_PICK_ROLL(state, op):
         state.stack.append(state.stack.pop(-(n + 1)))
 
 
-# def handle_SIZE(state):
-#     # ( x -- x size(x) )
-#     if not state.stack:
-#     state.stack.append(len(state.stack[-1]))
-
-
 # #
 # # Bitwise logic
 # #
@@ -1172,7 +1198,7 @@ def handle_CAT(state):
     # (x1 x2 -- x1x2 )
     state.require_stack_depth(2)
     item = state.stack[-2] + state.stack[-1]
-    state.validate_item_size(item)
+    state.validate_item_size(len(item))
     state.stack.pop()
     state.stack[-1] = item
 
@@ -1188,9 +1214,28 @@ def handle_SPLIT(state):
     state.stack[-1] = x[n:]
 
 
-# #
-# # Conversion operations  TODO: both
-# #
+def handle_NUM2BIN(state):
+    # (in size -- out)  encode the value of "in" in size bytes
+    state.require_stack_depth(2)
+    size = state.to_number(state.stack[-1])
+    if size < 0 or size > INT32_MAX:
+        raise InvalidPushSize(f'invalid size {size:,d} in OP_NUM2BIN operation')
+    state.validate_item_size(size)
+    state.stack.pop()
+    state.stack[-1] = int_to_item(item_to_int(state.stack[-1]), size)
+
+
+def handle_BIN2NUM(state):
+    # (in -- out)    minimally encode in as a number
+    state.require_stack_depth(1)
+    state.stack[-1] = minimal_encoding(state.stack[-1])
+    state.validate_number_length(len(state.stack[-1]))
+
+
+# def handle_SIZE(state):
+#     # ( x -- x size(x) )
+#     if not state.stack:
+#     state.stack.append(len(state.stack[-1]))
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
@@ -1237,9 +1282,9 @@ op_handlers[OP_TUCK] = handle_TUCK
 #
 op_handlers[OP_CAT] = handle_CAT
 op_handlers[OP_SPLIT] = handle_SPLIT
-# OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
-# OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
-# OP_SIZE = 0x82
+op_handlers[OP_NUM2BIN] = handle_NUM2BIN
+op_handlers[OP_BIN2NUM] = handle_BIN2NUM
+# op_handlers[OP_SIZE] = handle_SIZE
 
 # # bit logic
 # OP_INVERT = 0x83
