@@ -1143,11 +1143,11 @@ def handle_EQUALVERIFY(state):
 # Numeric
 #
 
-def handle_unary_numeric(state, operator):
+def handle_unary_numeric(state, unary_op):
     # (in -- out)
     state.require_stack_depth(1)
     value = state.to_number(state.stack[-1])
-    state.stack[-1] = int_to_item(operator(value))
+    state.stack[-1] = int_to_item(unary_op(value))
 
 
 # def handle_ADD(state):
@@ -1319,14 +1319,14 @@ op_handlers[OP_EQUALVERIFY] = handle_EQUALVERIFY
 #
 # Numeric
 #
-op_handlers[OP_1ADD] = partial(handle_unary_numeric, operator=lambda x: x + 1)
-op_handlers[OP_1SUB] = partial(handle_unary_numeric, operator=lambda x: x - 1)
+op_handlers[OP_1ADD] = partial(handle_unary_numeric, unary_op=lambda x: x + 1)
+op_handlers[OP_1SUB] = partial(handle_unary_numeric, unary_op=lambda x: x - 1)
 # OP_2MUL = 0x8d
 # OP_2DIV = 0x8e
-op_handlers[OP_NEGATE] = partial(handle_unary_numeric, operator=operator.neg)
-op_handlers[OP_ABS] = partial(handle_unary_numeric, operator=operator.abs)
-op_handlers[OP_NOT] = partial(handle_unary_numeric, operator=operator.not_)
-op_handlers[OP_0NOTEQUAL] = partial(handle_unary_numeric, operator=operator.truth)
+op_handlers[OP_NEGATE] = partial(handle_unary_numeric, unary_op=operator.neg)
+op_handlers[OP_ABS] = partial(handle_unary_numeric, unary_op=operator.abs)
+op_handlers[OP_NOT] = partial(handle_unary_numeric, unary_op=operator.not_)
+op_handlers[OP_0NOTEQUAL] = partial(handle_unary_numeric, unary_op=operator.truth)
 
 # OP_ADD = 0x93
 # OP_SUB = 0x94
