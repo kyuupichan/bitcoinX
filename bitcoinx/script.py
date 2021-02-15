@@ -123,6 +123,10 @@ class EqualVerifyFailed(VerifyFailed):
     '''OP_EQUALVERIFY was executed and it failed.'''
 
 
+class NumEqualVerifyFailed(VerifyFailed):
+    '''OP_NUMEQUALVERIFY was executed and it failed.'''
+
+
 class OpReturnError(InterpreterError):
     '''OP_RETURN was encountered pre-genesis.'''
 
@@ -1144,19 +1148,53 @@ def handle_EQUALVERIFY(state):
 #
 
 def handle_unary_numeric(state, unary_op):
-    # (in -- out)
+    # (x -- out)
     state.require_stack_depth(1)
     value = state.to_number(state.stack[-1])
     state.stack[-1] = int_to_item(unary_op(value))
 
 
-# def handle_ADD(state):
-#     # (x1 x2 -- out)
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     x2 = item_to_int(state.stack.pop())
-#     x1 = item_to_int(state.stack.pop())
-#     state.stack.append(int_to_item(x1 + x2))
+def handle_binary_numeric(state, binary_op):
+    # (x1 x2 -- out)
+    state.require_stack_depth(2)
+    x1 = state.to_number(state.stack[-2])
+    x2 = state.to_number(state.stack[-1])
+    try:
+        result = binary_op(x1, x2)
+    except ZeroDivisionError:
+        raise DivisionByZero('division by zero' if binary_op == bitcoin_div
+                             else 'modulo by zero') from None
+    state.stack.pop()
+    state.stack[-1] = int_to_item(result)
+
+
+def handle_NUMEQUALVERIFY(state):
+    # (x1 x2 -- )
+    handle_binary_numeric(state, operator.eq)
+    if not cast_to_bool(state.stack[-1]):
+        raise NumEqualVerifyFailed()
+    state.stack.pop()
+
+
+def bitcoin_div(a, b):
+    # In bitcoin script division is rounded towards zero
+    result = abs(a) // abs(b)
+    return -result if (a >= 0) ^ (b >= 0) else result
+
+
+def bitcoin_mod(a, b):
+    # In bitcoin script a % b is abs(a) % abs(b) with the sign of a.
+    # Then (a % b) * b + a == a
+    result = abs(a) % abs(b)
+    return result if a >= 0 else -result
+
+
+def logical_and(x1, x2):
+    return 1 if (x1 and x2) else 0
+
+
+def logical_or(x1, x2):
+    return 1 if (x1 or x2) else 0
 
 
 # def handle_WITHIN(state):
@@ -1327,31 +1365,27 @@ op_handlers[OP_NEGATE] = partial(handle_unary_numeric, unary_op=operator.neg)
 op_handlers[OP_ABS] = partial(handle_unary_numeric, unary_op=operator.abs)
 op_handlers[OP_NOT] = partial(handle_unary_numeric, unary_op=operator.not_)
 op_handlers[OP_0NOTEQUAL] = partial(handle_unary_numeric, unary_op=operator.truth)
-
-# OP_ADD = 0x93
-# OP_SUB = 0x94
-# OP_MUL = 0x95
-# OP_DIV = 0x96
-# OP_MOD = 0x97
-
-# OP_BOOLAND = 0x9a
-# OP_BOOLOR = 0x9b
-# OP_NUMEQUAL = 0x9c
-# OP_NUMEQUALVERIFY = 0x9d
-# OP_NUMNOTEQUAL = 0x9e
-# OP_LESSTHAN = 0x9f
-# OP_GREATERTHAN = 0xa0
-# OP_LESSTHANOREQUAL = 0xa1
-# OP_GREATERTHANOREQUAL = 0xa2
-# OP_MIN = 0xa3
-# OP_MAX = 0xa4
-
+op_handlers[OP_ADD] = partial(handle_binary_numeric, binary_op=operator.add)
+op_handlers[OP_SUB] = partial(handle_binary_numeric, binary_op=operator.sub)
+op_handlers[OP_MUL] = partial(handle_binary_numeric, binary_op=operator.mul)
+op_handlers[OP_DIV] = partial(handle_binary_numeric, binary_op=bitcoin_div)
+op_handlers[OP_MOD] = partial(handle_binary_numeric, binary_op=bitcoin_mod)
+op_handlers[OP_BOOLAND] = partial(handle_binary_numeric, binary_op=logical_and)
+op_handlers[OP_BOOLOR] = partial(handle_binary_numeric, binary_op=logical_or)
+op_handlers[OP_NUMEQUAL] = partial(handle_binary_numeric, binary_op=operator.eq)
+op_handlers[OP_NUMEQUALVERIFY] = handle_NUMEQUALVERIFY
+op_handlers[OP_NUMNOTEQUAL] = partial(handle_binary_numeric, binary_op=operator.ne)
+op_handlers[OP_LESSTHAN] = partial(handle_binary_numeric, binary_op=operator.lt)
+op_handlers[OP_GREATERTHAN] = partial(handle_binary_numeric, binary_op=operator.gt)
+op_handlers[OP_LESSTHANOREQUAL] = partial(handle_binary_numeric, binary_op=operator.le)
+op_handlers[OP_GREATERTHANOREQUAL] = partial(handle_binary_numeric, binary_op=operator.ge)
+op_handlers[OP_MIN] = partial(handle_binary_numeric, binary_op=min)
+op_handlers[OP_MAX] = partial(handle_binary_numeric, binary_op=max)
 # OP_WITHIN = 0xa5
 
 #
 # Crypto
 #
-
 op_handlers[OP_RIPEMD160] = partial(handle_hash, hash_func=ripemd160)
 op_handlers[OP_SHA1] = partial(handle_hash, hash_func=sha1)
 op_handlers[OP_SHA256] = partial(handle_hash, hash_func=sha256)
