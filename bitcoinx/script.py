@@ -1328,7 +1328,7 @@ op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
 # Control
 #
 op_handlers[OP_NOP] = handle_NOP
-# OP_VER = 0x62
+op_handlers[OP_VER] = partial(invalid_opcode, op=OP_VER)
 op_handlers[OP_IF] = partial(handle_IF, op=OP_IF)
 op_handlers[OP_NOTIF] = partial(handle_IF, op=OP_NOTIF)
 op_handlers[OP_VERIF] = partial(handle_VERIF, op=OP_VERIF)
@@ -1381,8 +1381,8 @@ op_handlers[OP_EQUAL] = handle_EQUAL
 op_handlers[OP_EQUALVERIFY] = handle_EQUALVERIFY
 op_handlers[OP_LSHIFT] = handle_LSHIFT
 op_handlers[OP_RSHIFT] = handle_RSHIFT
-# OP_RESERVED1 and OP_RESERVED2 become the default invalid opcode handler
-
+op_handlers[OP_RESERVED1] = partial(invalid_opcode, op=OP_RESERVED1)
+op_handlers[OP_RESERVED2] = partial(invalid_opcode, op=OP_RESERVED2)
 
 #
 # Numeric
