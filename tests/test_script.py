@@ -2090,6 +2090,20 @@ class TestEvaluateScript:
         with pytest.raises(InvalidNumber):
             evaluate_script(state_old_utxo, script)
 
+    def test_overflow(self, state_old_utxo):
+        script = Script().push_many((70000, 70000, OP_MUL))
+        evaluate_script(state_old_utxo, script)
+        state_old_utxo.reset()
+
+        script = Script().push_many((70000, 70000, OP_MUL, OP_0, OP_ADD))
+        with pytest.raises(InvalidNumber):
+            evaluate_script(state_old_utxo, script)
+        state_old_utxo.reset()
+
+        # OP_VERIFY (cast_to_bool) is fine
+        script = Script().push_many((70000, 70000, OP_MUL, OP_VERIFY))
+        evaluate_script(state_old_utxo, script)
+
     @pytest.mark.parametrize("a,b,div,mod", (
         (0x185377af, -0x05f41b01, -4, 0x00830bab),
         (408123311, -99883777, -4, 8588203),

@@ -712,74 +712,6 @@ class Script:
         return template, items
 
 
-class SmallNum:
-    '''Legacy Bitcoin Core mess.'''
-
-    def __init__(self, value):
-        self.value = value
-        assert -(1 << 63) <= self.value < (1 << 63)
-
-    @classmethod
-    def from_item(cls, item):
-        '''Insane.'''
-        # FIXME: 8 byte restriction
-        if not item:
-            return cls(0)
-        if item[-1] & 0x80:
-            return cls(-le_bytes_to_int(item[:-1] + pack_byte(item[-1] & 0x7f)))
-        else:
-            return cls(le_bytes_to_int(item))
-
-    def __abs__(self):
-        return SmallNum(abs(self.value))
-
-    def __int__(self):
-        return self.value
-
-    def __bool__(self):
-        return bool(self.value)
-
-    def __neg__(self):
-        return SmallNum(-self.value)
-
-    def __eq__(self, other):
-        return self.value == int(other)
-
-    def __ge__(self, other):
-        return self.value >= int(other)
-
-    def __le__(self, other):
-        return self.value <= int(other)
-
-    def __lt__(self, other):
-        return self.value < int(other)
-
-    def __gt__(self, other):
-        return self.value > int(other)
-
-    def __mul__(self, other):
-        return SmallNum(self.value * int(other))
-
-    def __add__(self, other):
-        return SmallNum(self.value + int(other))
-
-    def __sub__(self, other):
-        return SmallNum(self.value - int(other))
-
-    def __floordiv__(self, other):
-        assert self.value >= 0
-        assert int(other) >= 0
-        return SmallNum(self.value // int(other))
-
-    def __mod__(self, other):
-        assert self.value >= 0
-        assert int(other) >= 0
-        return SmallNum(self.value % int(other))
-
-    def __repr__(self):
-        return f'CSmallNum<{self.value}>'
-
-
 UINT32_MAX = 0xffffffff
 INT32_MAX = 0x7fffffff
 bool_items = [b'', b'\1']
@@ -896,11 +828,7 @@ class InterpreterState:
         if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH and not is_minimally_encoded(item):
             raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
 
-        if self.is_utxo_after_genesis:
-            # A bignum
-            return item_to_int(item)
-        else:
-            return SmallNum.from_item(item)
+        return item_to_int(item)
 
     @cachedproperty
     def max_ops_per_script(self):
