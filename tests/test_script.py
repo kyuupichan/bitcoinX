@@ -1008,6 +1008,18 @@ class TestInterpreterState:
 reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
 
 
+def value_bytes(x):
+    if isinstance(x, bytes):
+        return x
+    if isinstance(x, str):
+        return bytes.fromhex(x)
+    return int_to_item(x)
+
+
+def negate_bytes(x):
+    return int_to_item(-item_to_int(value_bytes(x)))
+
+
 class TestEvaluateScript:
 
     def test_max_script_size(self, state):
@@ -1618,9 +1630,13 @@ class TestEvaluateScript:
         value = bytes.fromhex(value)
         script = Script() << value << size << OP_NUM2BIN
         if result is None:
-            with pytest.raises(InvalidPushSize) as e:
-                evaluate_script(state, script)
-            assert f'invalid size {size:,d} in OP_NUM2BIN operation' == str(e.value)
+            if size >= 0x80000000 and not state.is_utxo_after_genesis:
+                with pytest.raises(InvalidNumber) as e:
+                    evaluate_script(state, script)
+            else:
+                with pytest.raises(InvalidPushSize) as e:
+                    evaluate_script(state, script)
+                    assert f'invalid size {size:,d} in OP_NUM2BIN operation' == str(e.value)
             assert len(state.stack) == 2
         else:
             evaluate_script(state, script)
@@ -1915,6 +1931,49 @@ class TestEvaluateScript:
         evaluate_script(state, script)
         assert state.stack == [hash_func(b'foo')]
         assert not state.alt_stack
+
+    @pytest.mark.parametrize("a,b,mul", (
+        ('05', '06', '1e'),
+        ('05', '26', 'be00'),
+        ('45', '26', '3e0a'),
+        ('02', '5624', 'ac48'),
+        ('05', '260332', 'be0ffa00'),
+        ('06', '26033204', 'e4122c19'),
+        ('a0a0', 'f5e4', '20b9dd0c'),
+    ))
+    def test_mul(self, state_old_utxo, a, b, mul):
+        a, b, neg_a, neg_b = value_bytes(a), value_bytes(b), negate_bytes(a), negate_bytes(b)
+        mul, neg_mul = value_bytes(mul), negate_bytes(mul)
+
+        # Test negative values
+        script = Script().push_many((a, b, OP_MUL, a, neg_b, OP_MUL,
+                                     neg_a, b, OP_MUL, neg_a, neg_b, OP_MUL))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [mul, neg_mul, neg_mul, mul]
+
+        # Commutativity
+        state_old_utxo.reset()
+        script = Script().push_many((b, a, OP_MUL))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [mul]
+
+        # Identities
+        state_old_utxo.reset()
+        script = Script().push_many((a, 1, OP_MUL, a, b'\x81', OP_MUL, a, b'', OP_MUL,
+                                     1, a, OP_MUL, b'\x81', a, OP_MUL, b'', a, OP_MUL))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [a, neg_a, b''] * 2
+
+    @pytest.mark.parametrize("a,b", (
+        ('0102030405', '0102030405'),
+        ('0105', '0102030405'),
+        ('0102030405', '01'),
+    ))
+    def test_mul_error(self, state_old_utxo, a, b):
+        a, b = value_bytes(a), value_bytes(b)
+        script = Script().push_many((a, b, OP_MUL))
+        with pytest.raises(InvalidNumber):
+            evaluate_script(state_old_utxo, script)
 
     @pytest.mark.parametrize("a,b,div,mod", (
         (0x185377af, -0x05f41b01, -4, 0x00830bab),

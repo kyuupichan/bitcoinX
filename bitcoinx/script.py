@@ -732,6 +732,9 @@ class SmallNum:
     def __int__(self):
         return self.value
 
+    def __bool__(self):
+        return bool(self.value)
+
     def __neg__(self):
         return SmallNum(-self.value)
 
@@ -741,8 +744,23 @@ class SmallNum:
     def __ge__(self, other):
         return self.value >= int(other)
 
+    def __le__(self, other):
+        return self.value <= int(other)
+
+    def __lt__(self, other):
+        return self.value < int(other)
+
     def __gt__(self, other):
         return self.value > int(other)
+
+    def __mul__(self, other):
+        return SmallNum(self.value * int(other))
+
+    def __add__(self, other):
+        return SmallNum(self.value + int(other))
+
+    def __sub__(self, other):
+        return SmallNum(self.value - int(other))
 
     def __floordiv__(self, other):
         assert self.value >= 0
@@ -1122,7 +1140,7 @@ def handle_PICK_ROLL(state, op):
     # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
     # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
     state.require_stack_depth(2)
-    n = state.to_number(state.stack[-1])
+    n = int(state.to_number(state.stack[-1]))
     state.stack.pop()
     depth = len(state.stack)
     if not 0 <= n < depth:
@@ -1286,7 +1304,7 @@ def handle_SPLIT(state):
     # (x posiition -- x1 x2)
     state.require_stack_depth(2)
     x = state.stack[-2]
-    n = state.to_number(state.stack[-1])
+    n = int(state.to_number(state.stack[-1]))
     if not 0 <= n <= len(x):
         raise InvalidSplit(f'cannot split item of length {len(x):,d} at position {n:,d}')
     state.stack[-2] = x[:n]
@@ -1296,7 +1314,7 @@ def handle_SPLIT(state):
 def handle_NUM2BIN(state):
     # (in size -- out)  encode the value of "in" in size bytes
     state.require_stack_depth(2)
-    size = state.to_number(state.stack[-1])
+    size = int(state.to_number(state.stack[-1]))
     if size < 0 or size > INT32_MAX:
         raise InvalidPushSize(f'invalid size {size:,d} in OP_NUM2BIN operation')
     state.validate_item_size(size)
