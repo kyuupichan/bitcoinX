@@ -12,7 +12,7 @@ __all__ = (
     'Ops', 'Script', 'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
-    'ScriptTooLarge', 'TooManyOps', 'MinimalIfError', 'DivisionByZero',
+    'ScriptTooLarge', 'TooManyOps', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
     'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'ScriptNumberOverflow',
@@ -109,6 +109,10 @@ class DisabledOpcode(InterpreterError):
 
 class InvalidOpcode(InterpreterError):
     '''Raised when an invalid opcode is encountered.'''
+
+
+class NegativeShiftCount(InterpreterError):
+    '''Raised when a shift of a negative number of bits is encountered.'''
 
 
 class InvalidSplit(InterpreterError):
@@ -1187,6 +1191,56 @@ def handle_EQUALVERIFY(state):
     state.stack.pop()
 
 
+def shift_left(value, count):
+    n_bytes, n_bits = divmod(count, 8)
+    n_bytes = min(n_bytes, len(value))
+
+    def pairs():
+        for n in range(n_bytes, len(value) - 1):
+            yield value[n], value[n + 1]
+        if n_bytes < len(value):
+            yield value[-1], 0
+        for n in range(n_bytes):
+            yield 0, 0
+
+    return bytes(((lhs << n_bits) & 255) + (rhs >> (8 - n_bits)) for lhs, rhs in pairs())
+
+
+def shift_right(value, count):
+    n_bytes, n_bits = divmod(count, 8)
+    n_bytes = min(n_bytes, len(value))
+
+    def pairs():
+        for n in range(n_bytes):
+            yield 0, 0
+        if n_bytes < len(value):
+            yield 0, value[0]
+        for n in range(len(value) - 1 - n_bytes):
+            yield value[n], value[n + 1]
+
+    return bytes(((lhs << (8 - n_bits)) & 255) + (rhs >> n_bits) for lhs, rhs in pairs())
+
+
+def handle_LSHIFT(state):
+    # (x n -- out).   Logical bit-shift maintaining item size
+    state.require_stack_depth(2)
+    n = int(state.to_number(state.stack[-1]))
+    if n < 0:
+        raise NegativeShiftCount(f'invalid shift left of {n:,d} bits')
+    state.stack.pop()
+    state.stack[-1] = shift_left(state.stack[-1], n)
+
+
+def handle_RSHIFT(state):
+    # (x n -- out).   Logical bit-shift maintaining item size
+    state.require_stack_depth(2)
+    n = int(state.to_number(state.stack[-1]))
+    if n < 0:
+        raise NegativeShiftCount(f'invalid right left of {n:,d} bits')
+    state.stack.pop()
+    state.stack[-1] = shift_right(state.stack[-1], n)
+
+
 #
 # Numeric
 #
@@ -1393,8 +1447,8 @@ op_handlers[OP_OR] = partial(handle_binary_bitop, binop=operator.or_)
 op_handlers[OP_XOR] = partial(handle_binary_bitop, binop=operator.xor)
 op_handlers[OP_EQUAL] = handle_EQUAL
 op_handlers[OP_EQUALVERIFY] = handle_EQUALVERIFY
-# OP_LSHIFT = 0x98
-# OP_RSHIFT = 0x99
+op_handlers[OP_LSHIFT] = handle_LSHIFT
+op_handlers[OP_RSHIFT] = handle_RSHIFT
 # OP_RESERVED1 and OP_RESERVED2 become the default invalid opcode handler
 
 
