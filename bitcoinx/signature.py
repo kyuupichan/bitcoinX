@@ -155,8 +155,16 @@ class SigHash(int):
 
     @property
     def anyone_can_pay(self):
-        '''Returns True if ANYONE_CAN_PAY is set.'''
+        '''Return True if ANYONE_CAN_PAY is set.'''
         return bool(self & SigHash.ANYONE_CAN_PAY)
+
+    def has_forkid(self):
+        '''Return True if the FORKID bit is set.'''
+        return bool(self & SigHash.FORKID)
+
+    def is_defined(self):
+        '''Return True if the sighash "is defined".'''
+        return SigHash.ALL <= self & ~(SigHash.FORKID | SigHash.ANYONE_CAN_PAY) <= SigHash.SINGLE
 
     def to_string(self):
         kinds = []
