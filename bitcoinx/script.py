@@ -1205,7 +1205,7 @@ def shift_right(value, count):
     n_bytes, n_bits = divmod(count, 8)
     n_bytes = min(n_bytes, len(value))
 
-    def pairs(value, nbytes):
+    def pairs(value, n_bytes):
         for n in range(n_bytes):
             yield 0, 0
         if n_bytes < len(value):
