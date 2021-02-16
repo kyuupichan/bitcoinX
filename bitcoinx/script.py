@@ -30,16 +30,16 @@ from .errors import (
     ScriptTooLarge, TooManyOps, MinimalIfError, DivisionByZero, NegativeShiftCount,
     InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
-    InvalidNumber, InvalidOperandSize, EqualVerifyFailed,
-    #InvalidSighashType, InvalidPublicKeyEncoding,
+    InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32, unpack_le_uint16, unpack_le_uint32,
 )
-from .signature import Signature, InvalidSignatureError
+from .signature import Signature, InvalidSignatureError, SigHash
 from .util import cachedproperty
+
 
 class Ops(IntEnum):
     OP_0 = 0x00
@@ -804,6 +804,27 @@ class InterpreterState:
             raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
 
         return item_to_int(item)
+
+    def validate_signature(self, sig_bytes):
+        if not sig_bytes:
+            return
+
+        if (self.flags & (InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.REQUIRE_LOW_S
+                          | InterpreterFlags.REQUIRE_STRICT_ENCODING)
+                and not Signature.is_strict_der_encoding(sig_bytes)):
+            raise InvalidSignature('signature does not follow strict DER encoding')
+
+        if self.flags & InterpreterFlags.REQUIRE_LOW_S and not Signature.is_low_S(sig_bytes):
+            raise InvalidSignature('signature has high S value')
+
+        if self.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
+            sighash = SigHash(sig_bytes[-1])
+            if not sighash.is_defined():
+                raise InvalidSignature('undefined sighash type')
+            if sighash.has_forkid() and not (self.flags & InterpreterFlags.FORKID_ENABLED):
+                raise InvalidSignature('sighash must not use FORKID')
+            if not sighash.has_forkid() and (self.flags & InterpreterFlags.FORKID_ENABLED):
+                raise InvalidSignature('sighash must use FORKID')
 
     @cachedproperty
     def max_ops_per_script(self):
