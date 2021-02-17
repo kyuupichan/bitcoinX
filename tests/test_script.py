@@ -1070,6 +1070,24 @@ class TestEvaluateScript:
         assert state.stack == list(datas + datas[:2])
         assert not state.alt_stack
 
+    def test_2ROT(self, state):
+        self.require_stack(state, 6, OP_2ROT)
+        push_datas = [self.random_push_data() for _ in range(8)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2ROT
+        evaluate_script(state, script)
+        assert state.stack == list(datas[:2] + datas[4:] + datas[2:4])
+        assert not state.alt_stack
+
+    def test_2SWAP(self, state):
+        self.require_stack(state, 4, OP_2SWAP)
+        push_datas = [self.random_push_data() for _ in range(5)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2SWAP
+        evaluate_script(state, script)
+        assert state.stack == list(datas[:1] + datas[3:] + datas[1:3])
+        assert not state.alt_stack
+
     def test_TOALTSTACK(self, state):
         self.require_stack(state, 1, OP_TOALTSTACK)
         script = Script() << OP_12 << OP_TOALTSTACK

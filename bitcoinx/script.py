@@ -906,24 +906,16 @@ def handle_2OVER(state):
     state.stack.extend(state.stack[-4: -2])
 
 
-# def handle_2ROT(state):
-#     # (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
-#     if len(state.stack) < 6:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack.pop(-6)
-#     x2 = state.stack.pop(-5)
-#     state.stack.append(x1)
-#     state.stack.append(x2)
+def handle_2ROT(state):
+    # (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
+    state.require_stack_depth(6)
+    state.stack.extend([state.stack.pop(-6), state.stack.pop(-5)])
 
 
-# def handle_2SWAP(state):
-#     # (x1 x2 x3 x4 -- x3 x4 x1 x2)
-#     if len(state.stack) < 4:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack.pop(-4)
-#     x2 = state.stack.pop(-3)
-#     state.stack.append(x1)
-#     state.stack.append(x2)
+def handle_2SWAP(state):
+    # (x1 x2 x3 x4 -- x3 x4 x1 x2)
+    state.require_stack_depth(4)
+    state.stack.extend([state.stack.pop(-4), state.stack.pop(-3)])
 
 
 # def handle_IFDUP(state):
@@ -1111,8 +1103,8 @@ op_handlers[OP_2DUP] = partial(handle_nDUP, n=2)
 op_handlers[OP_3DUP] = partial(handle_nDUP, n=3)
 op_handlers[OP_OVER] = handle_OVER
 op_handlers[OP_2OVER] = handle_2OVER
-# OP_2ROT = 0x71
-# OP_2SWAP = 0x72
+op_handlers[OP_2ROT] = handle_2ROT
+op_handlers[OP_2SWAP] = handle_2SWAP
 # OP_IFDUP = 0x73
 # OP_DEPTH = 0x74
 # OP_NIP = 0x77
