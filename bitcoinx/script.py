@@ -1139,9 +1139,15 @@ def handle_EQUALVERIFY(state):
     state.stack.pop()
 
 
-# #
-# # Numeric.  TODO: Many
-# #
+#
+# Numeric
+#
+
+def handle_unary_numeric(state, operator):
+    # (in -- out)
+    state.require_stack_depth(1)
+    value = state.to_number(state.stack[-1])
+    state.stack[-1] = int_to_item(operator(value))
 
 
 # def handle_ADD(state):
@@ -1310,15 +1316,17 @@ op_handlers[OP_EQUALVERIFY] = handle_EQUALVERIFY
 # OP_RESERVED1 and OP_RESERVED2 become the default invalid opcode handler
 
 
-# # numeric
-# OP_1ADD = 0x8b
-# OP_1SUB = 0x8c
+#
+# Numeric
+#
+op_handlers[OP_1ADD] = partial(handle_unary_numeric, operator=lambda x: x + 1)
+op_handlers[OP_1SUB] = partial(handle_unary_numeric, operator=lambda x: x - 1)
 # OP_2MUL = 0x8d
 # OP_2DIV = 0x8e
-# OP_NEGATE = 0x8f
-# OP_ABS = 0x90
-# OP_NOT = 0x91
-# OP_0NOTEQUAL = 0x92
+op_handlers[OP_NEGATE] = partial(handle_unary_numeric, operator=operator.neg)
+op_handlers[OP_ABS] = partial(handle_unary_numeric, operator=operator.abs)
+op_handlers[OP_NOT] = partial(handle_unary_numeric, operator=operator.not_)
+op_handlers[OP_0NOTEQUAL] = partial(handle_unary_numeric, operator=operator.truth)
 
 # OP_ADD = 0x93
 # OP_SUB = 0x94

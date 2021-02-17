@@ -1744,6 +1744,105 @@ class TestEvaluateScript:
                 assert len(state.stack) == 1
         assert not state.alt_stack
 
+
+    @pytest.mark.parametrize("opcode", (OP_1ADD, OP_1SUB, OP_NEGATE, OP_ABS, OP_NOT, OP_0NOTEQUAL))
+    def test_unary_numeric(self, state, opcode):
+        self.require_stack(state, 1, opcode)
+
+    @pytest.mark.parametrize("value, result", (
+        (0, 1),
+        (-1, 0),
+        (127, 128),
+        (255, 256),
+        (bytes(2), 1),
+        (b'\0\x80', 1),
+        (b'\1\x80', 0),
+    ))
+    def test_1ADD(self, state, value, result):
+        script = Script() << value << OP_1ADD
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value, result", (
+        (0, -1),
+        (-1, -2),
+        (127, 126),
+        (255, 254),
+        (bytes(2), -1),
+        (b'\1\x00', 0),
+        (b'\1\x80', -2),
+    ))
+    def test_1SUB(self, state, value, result):
+        script = Script() << value << OP_1SUB
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value, result", (
+        (0, 0),
+        (-1, 1),
+        (1, -1),
+        (127, -127),
+        (255, -255),
+        (bytes(2), 0),
+        (b'\1\x00', -1),
+        (b'\1\x80', 1),
+    ))
+    def test_NEGATE(self, state, value, result):
+        script = Script() << value << OP_NEGATE
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value, result", (
+        (0, 0),
+        (-1, 1),
+        (1, 1),
+        (127, 127),
+        (255, 255),
+        (bytes(2), 0),
+        (b'\x80', 0),
+        (b'\x81', 1),
+    ))
+    def test_ABS(self, state, value, result):
+        script = Script() << value << OP_ABS
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value, result", (
+        (0, 1),
+        (-1, 0),
+        (1, 0),
+        (127, 0),
+        (255, 0),
+        (bytes(2), 1),
+        (b'\x80', 1),
+        (b'\x81', 0),
+    ))
+    def test_NOT(self, state, value, result):
+        script = Script() << value << OP_NOT
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value, result", (
+        (0, 0),
+        (-1, 1),
+        (1, 1),
+        (127, 1),
+        (255, 1),
+        (bytes(2), 0),
+        (b'\x80', 0),
+        (b'\x81', 1),
+    ))
+    def test_0NOTEQUAL(self, state, value, result):
+        script = Script() << value << OP_0NOTEQUAL
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
