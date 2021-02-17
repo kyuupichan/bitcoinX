@@ -5,6 +5,7 @@ import random
 
 from bitcoinx.consts import JSONFlags
 from bitcoinx.script import *
+from bitcoinx.script import disabled_opcodes
 from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet
 
 
@@ -705,25 +706,29 @@ def test_push_int(value, encoding):
     assert push_int(value) == encoding
 
 
-@pytest.mark.parametrize("value,encoding", (
-    (-1, b'\x81'),
-    (-2, b'\x82'),
-    (-127, b'\xff'),
-    (-128, b'\x80\x80'),
-    (0, b''),
-    (1, b'\x01'),
-    (2, b'\x02'),
-    (16, b'\x10'),
-    (127, b'\x7f'),
-    (128, b'\x80\x00'),
-    (129, b'\x81\x00'),
-    (255, b'\xff\x00'),
-    (256, b'\x00\x01'),
-    (32767, b'\xff\x7f'),
-    (32768, b'\x00\x80\x00'),
+@pytest.mark.parametrize("value,encoding,is_minimal", (
+    (-1, b'\x81', True),
+    (-2, b'\x82', True),
+    (-127, b'\xff', True),
+    (-128, b'\x80\x80', True),
+    (0, b'', True),
+    (0, b'\x00', False),
+    (0, b'\x80', False),
+    (1, b'\x01', True),
+    (2, b'\x02', True),
+    (16, b'\x10', True),
+    (127, b'\x7f', True),
+    (128, b'\x80\x00', True),
+    (129, b'\x81\x00', True),
+    (255, b'\xff\x00', True),
+    (256, b'\x00\x01', True),
+    (32767, b'\xff\x7f', True),
+    (32768, b'\x00\x80\x00', True),
 ), ids=parameter_id)
-def test_item_to_int(value, encoding):
+def test_item_to_int(value, encoding, is_minimal):
     assert item_to_int(encoding) == value
+    assert (int_to_item(value) == encoding) is is_minimal
+    assert is_item_minimally_encoded(encoding) is is_minimal
 
 
 @pytest.mark.parametrize("script,ops", (
@@ -736,6 +741,15 @@ def test_item_to_int(value, encoding):
 ), ids=parameter_id)
 def test_script_ops(script, ops):
     assert list(Script(script).ops()) == ops
+
+
+@pytest.mark.parametrize("script,pairs", (
+    (bytes([OP_RESERVED, OP_DUP, OP_NOP, OP_15, OP_HASH160, OP_1NEGATE]) + push_item(b'BitcoinSV'),
+     [(OP_RESERVED, None), (OP_DUP, None), (OP_NOP, None), (OP_15, b'\x0f'),
+      (OP_HASH160, None), (OP_1NEGATE, b'\x81'), (9, b'BitcoinSV')]),
+), ids=['s1'])
+def test_script_ops_and_items(script, pairs):
+    assert list(Script(script).ops_and_items()) == pairs
 
 
 @pytest.mark.parametrize("script", (
@@ -757,3 +771,45 @@ def test_script_ops_truncated(script):
 def test_script_ops_type_error(script):
     with pytest.raises(TypeError):
         list(Script(script).ops())
+
+
+@pytest.mark.parametrize("item,op", (
+    (b'', OP_FALSE),
+    (b'\x00', 1),
+    (b'\x01', OP_1),
+    (b'\x02', OP_2),
+    (b'\x03', OP_3),
+    (b'\x04', OP_4),
+    (b'\x05', OP_5),
+    (b'\x06', OP_6),
+    (b'\x07', OP_7),
+    (b'\x08', OP_8),
+    (b'\x09', OP_9),
+    (b'\x0a', OP_10),
+    (b'\x0b', OP_11),
+    (b'\x0c', OP_12),
+    (b'\x0d', OP_13),
+    (b'\x0e', OP_14),
+    (b'\x0f', OP_15),
+    (b'\x10', OP_16),
+    (b'\x11', 1),
+    (b'\x81', OP_1NEGATE),
+    (bytes(75), 75),
+    (bytes(76), OP_PUSHDATA1),
+    (bytes(255), OP_PUSHDATA1),
+    (bytes(256), OP_PUSHDATA2),
+    (bytes(65535), OP_PUSHDATA2),
+    (bytes(65536), OP_PUSHDATA4),
+    (bytes((1 << 32) - 1), OP_PUSHDATA4),
+), ids=parameter_id)
+def test_minimal_push_opcode(item, op):
+    assert minimal_push_opcode(item) == op
+
+
+def test_minimal_push_opcode_too_large():
+    with pytest.raises(ValueError):
+        minimal_push_opcode(bytes(1<<32))
+
+
+def test_disabled_opcodes():
+    assert disabled_opcodes == {OP_2MUL, OP_2DIV}

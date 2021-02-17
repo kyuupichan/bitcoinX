@@ -1,1 +1,1 @@
-pylint --rcfile=.pylintrc bitcoinx/*.py && pylint --disable=C,R,E0602 bitcoinx/script.py
+pylint --rcfile=.pylintrc bitcoinx/*.py
