@@ -13,7 +13,7 @@ __all__ = (
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
-    'classify_output_script', 'evaluate_script'
+    'classify_output_script',
 )
 
 import operator
@@ -966,47 +966,47 @@ class InterpreterState:
             return self.policy.max_pubkeys_per_multisig
         return self.MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
 
+    def evaluate_script(self, script):
+        '''Evaluate a script and update state.'''
+        if len(script) > self.max_script_size:
+            raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
+                                 f'{self.max_script_size:,d} bytes')
 
-def evaluate_script(state, script):
+        # pylint:disable=W0201
+        self.op_count = 0
+        self.non_top_level_return_after_genesis = False
+        self.iterator = ScriptIterator(script)
 
-    if len(script) > state.max_script_size:
-        raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
-                             f'{state.max_script_size:,d} bytes')
+        for op, item in self.iterator.ops_and_items():
+            # Check pushitem size first
+            if item is not None:
+                self.validate_item_size(len(item))
 
-    state.op_count = 0
-    state.non_top_level_return_after_genesis = False
-    state.iterator = ScriptIterator(script)
+            self.execute = (all(condition.execute for condition in self.conditions)
+                            and (not self.non_top_level_return_after_genesis or op == OP_RETURN))
 
-    for op, item in state.iterator.ops_and_items():
-        # Check pushitem size first
-        if item is not None:
-            state.validate_item_size(len(item))
+            # Pushitem and OP_RESERVED do not count towards op count.
+            if op > Ops.OP_16:
+                self.bump_op_count(1)
 
-        state.execute = (all(condition.execute for condition in state.conditions)
-                         and (not state.non_top_level_return_after_genesis or op == OP_RETURN))
+            # Some op codes are disabled.  For pre-genesis UTXOs these were an error in
+            # unevaluated branches; for post-genesis UTXOs only if evaluated.
+            if op in {OP_2MUL, OP_2DIV} and (self.execute or not self.is_utxo_after_genesis):
+                raise DisabledOpcode(f'{Ops(op).name} is disabled')
 
-        # Pushitem and OP_RESERVED do not count towards op count.
-        if op > Ops.OP_16:
-            state.bump_op_count(1)
+            if self.execute and item is not None:
+                self.validate_minimal_push_opcode(op, item)
+                self.stack.append(item)
+            elif self.execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
+                op_handlers[op](self)
+                if self.finished:
+                    return
 
-        # Some op codes are disabled.  For pre-genesis UTXOs these were an error in
-        # unevaluated branches; for post-genesis UTXOs only if evaluated.
-        if op in {OP_2MUL, OP_2DIV} and (state.execute or not state.is_utxo_after_genesis):
-            raise DisabledOpcode(f'{Ops(op).name} is disabled')
+            self.validate_stack_size()
 
-        if state.execute and item is not None:
-            state.validate_minimal_push_opcode(op, item)
-            state.stack.append(item)
-        elif state.execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
-            op_handlers[op](state)
-            if state.finished:
-                return
-
-        state.validate_stack_size()
-
-    if state.conditions:
-        raise UnbalancedConditional(f'unterminated {state.conditions[-1].opcode.name} '
-                                    'at end of script')
+        if self.conditions:
+            raise UnbalancedConditional(f'unterminated {self.conditions[-1].opcode.name} '
+                                        'at end of script')
 
 
 #
