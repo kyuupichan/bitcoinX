@@ -799,7 +799,8 @@ def test_script_ops_type_error(script):
     (bytes(256), OP_PUSHDATA2),
     (bytes(65535), OP_PUSHDATA2),
     (bytes(65536), OP_PUSHDATA4),
-    (bytes((1 << 32) - 1), OP_PUSHDATA4),
+    # 32 should work but sometimes memory issues
+    (bytes((1 << 28) - 1), OP_PUSHDATA4),
 ), ids=parameter_id)
 def test_minimal_push_opcode(item, op):
     assert minimal_push_opcode(item) == op
@@ -946,9 +947,30 @@ class TestEvaluateScript:
             evaluate_script(state, script)
 
     def test_max_ops_per_script(self, state):
+        # TODO: check OP_RESERVED in unexecuted branch contributes to count
         state.max_ops_per_script = 2
-        script = Script() << OP_NOP << OP_NOP << OP_15
+        script = Script() << OP_NOP << OP_NOP << OP_15 # << OP_RESERVED
         evaluate_script(state, script)
         script = Script() << OP_NOP << OP_NOP << OP_NOP
         with pytest.raises(TooManyOps):
             evaluate_script(state, script)
+
+    def xtest_disabled_opcodes(self, state):
+        pass
+
+    def xtest_minimal_push_opcode(self, state):
+        pass
+
+    @pytest.mark.parametrize("big", (True, False))
+    def test_validate_stack_size(self, state, big):
+        script = Script().push_many([OP_1] * state.MAX_STACK_ELEMENTS_BEFORE_GENESIS)
+        if big:
+            state.alt_stack = [b'']
+        if state.is_utxo_after_genesis or not big:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(StackSizeTooLarge):
+                evaluate_script(state, script)
+
+    def xtest_test_execute_stack(self, state):
+        pass
