@@ -1771,6 +1771,122 @@ class TestEvaluateScript:
             assert state.stack == [bytes.fromhex(result)]
             assert not state.alt_stack
 
+    @pytest.mark.parametrize("a,b,result", (
+        ('0001', 0, '0001'),
+        ('0001', 1, '0002'),
+        ('0001', 2, '0004'),
+        ('0001', 3, '0008'),
+        ('0001', 5, '0020'),
+        ('0001', 8, '0100'),
+        ('0001', 15, '8000'),
+        ('0001', 16, '0000'),
+        ('0001', 1000, '0000'),
+        ('', 0, ''),
+        ('', 2, ''),
+        ('', 8, ''),
+        ('ff', 0, 'ff'),
+        ('ff', 1, 'fe'),
+        ('ff', 2, 'fc'),
+        ('ff', 3, 'f8'),
+        ('ff', 4, 'f0'),
+        ('ff', 5, 'e0'),
+        ('ff', 6, 'c0'),
+        ('ff', 7, '80'),
+        ('ff', 8, '00'),
+        ('0080', 1, '0100'),
+        ('008000', 1, '010000'),
+        ('000080', 1, '000100'),
+        ('800000', 1, '000000'),
+        ('9f11f555', 0, '9f11f555'),
+        ('9f11f555', 1, '3e23eaaa'),
+        ('9f11f555', 2, '7c47d554'),
+        ('9f11f555', 3, 'f88faaa8'),
+        ('9f11f555', 4, 'f11f5550'),
+        ('9f11f555', 5, 'e23eaaa0'),
+        ('9f11f555', 6, 'c47d5540'),
+        ('9f11f555', 7, '88faaa80'),
+        ('9f11f555', 8, '11f55500'),
+        ('9f11f555', 9, '23eaaa00'),
+        ('9f11f555', 10, '47d55400'),
+        ('9f11f555', 11, '8faaa800'),
+        ('9f11f555', 12, '1f555000'),
+        ('9f11f555', 13, '3eaaa000'),
+        ('9f11f555', 14, '7d554000'),
+        ('9f11f555', 15, 'faaa8000'),
+    ))
+    def test_LSHIFT(self, state_old_utxo, a, b, result):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [value_bytes(result)]
+
+    @pytest.mark.parametrize("a,b",(
+        ('000100', -1),
+        ('01000000', -2),
+    ))
+    def test_LSHIFT_error(self, state_old_utxo, a, b):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
+        with pytest.raises(NegativeShiftCount):
+            evaluate_script(state_old_utxo, script)
+        assert len(state_old_utxo.stack) == 2
+
+    @pytest.mark.parametrize("a,b,result", (
+        ('1000', 0, '1000'),
+        ('1000', 1, '0800'),
+        ('1000', 2, '0400'),
+        ('1000', 3, '0200'),
+        ('1000', 5, '0080'),
+        ('8000', 8, '0080'),
+        ('8000', 15, '0001'),
+        ('8000', 16, '0000'),
+        ('8000', 100, '0000'),
+        ('', 0, ''),
+        ('', 2, ''),
+        ('', 8, ''),
+        ('ff', 0, 'ff'),
+        ('ff', 1, '7f'),
+        ('ff', 2, '3f'),
+        ('ff', 3, '1f'),
+        ('ff', 4, '0f'),
+        ('ff', 5, '07'),
+        ('ff', 6, '03'),
+        ('ff', 7, '01'),
+        ('ff', 8, '00'),
+        ('0100', 1, '0080'),
+        ('010000', 1, '008000'),
+        ('000100', 1, '000080'),
+        ('000001', 1, '000000'),
+        ('9f11f555', 0, '9f11f555'),
+        ('9f11f555', 1, '4f88faaa'),
+        ('9f11f555', 2, '27c47d55'),
+        ('9f11f555', 3, '13e23eaa'),
+        ('9f11f555', 4, '09f11f55'),
+        ('9f11f555', 5, '04f88faa'),
+        ('9f11f555', 6, '027c47d5'),
+        ('9f11f555', 7, '013e23ea'),
+        ('9f11f555', 8, '009f11f5'),
+        ('9f11f555', 9, '004f88fa'),
+        ('9f11f555', 10, '0027c47d'),
+        ('9f11f555', 11, '0013e23e'),
+        ('9f11f555', 12, '0009f11f'),
+        ('9f11f555', 13, '0004f88f'),
+        ('9f11f555', 14, '00027c47'),
+        ('9f11f555', 15, '00013e23'),
+    ))
+    def test_RSHIFT(self, state_old_utxo, a, b, result):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [value_bytes(result)]
+
+    @pytest.mark.parametrize("a,b",(
+        ('000100', -1),
+        ('01000000', -2),
+    ))
+    def test_RSHIFT_error(self, state_old_utxo, a, b):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
+        with pytest.raises(NegativeShiftCount):
+            evaluate_script(state_old_utxo, script)
+        assert len(state_old_utxo.stack) == 2
+
     @pytest.mark.parametrize("x1,x2", (
         ('', ''),
         ('01', '07'),
@@ -1792,7 +1908,6 @@ class TestEvaluateScript:
                     evaluate_script(state, script)
                 assert len(state.stack) == 1
         assert not state.alt_stack
-
 
     @pytest.mark.parametrize("opcode", (OP_1ADD, OP_1SUB, OP_NEGATE, OP_ABS, OP_NOT, OP_0NOTEQUAL))
     def test_unary_numeric(self, state, opcode):
