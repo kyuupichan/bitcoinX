@@ -910,6 +910,12 @@ def handle_2OVER(state):
     state.stack.extend(state.stack[-4: -2])
 
 
+def handle_ROT(state):
+    # (x1 x2 x3 -- x2 x3 x1)
+    state.require_stack_depth(3)
+    state.stack.append(state.stack.pop(-3))
+
+
 def handle_2ROT(state):
     # (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
     state.require_stack_depth(6)
@@ -957,6 +963,7 @@ def handle_PICK_ROLL(state, pick):
     # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
     # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
     state.require_stack_depth(2)
+    # FIXME: what about to_size_t_limited()?  At first glance seems to do nothing
     n = state.to_number(state.stack[-1])
     state.stack.pop()
     if not (0 <= n < len(state.stack)):
@@ -1131,7 +1138,7 @@ op_handlers[OP_DEPTH] = handle_DEPTH
 op_handlers[OP_NIP] = handle_NIP
 op_handlers[OP_PICK] = partial(handle_PICK_ROLL, pick=True)
 op_handlers[OP_ROLL] = partial(handle_PICK_ROLL, pick=False)
-# OP_ROT = 0x7b
+op_handlers[OP_ROT] = handle_ROT
 op_handlers[OP_SWAP] = handle_SWAP
 op_handlers[OP_TUCK] = handle_TUCK
 
