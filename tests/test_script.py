@@ -855,6 +855,41 @@ def test_cast_to_bool_zeros(non_zero):
     assert cast_to_bool(non_zero)
 
 
+'''The testcases from bitcoin-sv/src/test/script_tests.cpp where the script to delete is
+not truncated.'''
+find_and_delete_tests = [
+    (Script() << OP_1 << OP_2, Script(), None),
+    (Script() << OP_1 << OP_2 << OP_3, Script() << OP_2, Script() << OP_1 << OP_3),
+    (Script() << OP_3 << OP_1 << OP_3 << OP_3 << OP_4 << OP_3, Script() << OP_3,
+     Script() << OP_1 << OP_4),
+    (Script.from_hex("0302ff03"), Script.from_hex("0302ff03"), Script()),
+    (Script.from_hex("0302ff030302ff03"), Script.from_hex("0302ff03"), Script()),
+    (Script.from_hex("0302ff030302ff03"), Script.from_hex("ff"), None),
+    # PUSH(0xfeed) OP_1 OP_VERIFY
+    (Script.from_hex("02feed5169"), Script.from_hex("feed51"), None),
+    (Script.from_hex("02feed5169"), Script.from_hex("02feed51"), Script.from_hex("69")),
+    (Script.from_hex("516902feed5169"), Script.from_hex("feed51"), None),
+    (Script.from_hex("516902feed5169"), Script.from_hex("02feed51"), Script.from_hex("516969")),
+    (Script.from_hex("516902feed5102feed5102feed5169"), Script.from_hex("02feed51"),
+     Script.from_hex("516969")),
+    # Single-pass
+    (Script() << OP_0 << OP_0 << OP_1 << OP_1, Script() << OP_0 << OP_1, Script() << OP_0 << OP_1),
+    (Script() << OP_0 << OP_0 << OP_1 << OP_0 << OP_1 << OP_1, Script() << OP_0 << OP_1,
+     Script() << OP_0 << OP_1),
+    (Script.from_hex("0003feed"), Script.from_hex("00"), Script.from_hex("03feed")),
+    # My testcase
+    (Script() << OP_0 << OP_1 << OP_1 << OP_1 << OP_1 << OP_1, Script() << OP_1 << OP_1,
+     Script() << OP_0 << OP_1),
+]
+
+@pytest.mark.parametrize("script,delete,expected", find_and_delete_tests,
+                         ids=[str(n) for n in range(len(find_and_delete_tests))])
+def test_find_and_delete(script, delete, expected):
+    if expected is None:
+        expected = script
+    assert script.find_and_delete(delete) == expected
+
+
 @pytest.fixture(params=(
     (100_000, 512, 20_000),
     (1_000_000, 2048, 100_000),

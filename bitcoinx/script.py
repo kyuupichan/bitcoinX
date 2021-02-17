@@ -475,6 +475,72 @@ def classify_output_script(script, coin):
     return _classify_script(script, templates, Unknown_Output)
 
 
+class ScriptIterator:
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._n = 0
+        self._cs = 0
+
+    def position(self):
+        return self._n
+
+    def script_code(self):
+        '''Return the subscript that should be checked by OP_CHECKSIG et al.'''
+        return Script(self._raw[self._cs:])
+
+    def on_code_separator(self):
+        '''Call when an OP_CODESEPARATOR is executed.'''
+        self._cs = self._n
+
+    def ops_and_items(self):
+        '''A generator.  Iterates over the script yielding (op, item) pairs, stopping when the end
+        of the script is reached.
+
+        op is an integer as it might not be a member of Ops.  Data is the data pushed as
+        bytes, or None if the op does not push data.
+
+        Raises TruncatedScriptError if the script was truncated.
+        '''
+        raw = self._raw
+        limit = len(raw)
+        n = self._n
+
+        while n < limit:
+            op = raw[n]
+            n += 1
+            data = None
+
+            if op <= OP_16:
+                if op <= OP_PUSHDATA4:
+                    try:
+                        if op < OP_PUSHDATA1:
+                            dlen = op
+                        elif op == OP_PUSHDATA1:
+                            dlen = raw[n]
+                            n += 1
+                        elif op == OP_PUSHDATA2:
+                            dlen, = unpack_le_uint16(raw[n: n + 2])
+                            n += 2
+                        else:
+                            dlen, = unpack_le_uint32(raw[n: n + 4])
+                            n += 4
+                        data = raw[n: n + dlen]
+                        n += dlen
+                        assert len(data) == dlen
+                    except Exception:
+                        raise TruncatedScriptError from None
+                elif op >= OP_1:
+                    data = pack_byte(op - OP_1 + 1)
+                elif op == OP_1NEGATE:
+                    data = b'\x81'
+                else:
+                    assert op == OP_RESERVED
+
+            self._n = n
+            yield op, data
+
+
 class Script:
     '''Wraps the raw bytes of a bitcoin script.'''
 
@@ -508,6 +574,10 @@ class Script:
         '''A user-readable script.'''
         return self.to_hex()
 
+    def __repr__(self):
+        '''A user-readable script.'''
+        return f'Script<"{self.to_hex()}">'
+
     def __hash__(self):
         '''Hashable.'''
         return hash(self._script)
@@ -526,41 +596,7 @@ class Script:
 
         Raises TruncatedScriptError if the script was truncated.
         '''
-        n = 0
-        script = self._script
-        limit = len(script)
-
-        while n < limit:
-            op = script[n]
-            n += 1
-            if op > OP_16:
-                yield op, None
-            elif op <= OP_PUSHDATA4:
-                try:
-                    if op < OP_PUSHDATA1:
-                        dlen = op
-                    elif op == OP_PUSHDATA1:
-                        dlen = script[n]
-                        n += 1
-                    elif op == OP_PUSHDATA2:
-                        dlen, = unpack_le_uint16(script[n: n + 2])
-                        n += 2
-                    else:
-                        dlen, = unpack_le_uint32(script[n: n + 4])
-                        n += 4
-                    data = script[n: n + dlen]
-                    n += dlen
-                    assert len(data) == dlen
-                    yield op, data
-                except Exception:
-                    raise TruncatedScriptError from None
-            elif op >= OP_1:
-                yield op, pack_byte(op - OP_1 + 1)
-            elif op == OP_1NEGATE:
-                yield op, b'\x81'
-            else:
-                assert op == OP_RESERVED
-                yield op, None
+        return ScriptIterator(self._script).ops_and_items()
 
     def ops(self):
         '''A generator.  Iterates over the script yielding ops, stopping when the end
@@ -572,6 +608,32 @@ class Script:
         '''
         for op, data in self.ops_and_items():
             yield data if data is not None else op
+
+    def find_and_delete(self, subscript):
+        '''Return a new script that has all instances of subscript removed.
+
+        Note this function does not behave identically to FindAndDelete in the node code,
+        but that is not problematic as it does behave identically in all ways it is
+        actually used, i.e., when subscript to delete is not a truncated script.
+        '''
+        def undeleted_parts(raw, other):
+            start = 0
+            raw = memoryview(raw)
+            if other:
+                last = 0
+                iterator = ScriptIterator(raw)
+                try:
+                    for _ignore in iterator.ops_and_items():
+                        if raw[last: last + len(other)] == other and last >= start:
+                            yield raw[start: last]
+                            start = last + len(other)
+                        last = iterator.position()
+                except TruncatedScriptError:
+                    pass
+            yield raw[start:]
+
+        assert isinstance(subscript, Script)
+        return Script(b''.join(undeleted_parts(self._script, subscript._script)))
 
     @classmethod
     def op_to_asm_word(cls, op, decode_sighash):
