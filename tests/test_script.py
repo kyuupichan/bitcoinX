@@ -1200,19 +1200,19 @@ class TestEvaluateScript:
         state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS = max(
             state.max_script_size, state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
         script = Script() << bytes(state.max_script_size - varint_len(state.max_script_size))
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         script = Script() << bytes(state.max_script_size)
         with pytest.raises(ScriptTooLarge):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
 
     def test_max_ops_per_script(self, state):
         # TODO: check OP_RESERVED in unexecuted branch contributes to count
         state.max_ops_per_script = 2
         script = Script() << OP_NOP << OP_NOP << OP_15 # << OP_RESERVED
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         script = Script() << OP_NOP << OP_NOP << OP_NOP
         with pytest.raises(TooManyOps):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
 
     def xtest_disabled_opcodes(self, state):
         pass
@@ -1226,10 +1226,10 @@ class TestEvaluateScript:
         if big:
             state.alt_stack = [b'']
         if state.is_utxo_after_genesis or not big:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(StackSizeTooLarge):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
 
     def xtest_test_execute_stack(self, state):
         pass
@@ -1265,21 +1265,21 @@ class TestEvaluateScript:
                 script <<= self.random_push()
             script <<= op
             with pytest.raises(InvalidStackOperation):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert len(state.stack) == n
             state.reset()
 
     def test_DROP(self, state):
         self.require_stack(state, 1, OP_DROP)
         script = Script() << self.random_push() << OP_DROP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert not state.stack
         assert not state.alt_stack
 
     def test_2DROP(self, state):
         self.require_stack(state, 2, OP_2DROP)
         script = Script() << self.random_push() << self.random_push() << OP_2DROP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert not state.stack
         assert not state.alt_stack
 
@@ -1287,7 +1287,7 @@ class TestEvaluateScript:
         self.require_stack(state, 1, OP_DUP)
         push, data = self.random_push_data()
         script = Script() << push << OP_DUP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [data] * 2
         assert not state.alt_stack
 
@@ -1296,7 +1296,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(2)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_2DUP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas) * 2
         assert not state.alt_stack
 
@@ -1305,7 +1305,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(3)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_3DUP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas) * 2
         assert not state.alt_stack
 
@@ -1314,7 +1314,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(2)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_OVER
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [datas[0], datas[1], datas[0]]
         assert not state.alt_stack
 
@@ -1323,7 +1323,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(4)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_2OVER
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas + datas[:2])
         assert not state.alt_stack
 
@@ -1332,7 +1332,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(8)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_2ROT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas[:2] + datas[4:] + datas[2:4])
         assert not state.alt_stack
 
@@ -1341,7 +1341,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(5)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_2SWAP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas[:1] + datas[3:] + datas[1:3])
         assert not state.alt_stack
 
@@ -1349,14 +1349,14 @@ class TestEvaluateScript:
         self.require_stack(state, 1, OP_IFDUP)
         item = random.choice(zeroes)
         script = Script() << item << OP_IFDUP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [item]
         assert not state.alt_stack
         state.reset()
 
         item = random.choice(non_zeroes)
         script = Script() << item << OP_IFDUP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [item] * 2
         assert not state.alt_stack
 
@@ -1364,14 +1364,14 @@ class TestEvaluateScript:
         # Has no effect
         state.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
         script = Script() << 2 << OP_IFDUP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [b'\2'] * 2
 
     def test_DEPTH(self, state):
         push_datas = [self.random_push_data() for _ in range(10)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_DEPTH
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas) + [int_to_item(len(push_datas))]
         assert not state.alt_stack
 
@@ -1380,7 +1380,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(2)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_NIP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [datas[1]]
         assert not state.alt_stack
 
@@ -1389,7 +1389,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(2)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_SWAP
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(reversed(datas))
         assert not state.alt_stack
 
@@ -1398,7 +1398,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(2)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_TUCK
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [datas[-1]] + list(datas)
         assert not state.alt_stack
 
@@ -1407,7 +1407,7 @@ class TestEvaluateScript:
         push_datas = [self.random_push_data() for _ in range(6)]
         pushes, datas = list(zip(*push_datas))
         script = Script().push_many(pushes) << OP_ROT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas[:3]) + list(datas[-2:]) + [datas[-3]]
         assert not state.alt_stack
 
@@ -1422,7 +1422,7 @@ class TestEvaluateScript:
         pushes = [pair[0] for pair in push_datas]
         datas = [pair[1] for pair in push_datas]
         script = Script().push_many(pushes) << n << OP_PICK
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == list(datas) + [datas[-(n + 1)]]
         assert not state.alt_stack
         state.reset()
@@ -1434,7 +1434,7 @@ class TestEvaluateScript:
         datas = [pair[1] for pair in push_datas]
         script = Script().push_many(pushes) << n << OP_PICK
         with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert state.stack == list(datas)   # All intact, just n is popped
         assert not state.alt_stack
 
@@ -1449,7 +1449,7 @@ class TestEvaluateScript:
         pushes = [pair[0] for pair in push_datas]
         datas = [pair[1] for pair in push_datas]
         script = Script().push_many(pushes) << n << OP_ROLL
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         expected = list(datas)
         expected.append(expected.pop(-(n + 1)))
         assert state.stack == expected
@@ -1463,23 +1463,23 @@ class TestEvaluateScript:
         datas = [pair[1] for pair in push_datas]
         script = Script().push_many(pushes) << n << OP_ROLL
         with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert state.stack == list(datas)   # All intact, just n is popped
         assert not state.alt_stack
 
     def test_TOALTSTACK(self, state):
         self.require_stack(state, 1, OP_TOALTSTACK)
         script = Script() << OP_12 << OP_TOALTSTACK
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert not state.stack
         assert state.alt_stack == [b'\x0c']
 
     def test_FROMALTSTACK(self, state):
         script = Script() << OP_FROMALTSTACK
         with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         script = Script() << OP_10 << OP_TOALTSTACK << OP_8 << OP_FROMALTSTACK
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [b'\x08', b'\x0a']
         assert not state.alt_stack
 
@@ -1487,21 +1487,21 @@ class TestEvaluateScript:
     def test_IF_unbalanced_outer(self, state, op):
         script = Script() << OP_1 << op << OP_2
         with pytest.raises(UnbalancedConditional) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert f'unterminated {op.name} at end of script' in str(e.value)
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_IF_unbalanced_inner(self, state, op):
         script = Script() << OP_2 << OP_2 << op << OP_IF << OP_ENDIF
         with pytest.raises(UnbalancedConditional) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert f'unterminated {op.name} at end of script' in str(e.value)
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_no_value_IF(self, state, op):
         script = Script() << op
         with pytest.raises(InvalidStackOperation):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
 
     @pytest.mark.parametrize('op,truth', (
         (op, truth) for op in (OP_IF, OP_NOTIF) for truth in (False, True)
@@ -1509,20 +1509,20 @@ class TestEvaluateScript:
     def test_IF_data(self, state, op, truth):
         values = [b'foo', b'bar']
         script = Script() << truth << op << values[0] << OP_ELSE << values[1] << OP_ENDIF
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [values[(op == OP_IF) ^ truth]]
 
     def test_ELSE_unbalanced(self, state):
         script = Script() << OP_1 << OP_ELSE
         with pytest.raises(UnbalancedConditional) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'unexpected OP_ELSE' in str(e.value)
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_ELSE_unbalanced_2(self, state, op):
         script = Script() << OP_1 << op << OP_ELSE << OP_ENDIF << OP_ELSE
         with pytest.raises(UnbalancedConditional) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'unexpected OP_ELSE' in str(e.value)
 
     def test_double_ELSE(self, state):
@@ -1531,23 +1531,23 @@ class TestEvaluateScript:
                   << OP_ENDIF)
         if state.is_utxo_after_genesis:
             with pytest.raises(UnbalancedConditional) as e:
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert 'unexpected OP_ELSE' in str(e.value)
         else:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert state.stack == [b'foo', b'baz']
 
     def test_ENDIF_unbalanced(self, state):
         script = Script() << OP_1 << OP_ENDIF
         with pytest.raises(UnbalancedConditional) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'unexpected OP_ENDIF' in str(e.value)
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_ENDIF_unbalanced_2(self, state, op):
         script = Script() << OP_1 << op << OP_ELSE << OP_ENDIF << OP_ENDIF
         with pytest.raises(UnbalancedConditional) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'unexpected OP_ENDIF' in str(e.value)
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
@@ -1555,37 +1555,37 @@ class TestEvaluateScript:
         state.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
         script = Script() << 2 << op << OP_ENDIF
         with pytest.raises(MinimalIfError) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'top of stack not True or False' in str(e.value)
         assert state.stack[-1] == b'\2'
         state.reset()
 
         script = Script() << bytes(1) << op << OP_ENDIF
         with pytest.raises(MinimalIfError) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'top of stack not True or False' in str(e.value)
         assert state.stack[-1] == b'\0'
         state.reset()
 
         script = Script() << b'\1\0' << op << OP_ENDIF
         with pytest.raises(MinimalIfError) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'top of stack not True or False' in str(e.value)
         assert state.stack[-1] == b'\1\0'
         state.reset()
 
         script = Script() << 0 << op << OP_ENDIF
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         state.reset()
 
         script = Script() << 1 << op << OP_ENDIF
-        evaluate_script(state, script)
+        state.evaluate_script(script)
 
     @pytest.mark.parametrize("push", (OP_1, OP_10, OP_1NEGATE, b'foo', b'\1\0', b'\0\1'))
     def test_VERIFY(self, state, push):
         self.require_stack(state, 1, OP_VERIFY)
         script = Script() << push << OP_VERIFY
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
@@ -1593,27 +1593,27 @@ class TestEvaluateScript:
     def test_VERIFY_failed(self, state, zero):
         script = Script() << zero << OP_VERIFY
         with pytest.raises(VerifyFailed):
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert state.stack == [zero]
         assert state.alt_stack == []
 
     def test_RETURN_immediate(self, state):
         script = Script() << OP_RETURN
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
     def test_RETURN_not_immediate(self, state):
         script = Script() << OP_1 << OP_RETURN
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == [b'\1']
         assert state.alt_stack == []
 
@@ -1621,10 +1621,10 @@ class TestEvaluateScript:
         # Unabalanced ifs after a post-genesis top-level OP_RETURN are fine
         script = Script() << OP_1 << OP_RETURN << OP_IF
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == [b'\1']
         assert state.alt_stack == []
 
@@ -1633,17 +1633,17 @@ class TestEvaluateScript:
         script = Script() << OP_0 << OP_RETURN << OP_RESERVED
         script = Script(script.to_bytes() + b'\0xff')
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == [b'']
         assert state.alt_stack == []
 
     def test_RETURN_unexecuted(self, state):
         # Unexecuted OP_RETURN ignored pre- and post-genesis
         script = Script() << OP_0 << OP_IF << OP_RETURN << OP_ENDIF
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
@@ -1651,10 +1651,10 @@ class TestEvaluateScript:
         script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_IF
         if state.is_utxo_after_genesis:
             with pytest.raises(UnbalancedConditional):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
@@ -1662,10 +1662,10 @@ class TestEvaluateScript:
         script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RETURN << OP_IF
         if state.is_utxo_after_genesis:
             # The unabalanced conditional is ignored as the top-level OP_RETURN stops execution
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
@@ -1673,10 +1673,10 @@ class TestEvaluateScript:
         script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RESERVED
         if state.is_utxo_after_genesis:
             # It's OK; only check IF grammar
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
@@ -1684,10 +1684,10 @@ class TestEvaluateScript:
         script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ELSE << OP_RESERVED << OP_ENDIF
         if state.is_utxo_after_genesis:
             # It's OK as unexecuted
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(OpReturnError):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
@@ -1696,7 +1696,7 @@ class TestEvaluateScript:
         # Unexecuted OP_RETURN ignored pre- and post-genesis
         script = Script() << op
         with pytest.raises(InvalidOpcode) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert f'invalid opcode {op.name}' in str(e.value)
         assert state.stack == []
         assert state.alt_stack == []
@@ -1705,10 +1705,10 @@ class TestEvaluateScript:
     def test_VERIF_unexecuted(self, state, op):
         script = Script() << OP_0 << OP_IF << op << OP_ENDIF
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(InvalidOpcode) as e:
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert f'invalid opcode {op.name}' in str(e.value)
         assert state.stack == []
         assert state.alt_stack == []
@@ -1717,7 +1717,7 @@ class TestEvaluateScript:
     def test_reserved_executed(self, state, op):
         script = Script() << OP_0 << op
         with pytest.raises(InvalidOpcode) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert f'invalid opcode {op.name}' in str(e.value)
         assert state.stack == [b'']
         assert state.alt_stack == []
@@ -1725,14 +1725,14 @@ class TestEvaluateScript:
     @pytest.mark.parametrize('op', reserved_ops)
     def test_reserved_unexecuted(self, state, op):
         script = Script() << OP_0 << OP_IF << op << OP_ENDIF
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == []
         assert state.alt_stack == []
 
     def test_CAT(self, state):
         self.require_stack(state, 2, OP_CAT)
         script = Script() << b'foo' << b'bar' << OP_CAT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [b'foobar']
         assert state.alt_stack == []
 
@@ -1741,45 +1741,45 @@ class TestEvaluateScript:
 
         item = bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
         script = Script() << item << b'' << OP_CAT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         state.reset()
 
         script = Script() << item << b'1' << OP_CAT
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(InvalidPushSize):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
 
     def test_SPLIT(self, state):
         self.require_stack(state, 2, OP_SPLIT)
         script = Script() << b'foobarbaz' << OP_3 << OP_SPLIT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [b'foo', b'barbaz']
         assert state.alt_stack == []
 
     def test_SPLIT_0(self, state):
         script = Script() << b'foobar' << OP_0 << OP_SPLIT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [b'', b'foobar']
         assert state.alt_stack == []
 
     def test_SPLIT_6(self, state):
         script = Script() << b'foobar' << OP_6 << OP_SPLIT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [b'foobar', b'']
         assert state.alt_stack == []
 
     def test_SPLIT_M1(self, state):
         script = Script() << b'foobar' << OP_1NEGATE << OP_SPLIT
         with pytest.raises(InvalidSplit) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'cannot split item of length 6 at position -1' in str(e.value)
 
     def test_SPLIT_past(self, state):
         script = Script() << b'foobar' << OP_7 << OP_SPLIT
         with pytest.raises(InvalidSplit) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'cannot split item of length 6 at position 7' in str(e.value)
 
     def test_NUM2BIN_stack(self, state):
@@ -1805,14 +1805,14 @@ class TestEvaluateScript:
         if result is None:
             if size >= 0x80000000 and not state.is_utxo_after_genesis:
                 with pytest.raises(InvalidNumber) as e:
-                    evaluate_script(state, script)
+                    state.evaluate_script(script)
             else:
                 with pytest.raises(InvalidPushSize) as e:
-                    evaluate_script(state, script)
+                    state.evaluate_script(script)
                     assert f'invalid size {size:,d} in OP_NUM2BIN operation' == str(e.value)
             assert len(state.stack) == 2
         else:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert len(state.stack) == 1
             assert state.stack[0].hex() == result
             assert not state.alt_stack
@@ -1822,12 +1822,12 @@ class TestEvaluateScript:
         size = state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1
         script = Script() << value << size << OP_NUM2BIN
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert len(state.stack) == 1
             assert state.stack[0] == b'\1' + bytes(520)
         else:
             with pytest.raises(InvalidPushSize) as e:
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert 'item length 521 exceeds' in str(e.value)
             assert len(state.stack) == 2
 
@@ -1854,9 +1854,9 @@ class TestEvaluateScript:
         script = Script() << value << OP_BIN2NUM
         if len(result) // 2 > state.max_script_num_length:
             with pytest.raises(InvalidNumber):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
         else:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         # Stack contains the result even on failure
         assert len(state.stack) == 1
         assert state.stack[0].hex() == result
@@ -1871,7 +1871,7 @@ class TestEvaluateScript:
     def test_SIZE(self, state, value, size):
         self.require_stack(state, 1, OP_SIZE)
         script = Script() << value << OP_SIZE
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [value, int_to_item(len(value))]
         assert not state.alt_stack
 
@@ -1883,7 +1883,7 @@ class TestEvaluateScript:
     def test_INVERT(self, state, value, result):
         self.require_stack(state, 1, OP_INVERT)
         script = Script() << value << OP_INVERT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [result]
         assert not state.alt_stack
 
@@ -1899,10 +1899,10 @@ class TestEvaluateScript:
         script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_AND
         if result is None:
             with pytest.raises(InvalidOperandSize):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert len(state.stack) == 2
         else:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert state.stack == [bytes.fromhex(result)]
             assert not state.alt_stack
 
@@ -1918,10 +1918,10 @@ class TestEvaluateScript:
         script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_OR
         if result is None:
             with pytest.raises(InvalidOperandSize):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert len(state.stack) == 2
         else:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert state.stack == [bytes.fromhex(result)]
             assert not state.alt_stack
 
@@ -1937,10 +1937,10 @@ class TestEvaluateScript:
         script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_XOR
         if result is None:
             with pytest.raises(InvalidOperandSize):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
             assert len(state.stack) == 2
         else:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert state.stack == [bytes.fromhex(result)]
             assert not state.alt_stack
 
@@ -1989,7 +1989,7 @@ class TestEvaluateScript:
     ))
     def test_LSHIFT(self, state_old_utxo, a, b, result):
         script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [value_bytes(result)]
 
     @pytest.mark.parametrize("a,b",(
@@ -1999,7 +1999,7 @@ class TestEvaluateScript:
     def test_LSHIFT_error(self, state_old_utxo, a, b):
         script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
         with pytest.raises(NegativeShiftCount):
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
         assert len(state_old_utxo.stack) == 2
 
     @pytest.mark.parametrize("a,b,result", (
@@ -2047,7 +2047,7 @@ class TestEvaluateScript:
     ))
     def test_RSHIFT(self, state_old_utxo, a, b, result):
         script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [value_bytes(result)]
 
     @pytest.mark.parametrize("a,b",(
@@ -2057,7 +2057,7 @@ class TestEvaluateScript:
     def test_RSHIFT_error(self, state_old_utxo, a, b):
         script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
         with pytest.raises(NegativeShiftCount):
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
         assert len(state_old_utxo.stack) == 2
 
     @pytest.mark.parametrize("x1,x2", (
@@ -2072,15 +2072,15 @@ class TestEvaluateScript:
         script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << opcode
         truth = x1 == x2
         if opcode == OP_EQUAL:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
             assert state.stack == [b'\1' if truth else b'']
         else:
             if truth:
-                evaluate_script(state, script)
+                state.evaluate_script(script)
                 assert not state.stack
             else:
                 with pytest.raises(EqualVerifyFailed):
-                    evaluate_script(state, script)
+                    state.evaluate_script(script)
                 assert len(state.stack) == 1
         assert not state.alt_stack
 
@@ -2093,17 +2093,17 @@ class TestEvaluateScript:
         script = Script() << OP_0 << op
         # Invalid in executed branch
         with pytest.raises(DisabledOpcode) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert f'{op.name} is disabled' in str(e.value)
 
         state.reset()
         script = Script() << OP_0 << OP_IF << op << OP_ENDIF
         # Valid in unexecuted branch if UTXO is after-genesis
         if state.is_utxo_after_genesis:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         else:
             with pytest.raises(DisabledOpcode):
-                evaluate_script(state, script)
+                state.evaluate_script(script)
 
     @pytest.mark.parametrize("value, result", (
         (0, 1),
@@ -2116,7 +2116,7 @@ class TestEvaluateScript:
     ))
     def test_1ADD(self, state, value, result):
         script = Script() << value << OP_1ADD
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2131,7 +2131,7 @@ class TestEvaluateScript:
     ))
     def test_1SUB(self, state, value, result):
         script = Script() << value << OP_1SUB
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2147,7 +2147,7 @@ class TestEvaluateScript:
     ))
     def test_NEGATE(self, state, value, result):
         script = Script() << value << OP_NEGATE
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2163,7 +2163,7 @@ class TestEvaluateScript:
     ))
     def test_ABS(self, state, value, result):
         script = Script() << value << OP_ABS
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2179,7 +2179,7 @@ class TestEvaluateScript:
     ))
     def test_NOT(self, state, value, result):
         script = Script() << value << OP_NOT
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2195,7 +2195,7 @@ class TestEvaluateScript:
     ))
     def test_0NOTEQUAL(self, state, value, result):
         script = Script() << value << OP_0NOTEQUAL
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2221,7 +2221,7 @@ class TestEvaluateScript:
     ))
     def test_binary_numeric(self, state, opcodes, result):
         script = Script().push_many(opcodes)
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
@@ -2235,7 +2235,7 @@ class TestEvaluateScript:
     def test_RIPEMD160(self, state, hash_op, hash_func):
         self.require_stack(state, 1, hash_op)
         script = Script() << b'foo' << hash_op
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [hash_func(b'foo')]
         assert not state.alt_stack
 
@@ -2255,20 +2255,20 @@ class TestEvaluateScript:
         # Test negative values
         script = Script().push_many((a, b, OP_MUL, a, neg_b, OP_MUL,
                                      neg_a, b, OP_MUL, neg_a, neg_b, OP_MUL))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [mul, neg_mul, neg_mul, mul]
 
         # Commutativity
         state_old_utxo.reset()
         script = Script().push_many((b, a, OP_MUL))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [mul]
 
         # Identities
         state_old_utxo.reset()
         script = Script().push_many((a, 1, OP_MUL, a, b'\x81', OP_MUL, a, b'', OP_MUL,
                                      1, a, OP_MUL, b'\x81', a, OP_MUL, b'', a, OP_MUL))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [a, neg_a, b''] * 2
 
     @pytest.mark.parametrize("a,b", (
@@ -2280,21 +2280,21 @@ class TestEvaluateScript:
         a, b = value_bytes(a), value_bytes(b)
         script = Script().push_many((a, b, OP_MUL))
         with pytest.raises(InvalidNumber):
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
 
     def test_overflow(self, state_old_utxo):
         script = Script().push_many((70000, 70000, OP_MUL))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         state_old_utxo.reset()
 
         script = Script().push_many((70000, 70000, OP_MUL, OP_0, OP_ADD))
         with pytest.raises(InvalidNumber):
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
         state_old_utxo.reset()
 
         # OP_VERIFY (cast_to_bool) is fine
         script = Script().push_many((70000, 70000, OP_MUL, OP_VERIFY))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
 
     @pytest.mark.parametrize("a,b,div,mod", (
         (0x185377af, -0x05f41b01, -4, 0x00830bab),
@@ -2307,31 +2307,31 @@ class TestEvaluateScript:
     ))
     def test_div_mod(self, state_old_utxo, a, b, div, mod):
         script = Script().push_many((a, b, OP_DIV, a, b, OP_MOD))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [int_to_item(div), int_to_item(mod)]
         assert not state_old_utxo.alt_stack
 
         state_old_utxo.reset()
         script = Script().push_many((a, -b, OP_DIV, a, -b, OP_MOD))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [int_to_item(-div), int_to_item(mod)]
         assert not state_old_utxo.alt_stack
 
         state_old_utxo.reset()
         script = Script().push_many((-a, b, OP_DIV, -a, b, OP_MOD))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [int_to_item(-div), int_to_item(-mod)]
         assert not state_old_utxo.alt_stack
 
         state_old_utxo.reset()
         script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [int_to_item(div), int_to_item(-mod)]
         assert not state_old_utxo.alt_stack
 
         state_old_utxo.reset()
         script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
-        evaluate_script(state_old_utxo, script)
+        state_old_utxo.evaluate_script(script)
         assert state_old_utxo.stack == [int_to_item(div), int_to_item(-mod)]
         assert not state_old_utxo.alt_stack
 
@@ -2340,20 +2340,20 @@ class TestEvaluateScript:
                 state_old_utxo.reset()
                 script = Script().push_many((value, 0, OP_DIV))
                 with pytest.raises(DivisionByZero) as e:
-                    evaluate_script(state_old_utxo, script)
+                    state_old_utxo.evaluate_script(script)
                 assert 'division by zero' in str(e.value)
 
                 state_old_utxo.reset()
                 script = Script().push_many((value, 0, OP_MOD))
                 with pytest.raises(DivisionByZero) as e:
-                    evaluate_script(state_old_utxo, script)
+                    state_old_utxo.evaluate_script(script)
                 assert 'modulo by zero' in str(e.value)
 
             # Division identities
             state_old_utxo.reset()
             script = Script().push_many((value, 1, OP_DIV, value, b'\x81', OP_DIV,
                                          value, value, OP_DIV, value, -value, OP_DIV))
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
             assert state_old_utxo.stack == [int_to_item(value), int_to_item(-value),
                                             b'\1', b'\x81']
 
@@ -2368,11 +2368,11 @@ class TestEvaluateScript:
 
         script = Script().push_many((a, b, OP_DIV))
         with pytest.raises(InvalidNumber):
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
 
         script = Script().push_many((a, b, OP_MOD))
         with pytest.raises(InvalidNumber):
-            evaluate_script(state_old_utxo, script)
+            state_old_utxo.evaluate_script(script)
 
     @pytest.mark.parametrize("x,low,high,result", (
         (-1, 0, 2, 0),
@@ -2389,11 +2389,11 @@ class TestEvaluateScript:
     ))
     def test_WITHIN(self, state, x, low, high, result):
         script = Script() << x << low << high << OP_WITHIN
-        evaluate_script(state, script)
+        state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
 
     def test_invalid_opcode(self, state):
         script = Script(b'\xff')
         with pytest.raises(InvalidOpcode) as e:
-            evaluate_script(state, script)
+            state.evaluate_script(script)
         assert 'invalid opcode 255' in str(e.value)
