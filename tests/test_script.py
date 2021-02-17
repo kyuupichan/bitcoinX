@@ -972,7 +972,7 @@ class TestInterpreterState:
             state.validate_stack_size()
 
 
-reserved_ops = (OP_VER, OP_RESERVED)
+reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
 
 
 class TestEvaluateScript:
@@ -1721,6 +1721,28 @@ class TestEvaluateScript:
             evaluate_script(state, script)
             assert state.stack == [bytes.fromhex(result)]
             assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2", (
+        ('', ''),
+        ('01', '07'),
+        ('01', '0100'),
+    ))
+    @pytest.mark.parametrize("opcode", (OP_EQUAL, OP_EQUALVERIFY))
+    def test_EQUAL(self, state, x1, x2, opcode):
+        self.require_stack(state, 2, opcode)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << opcode
+        truth = x1 == x2
+        if opcode == OP_EQUAL:
+            evaluate_script(state, script)
+            assert state.stack == [b'\1' if truth else b'']
+        else:
+            if truth:
+                assert not state.stack
+            else:
+                with pytest.raises(EqualVerifyFailed):
+                    evaluate_script(state, script)
+                assert len(state.stack) == 1
+        assert not state.alt_stack
 
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
