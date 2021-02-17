@@ -904,20 +904,22 @@ class TestInterpreterState:
         state.is_consensus = False
         assert state.max_script_num_length == policy.max_script_num_length
 
-    def test_max_script_element_size(self, policy):
+    def test_validate_item_size(self, policy):
         state = InterpreterState(policy)
         state.is_utxo_after_genesis = False
-        assert state.max_script_element_size == state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
+        state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS))
+        with pytest.raises(ItemTooLarge):
+            state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1))
 
         state = InterpreterState(policy)
         state.is_utxo_after_genesis = True
         state.is_consensus = True
-        assert state.max_script_element_size == 0xffffffff
+        state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1))
 
         state = InterpreterState(policy)
         state.is_utxo_after_genesis = True
         state.is_consensus = False
-        assert state.max_script_element_size == 0xffffffff
+        state.validate_item_size(bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1))
 
     def test_bump_op_count(self, policy):
         state = InterpreterState(policy)
@@ -948,24 +950,19 @@ class TestInterpreterState:
             state.validate_stack_size()
 
 
+reserved_ops = (OP_VER, OP_RESERVED)
+
+
 class TestEvaluateScript:
 
     def test_max_script_size(self, state):
         limit = state.max_script_size = min(state.max_script_size, 1_000_000)
-        state.max_script_element_size = max(state.max_script_size, state.max_script_element_size)
+        state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS = max(
+            state.max_script_size, state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
         script = Script() << bytes(state.max_script_size - varint_len(state.max_script_size))
         evaluate_script(state, script)
         script = Script() << bytes(state.max_script_size)
         with pytest.raises(ScriptTooLarge):
-            evaluate_script(state, script)
-
-    def test_max_script_element_size(self, state):
-        state.max_script_size = 2_000_000
-        limit = state.max_script_element_size = min(state.max_script_element_size, 1_000_000)
-        script = Script() << bytes(limit)
-        evaluate_script(state, script)
-        script = Script() << bytes(limit + 1)
-        with pytest.raises(PushItemTooLarge):
             evaluate_script(state, script)
 
     def test_max_ops_per_script(self, state):
@@ -1475,6 +1472,44 @@ class TestEvaluateScript:
             assert f'invalid opcode {op.name}' in str(e.value)
         assert state.stack == []
         assert state.alt_stack == []
+
+    @pytest.mark.parametrize('op', reserved_ops)
+    def test_reserved_executed(self, state, op):
+        script = Script() << OP_0 << op
+        with pytest.raises(InvalidOpcode) as e:
+            evaluate_script(state, script)
+        assert f'invalid opcode {op.name}' in str(e.value)
+        assert state.stack == [b'']
+        assert state.alt_stack == []
+
+    @pytest.mark.parametrize('op', reserved_ops)
+    def test_reserved_unexecuted(self, state, op):
+        script = Script() << OP_0 << OP_IF << op << OP_ENDIF
+        evaluate_script(state, script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_CAT(self, state):
+        self.require_stack(state, 2, OP_CAT)
+        script = Script() << b'foo' << b'bar' << OP_CAT
+        evaluate_script(state, script)
+        assert state.stack == [b'foobar']
+        assert state.alt_stack == []
+
+    def test_CAT_size_enforced(self, state):
+        self.require_stack(state, 2, OP_CAT)
+
+        item = bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
+        script = Script() << item << b'' << OP_CAT
+        evaluate_script(state, script)
+        state.reset()
+
+        script = Script() << item << b'1' << OP_CAT
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(ItemTooLarge):
+                evaluate_script(state, script)
 
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
