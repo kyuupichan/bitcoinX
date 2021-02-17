@@ -23,7 +23,10 @@ from functools import partial
 
 import attr
 
-from .consts import JSONFlags
+from .consts import (
+    JSONFlags, LOCKTIME_THRESHOLD, SEQUENCE_FINAL, SEQUENCE_LOCKTIME_DISABLE_FLAG,
+    SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG,
+)
 from .errors import (
     ScriptError, TruncatedScriptError, InterpreterError,
     StackSizeTooLarge, MinimalEncodingError, InvalidPublicKeyEncoding,
@@ -31,7 +34,7 @@ from .errors import (
     InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
     InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
-    InvalidPublicKeyCount, NullDummyError,
+    InvalidPublicKeyCount, NullDummyError, UpgradeableNopError, LockTimeError
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -379,8 +382,8 @@ def classify_output_script(script, coin):
 
 class ScriptIterator:
 
-    def __init__(self, raw):
-        self._raw = raw
+    def __init__(self, script):
+        self._raw = bytes(script)
         self._n = 0
         self._cs = 0
 
@@ -719,8 +722,14 @@ class InterpreterFlags(IntEnum):
     FORKID_ENABLED = 1 << 5
     # Fails script immediately if a failed signature was not null
     REQUIRE_NULLFAIL = 1 << 6
-    # Fails script is the CHECKMULTISIG dummy argument is not null
+    # Fails script if the CHECKMULTISIG dummy argument is not null
     REQUIRE_NULLDUMMY = 1 << 7
+    # Fails script if an upgradeable NOP is encountered
+    REJECT_UPGRADEABLE_NOPS = 1 << 8
+    # If set OP_CHECKLOCKTIMEVERIFY is permitted
+    CHECKLOCKTIMEVERIFY = 1 << 9
+    # If set OP_CHECKSEQUENCEVERIFY is permitted
+    CHECKSEQUENCEVERIFY = 1 << 10
 
 
 class InterpreterState:
@@ -739,14 +748,16 @@ class InterpreterState:
     MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS = UINT32_MAX
 
     def __init__(self, policy, *, flags=0, is_consensus=False, is_genesis_enabled=True,
-                 is_utxo_after_genesis=True, signature_hash_func=None):
+                 is_utxo_after_genesis=True, tx=None, input_index=-1, value=-1):
         # These inputs must not be changed after construction because of caching
         self.policy = policy
         self.flags = flags
         self.is_consensus = is_consensus
         self.is_genesis_enabled = is_genesis_enabled
         self.is_utxo_after_genesis = is_utxo_after_genesis
-        self.signature_hash_func = signature_hash_func
+        self.tx = tx
+        self.input_index = input_index
+        self.value = value
         self.reset()
 
     def reset(self):
@@ -877,7 +888,7 @@ class InterpreterState:
 
     def check_sig(self, pubkey_bytes, sig_bytes, script_code):
         '''Check a signature.  Returns True or False.'''
-        if not sig_bytes or not self.signature_hash_func:
+        if not sig_bytes or not self.tx:
             return False
         try:
             pubkey = PublicKey(pubkey_bytes)
@@ -886,8 +897,42 @@ class InterpreterState:
 
         # Split out the DER signature and the sighash
         der_sig, sighash = Signature.normalize_der_signature(sig_bytes)
-        message_hash = self.signature_hash_func(script_code, sighash=sighash)
+        message_hash = self.tx.signature_hash(self.input_index, self.value,
+                                              script_code, sighash=sighash)
         return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
+
+    def validate_locktime(self, locktime):
+        # Are the lock times comparable?
+        if (locktime < LOCKTIME_THRESHOLD) ^ (self.tx.locktime < LOCKTIME_THRESHOLD):
+            raise LockTimeError('locktimes are not comparable')
+        # Numeric comparison
+        if locktime > self.tx.locktime:
+            raise LockTimeError(f'locktime {locktime:,d} not reached')
+        if self.tx.inputs[input_index].sequence == SEQUENCE_FINAL:
+            raise LockTimeError('transaction input is final')
+
+    def validate_sequence(self, sequence):
+        # If this flag is set it behaves as a NOP
+        if sequence & SEQUENCE_LOCKTIME_DISABLE_FLAG:
+            return
+        # Is BIP68 triggered?
+        if 0 <= self.tx.version < 2:
+            raise LockTimeError('transaction version is under 2')
+        txin_seq = self.tx.inputs[self.input_index].sequence
+        if txin_seq & SEQUENCE_LOCKTIME_DISABLE_FLAG:
+            raise LockTimeError('transaction index sequence is disabled')
+        mask = SEQUENCE_LOCKTIME_TYPE_FLAG | SEQUENCE_LOCKTIME_MASK
+        sequence &= mask
+        txin_seq &= mask
+        if (sequence < SEQUENCE_LOCKTIME_TYPE_FLAG) ^ (txin_seq < SEQUENCE_LOCKTIME_TYPE_FLAG):
+            raise LockTimeError('sequences are not comparable')
+        if sequence > txin_seq:
+            raise LockTimeError(f'masked sequence number {sequence} not reached')
+
+    def handle_upgradeable_nop(self, op):
+        '''Raise on upgradeable nops if the flag is set.'''
+        if self.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
+            raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
 
     @cachedproperty
     def max_ops_per_script(self):
@@ -1453,6 +1498,34 @@ def handle_SIZE(state):
     state.stack.append(int_to_item(size))
 
 
+#
+# Expansion
+#
+
+def handle_upgradeable_nop(state, op):
+    state.handle_upgradeable_nop(op)
+
+
+def handle_CHECKLOCKTIMEVERIFY(state):
+    if state.is_utxo_after_genesis or not (state.flags & InterpreterFlags.CHECKLOCKTIMEVERIFY):
+        handle_upgradeable_nops(state, OP_NOP2)
+    state.require_stack_depth(1)
+    locktime = state.to_number(state.stack[-1], length_limit=5)
+    if locktime < 0:
+        raise LockTimeError(f'locktime {locktime:,d} is negative')
+    state.validate_locktime(locktime)
+
+
+def handle_CHECKSEQUENCEVERIFY(state):
+    if state.is_utxo_after_genesis or not (state.flags & InterpreterFlags.CHECKSEQUENCEVERIFY):
+        handle_upgradeable_nops(state, OP_NOP3)
+    state.require_stack_depth(1)
+    sequence = state.to_number(state.stack[-1], length_limit=5)
+    if sequence < 0:
+        raise LockTimeError(f'sequence {sequence:,d} is negative')
+    state.validate_sequence(sequence)
+
+
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
 
 #
@@ -1561,7 +1634,7 @@ op_handlers[OP_CHECKMULTISIGVERIFY] = handle_CHECKMULTISIGVERIFY
 #
 # Expansion
 #
-# OP_CHECKLOCKTIMEVERIFY = 0xb1
-# OP_NOP2 = OP_CHECKLOCKTIMEVERIFY
-# OP_CHECKSEQUENCEVERIFY = 0xb2
-# OP_NOP3 = OP_CHECKSEQUENCEVERIFY
+for _op in (OP_NOP1, OP_NOP4, OP_NOP5, OP_NOP6, OP_NOP7, OP_NOP8, OP_NOP9, OP_NOP10):
+    op_handlers[_op] = partial(handle_upgradeable_nop, op=_op)
+op_handlers[OP_NOP2] = handle_CHECKLOCKTIMEVERIFY
+op_handlers[OP_NOP3] = handle_CHECKSEQUENCEVERIFY

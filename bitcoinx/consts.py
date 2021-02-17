@@ -8,6 +8,7 @@
 
 __all__ = (
     'JSONFlags', 'CURVE_ORDER', 'HALF_CURVE_ORDER', 'SIGNED_MESSAGE_PREFIX',
+    'LOCKTIME_THRESHOLD', 'SEQUENCE_FINAL'
 )
 
 
@@ -15,6 +16,14 @@ from enum import IntFlag
 
 from .packing import pack_varbytes
 
+
+ZERO = bytes(32)
+
+LOCKTIME_THRESHOLD = 500_000_000
+SEQUENCE_FINAL = 0xffffffff
+SEQUENCE_LOCKTIME_DISABLE_FLAG = 1 << 31
+SEQUENCE_LOCKTIME_MASK = 0x0000ffff
+SEQUENCE_LOCKTIME_TYPE_FLAG = 1 << 22
 
 CURVE_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 HALF_CURVE_ORDER = CURVE_ORDER // 2
