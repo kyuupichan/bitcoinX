@@ -70,15 +70,21 @@ def der_signature_to_compact(der_sig):
     '''Returns 64 bytes representing r and s as concatenated 32-byte big-endian numbers.'''
     cdata_sig = _der_signature_to_cdata(der_sig)
     compact_sig = ffi.new('unsigned char [64]')
+    # Always succeeds
     lib.secp256k1_ecdsa_signature_serialize_compact(CONTEXT, compact_sig, cdata_sig)
     return bytes(ffi.buffer(compact_sig))
 
 
-def compact_signature_to_der(compact_sig):
+def compact_signature_to_der(compact_sig, raise_on_overflow=False):
+    '''If R or S are too large (>= the curve order) returns a der signature with both set to
+    zero, unless raise_on_overflow is True.
+    '''
     if not (isinstance(compact_sig, bytes) and len(compact_sig) == 64):
         raise InvalidSignature('compact signature must be 64 bytes')
     cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
-    lib.secp256k1_ecdsa_signature_parse_compact(CONTEXT, cdata_sig, compact_sig)
+    overflow = not lib.secp256k1_ecdsa_signature_parse_compact(CONTEXT, cdata_sig, compact_sig)
+    if overflow and raise_on_overflow:
+        raise InvalidSignature('R or S value overflows')
     return _cdata_signature_to_der(cdata_sig)
 
 

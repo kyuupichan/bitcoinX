@@ -1028,7 +1028,7 @@ class TestInterpreterState:
         with pytest.raises(StackSizeTooLarge):
             state.validate_stack_size()
 
-    @pytest.mark.parametrize('sig_bytes,flags,err_text', (
+    @pytest.mark.parametrize('sig_hex,flags,err_text', (
         ('', 0, None),
         ('', InterpreterFlags.REQUIRE_STRICT_DER, None),
         ('', InterpreterFlags.REQUIRE_LOW_S, None),
@@ -1056,8 +1056,8 @@ class TestInterpreterState:
         (no_forkid_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING
          | InterpreterFlags.FORKID_ENABLED, 'sighash must use FORKID'),
     ))
-    def test_validate_signature(self, policy, sig_bytes, flags, err_text):
-        sig_bytes = bytes.fromhex(sig_bytes)
+    def test_validate_signature(self, policy, sig_hex, flags, err_text):
+        sig_bytes = bytes.fromhex(sig_hex)
         state = InterpreterState(policy, flags=flags)
         if err_text:
             with pytest.raises(InvalidSignature) as e:

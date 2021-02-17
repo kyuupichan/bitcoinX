@@ -1,6 +1,8 @@
 import pytest
 
-from bitcoinx import pack_byte, be_bytes_to_int, Script, InvalidSignature
+from bitcoinx import (
+    pack_byte, be_bytes_to_int, Script, InvalidSignature, int_to_be_bytes, CURVE_ORDER,
+)
 from bitcoinx.signature import *
 from bitcoinx.signature import MISSING_SIG_BYTES
 
@@ -11,6 +13,11 @@ serialization_testcases = [
                    '6785022027b1396f772c696629a4a09b01aed2416861aeaee05d0ff4a2e6fdfde73ec84d'),
      bytes.fromhex('8dc02fa531a9a704f5c01abdeb58930514651565b42abf94f6ad1565d0ad6785'
                    '27b1396f772c696629a4a09b01aed2416861aeaee05d0ff4a2e6fdfde73ec84d')),
+    # R and S are CURVE_ORDER - 1
+    (bytes.fromhex('3046022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364'
+                   '140022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140'),
+     bytes.fromhex('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140'
+                   'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140')),
 ]
 
 
@@ -22,6 +29,32 @@ def test_der_signature_to_compact(der_sig, compact_sig):
 @pytest.mark.parametrize("der_sig,compact_sig", serialization_testcases)
 def test_compact_signature_to_der(der_sig, compact_sig):
     assert compact_signature_to_der(compact_sig) == der_sig
+
+
+def test_der_signature_to_compact_no_overflow():
+    der_sig = bytes.fromhex(
+        '3046022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141'
+        '022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141'
+    )
+    # Never overflows
+    der_signature_to_compact(der_sig)
+
+
+largest = int_to_be_bytes(CURVE_ORDER)
+der_zeroes = bytes.fromhex('3006020100020100')
+
+@pytest.mark.parametrize("raises, value", (
+    (raises, value) for raises in (True, False) for value in (
+        largest + bytes(32), bytes(32) + largest, largest * 2
+    )
+))
+def test_compact_signature_to_der_overflow(raises, value):
+    if raises:
+        with pytest.raises(InvalidSignature):
+            compact_signature_to_der(value, raise_on_overflow=True)
+    else:
+        assert compact_signature_to_der(value, raise_on_overflow=False) == der_zeroes
+        assert compact_signature_to_der(value) == der_zeroes
 
 
 def test_compact_signature_to_der_bad():
