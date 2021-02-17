@@ -2165,7 +2165,6 @@ class TestEvaluateScript:
             assert state_old_utxo.stack == [int_to_item(value), int_to_item(-value),
                                             b'\1', b'\x81']
 
-
     @pytest.mark.parametrize("a,b", (
         ('0102030405', '0102030405'),
         ('0105', '0102030405'),
@@ -2182,3 +2181,21 @@ class TestEvaluateScript:
         script = Script().push_many((a, b, OP_MOD))
         with pytest.raises(InvalidNumber):
             evaluate_script(state_old_utxo, script)
+
+    @pytest.mark.parametrize("x,low,high,result", (
+        (-1, 0, 2, 0),
+        (0, 0, 2, 1),
+        (1, 0, 2, 1),
+        (2, 0, 2, 0),
+        (4, 0, 2, 0),
+        (0, 2, 0, 0),
+        (1, 2, 0, 0),
+        (2, 2, 0, 0),
+        (2, b'', b'\3', 1),
+        (86_000, 50_000, 100_000, 1),
+        (65_536, 75_000, 100_000, 0),
+    ))
+    def test_WITHIN(self, state, x, low, high, result):
+        script = Script() << x << low << high << OP_WITHIN
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]

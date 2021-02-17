@@ -404,10 +404,14 @@ def minimal_push_opcode(item):
 
 
 def cast_to_bool(item):
+    '''Cast an item to a Python boolean True or False.
+
+    Because the item is not converted to an integer, no restriction is placed on its size.
+    '''
     if not item:
         return False
-    # It could be a negative zero
-    return not (item[-1] in {0, 0x80} and all(item[n] == 0 for n in range(0, len(item) - 1)))
+    # Take care of negative zeroes
+    return item[-1] not in {0, 0x80} or any(item[n] for n in range(0, len(item) - 1))
 
 
 def _to_bytes(item):
@@ -1123,7 +1127,7 @@ def shift_left(value, count):
     n_bytes, n_bits = divmod(count, 8)
     n_bytes = min(n_bytes, len(value))
 
-    def pairs():
+    def pairs(value, n_bytes):
         for n in range(n_bytes, len(value) - 1):
             yield value[n], value[n + 1]
         if n_bytes < len(value):
@@ -1131,14 +1135,15 @@ def shift_left(value, count):
         for n in range(n_bytes):
             yield 0, 0
 
-    return bytes(((lhs << n_bits) & 255) + (rhs >> (8 - n_bits)) for lhs, rhs in pairs())
+    return bytes(((lhs << n_bits) & 255) + (rhs >> (8 - n_bits))
+                 for lhs, rhs in pairs(value, n_bytes))
 
 
 def shift_right(value, count):
     n_bytes, n_bits = divmod(count, 8)
     n_bytes = min(n_bytes, len(value))
 
-    def pairs():
+    def pairs(value, nbytes):
         for n in range(n_bytes):
             yield 0, 0
         if n_bytes < len(value):
@@ -1146,7 +1151,8 @@ def shift_right(value, count):
         for n in range(len(value) - 1 - n_bytes):
             yield value[n], value[n + 1]
 
-    return bytes(((lhs << (8 - n_bits)) & 255) + (rhs >> n_bits) for lhs, rhs in pairs())
+    return bytes(((lhs << (8 - n_bits)) & 255) + (rhs >> n_bits)
+                 for lhs, rhs in pairs(value, n_bytes))
 
 
 def handle_LSHIFT(state):
@@ -1223,17 +1229,15 @@ def logical_or(x1, x2):
     return 1 if (x1 or x2) else 0
 
 
-# def handle_WITHIN(state):
-#     # (x max min -- out)
-#     if len(state.stack) < 3:
-#         raise InvalidStackOperationError()
-#     x = item_to_int(state.stack[-3])
-#     mn = item_to_int(state.stack[-2])
-#     mx = item_to_int(state.stack[-1])
-#     state.stack.pop()
-#     state.stack.pop()
-#     state.stack.pop()
-#     state.stack.append(bools[mn <= x <= mx])
+def handle_WITHIN(state):
+    # (x max min -- out)    True if x is >= min and < max.
+    state.require_stack_depth(3)
+    x = item_to_int(state.stack[-3])
+    mn = item_to_int(state.stack[-2])
+    mx = item_to_int(state.stack[-1])
+    state.stack.pop()
+    state.stack.pop()
+    state.stack[-1] = bool_items[mn <= x < mx]
 
 
 #
@@ -1407,7 +1411,7 @@ op_handlers[OP_LESSTHANOREQUAL] = partial(handle_binary_numeric, binary_op=opera
 op_handlers[OP_GREATERTHANOREQUAL] = partial(handle_binary_numeric, binary_op=operator.ge)
 op_handlers[OP_MIN] = partial(handle_binary_numeric, binary_op=min)
 op_handlers[OP_MAX] = partial(handle_binary_numeric, binary_op=max)
-# OP_WITHIN = 0xa5
+op_handlers[OP_WITHIN] = handle_WITHIN
 
 #
 # Crypto
