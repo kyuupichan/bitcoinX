@@ -340,7 +340,7 @@ def cast_to_bool(item):
     if not item:
         return False
     # It could be a negative zero
-    return item[-1] in {0, 0x80} and all(item[n] == 0 for n in range(-len(item), -1))
+    return not (item[-1] in {0, 0x80} and all(item[n] == 0 for n in range(0, len(item) - 1)))
 
 
 def _to_bytes(item):
@@ -918,17 +918,17 @@ def handle_2SWAP(state):
     state.stack.extend([state.stack.pop(-4), state.stack.pop(-3)])
 
 
-# def handle_IFDUP(state):
-#     # (x - 0 | x x)
-#     if not state.stack:
-#         raise InvalidStackOperationError()
-#     if cast_to_bool(state.stack[-1]):
-#         state.stack.append(state.stack[-1])
+def handle_IFDUP(state):
+    # (x - 0 | x x)
+    state.require_stack_depth(1)
+    last = state.stack[-1]
+    if cast_to_bool(last):
+        state.stack.append(last)
 
 
-# def handle_DEPTH(state):
-#     # ( -- stacksize)
-#     state.stack.append(int_to_item(len(state.stack)))
+def handle_DEPTH(state):
+    # ( -- stacksize)
+    state.stack.append(int_to_item(len(state.stack)))
 
 
 # def handle_SWAP(state):
@@ -1105,8 +1105,8 @@ op_handlers[OP_OVER] = handle_OVER
 op_handlers[OP_2OVER] = handle_2OVER
 op_handlers[OP_2ROT] = handle_2ROT
 op_handlers[OP_2SWAP] = handle_2SWAP
-# OP_IFDUP = 0x73
-# OP_DEPTH = 0x74
+op_handlers[OP_IFDUP] = handle_IFDUP
+op_handlers[OP_DEPTH] = handle_DEPTH
 # OP_NIP = 0x77
 # OP_PICK = 0x79
 # OP_ROLL = 0x7a

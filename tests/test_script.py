@@ -10,6 +10,16 @@ from bitcoinx.script import *
 from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len
 
 
+def _zeroes():
+    # Yields a zero and negative zero
+    for size in range(10):
+        yield bytes(size)
+        yield bytes(size) + b'\x80'
+
+zeroes = list(_zeroes())
+non_zeroes = [b'\1', b'\x81', b'\1\0', b'\0\1', b'\0\x81']
+
+
 # Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
 # https://github.com/pytest-dev/pytest/issues/2951
 last_id = -1
@@ -813,6 +823,16 @@ def test_minimal_push_opcode_too_large():
         minimal_push_opcode(bytes(1<<32))
 
 
+@pytest.mark.parametrize("zero", zeroes)
+def test_cast_to_bool_zeros(zero):
+    assert not cast_to_bool(zero)
+
+
+@pytest.mark.parametrize("non_zero", non_zeroes)
+def test_cast_to_bool_zeros(non_zero):
+    assert cast_to_bool(non_zero)
+
+
 @pytest.fixture(params=(
     (100_000, 512, 20_000),
     (1_000_000, 2048, 100_000),
@@ -1086,6 +1106,29 @@ class TestEvaluateScript:
         script = Script().push_many(pushes) << OP_2SWAP
         evaluate_script(state, script)
         assert state.stack == list(datas[:1] + datas[3:] + datas[1:3])
+        assert not state.alt_stack
+
+    def test_IFDUP(self, state):
+        self.require_stack(state, 1, OP_IFDUP)
+        item = random.choice(zeroes)
+        script = Script() << item << OP_IFDUP
+        evaluate_script(state, script)
+        assert state.stack == [item]
+        assert not state.alt_stack
+        state.reset()
+
+        item = random.choice(non_zeroes)
+        script = Script() << item << OP_IFDUP
+        evaluate_script(state, script)
+        assert state.stack == [item] * 2
+        assert not state.alt_stack
+
+    def test_DEPTH(self, state):
+        push_datas = [self.random_push_data() for _ in range(10)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_DEPTH
+        evaluate_script(state, script)
+        assert state.stack == list(datas) + [int_to_item(len(push_datas))]
         assert not state.alt_stack
 
     def test_TOALTSTACK(self, state):
