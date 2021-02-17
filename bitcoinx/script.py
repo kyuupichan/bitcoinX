@@ -34,7 +34,7 @@ from .errors import (
     InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
     InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
-    InvalidPublicKeyCount, NullDummyError, UpgradeableNopError, LockTimeError
+    InvalidPublicKeyCount, NullDummyError, UpgradeableNopError, LockTimeError, PushOnlyError,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -718,18 +718,42 @@ class InterpreterFlags(IntEnum):
     REQUIRE_LOW_S = 1 << 3
     # Enforces SigHash checks and public key encoding checks
     REQUIRE_STRICT_ENCODING = 1 << 4
-    # Set if FORKID is enabled (post BTC/BCH fork)
-    FORKID_ENABLED = 1 << 5
     # Fails script immediately if a failed signature was not null
-    REQUIRE_NULLFAIL = 1 << 6
+    REQUIRE_NULLFAIL = 1 << 5
     # Fails script if the CHECKMULTISIG dummy argument is not null
-    REQUIRE_NULLDUMMY = 1 << 7
+    REQUIRE_NULLDUMMY = 1 << 6
     # Fails script if an upgradeable NOP is encountered
-    REJECT_UPGRADEABLE_NOPS = 1 << 8
+    REJECT_UPGRADEABLE_NOPS = 1 << 7
+    # Set if FORKID is enabled (post BTC/BCH fork)
+    ENABLE_FORKID = 1 << 8
     # If set OP_CHECKLOCKTIMEVERIFY is permitted
-    CHECKLOCKTIMEVERIFY = 1 << 9
+    ENABLE_CHECKLOCKTIMEVERIFY = 1 << 9
     # If set OP_CHECKSEQUENCEVERIFY is permitted
-    CHECKSEQUENCEVERIFY = 1 << 10
+    ENABLE_CHECKSEQUENCEVERIFY = 1 << 10
+    # If set verify_script handles P2SH outputs
+    ENABLE_P2SH = 1 << 11
+    # If true verify_script() requires script_sig to be PUSHDATA only
+    REQUIRE_PUSH_ONLY = 1 << 12
+    # If true verify_script() requires a clean stack on exit
+    REQUIRE_CLEANSTACK = 1 << 13
+
+    @classmethod
+    def sanitize(cls, flags, is_utxo_after_genesis):
+        '''Return sanitized flags .'''
+        # Require strict encoding if FORKID is enabled
+        if flags & cls.ENABLE_FORKID:
+            flags |= cls.REQUIRE_STRICT_ENCODING
+
+        # Disable CLEANSTACK check unless P2SH is enabled as the P2SH inputs would remain.
+        if not (flags & cls.ENABLE_P2SH):
+            flags &= ~cls.REQUIRE_CLEANSTACK
+
+        # For post-genesis UTXOs some features are disabled
+        if is_utxo_after_genesis:
+            flags &= ~(cls.ENABLE_CHECKLOCKTIMEVERIFY | cls.ENABLE_CHECKSEQUENCEVERIFY
+                       | cls.ENABLE_P2SH)
+
+        return flags
 
 
 class InterpreterState:
@@ -751,7 +775,7 @@ class InterpreterState:
                  is_utxo_after_genesis=True, tx=None, input_index=-1, value=-1):
         # These inputs must not be changed after construction because of caching
         self.policy = policy
-        self.flags = flags
+        self.flags = InterpreterFlags.sanitize(flags, is_utxo_after_genesis)
         self.is_consensus = is_consensus
         self.is_genesis_enabled = is_genesis_enabled
         self.is_utxo_after_genesis = is_utxo_after_genesis
@@ -852,9 +876,9 @@ class InterpreterState:
             sighash = SigHash(sig_bytes[-1])
             if not sighash.is_defined():
                 raise InvalidSignature('undefined sighash type')
-            if sighash.has_forkid() and not (self.flags & InterpreterFlags.FORKID_ENABLED):
+            if sighash.has_forkid() and not (self.flags & InterpreterFlags.ENABLE_FORKID):
                 raise InvalidSignature('sighash must not use FORKID')
-            if not sighash.has_forkid() and (self.flags & InterpreterFlags.FORKID_ENABLED):
+            if not sighash.has_forkid() and (self.flags & InterpreterFlags.ENABLE_FORKID):
                 raise InvalidSignature('sighash must use FORKID')
 
     def validate_pubkey(self, pubkey_bytes):
@@ -881,7 +905,7 @@ class InterpreterState:
     def cleanup_script_code(self, sig_bytes, script_code):
         '''Return script_code with signatures deleted if pre-BCH fork.'''
         sighash = SigHash(sig_bytes[-1])
-        if self.flags & InterpreterFlags.FORKID_ENABLED or sighash.has_forkid():
+        if self.flags & InterpreterFlags.ENABLE_FORKID or sighash.has_forkid():
             return script_code
         else:
             return script_code.find_and_delete(Script() << sig_bytes)
@@ -1007,6 +1031,39 @@ class InterpreterState:
         if self.conditions:
             raise UnbalancedConditional(f'unterminated {self.conditions[-1].opcode.name} '
                                         'at end of script')
+
+    def verify_script(self, script_sig, script_pubkey):
+        '''Return the result of evaluating the scripts.'''
+        if self.flags & InterpreterFlags.REQUIRE_PUSH_ONLY and not script_sig.is_push_only():
+            raise PushOnlyError('script_sig is not pushdata only')
+
+        is_P2SH = (self.flags & InterpreterFlags.ENABLE_P2SH) and script_pubkey.is_P2SH()
+
+        # FIXME: set stack limits
+        self.evaluate_script(script_sig)
+        if is_P2SH:
+            stack_copy = self.stack.copy()
+        self.evaluate_script(script_pubkey)
+
+        if not self.stack or not cast_to_bool(self.stack[-1]):
+            return False
+
+        # Additional validation for P2SH transactions
+        if is_P2SH:
+            if not script_sig.is_push_only():
+                raise PushOnlyError('P2SH script_sig is not pushdata only')
+            self.stack = stack_copy    # pylint:disable=W0201
+            # Cannot be empty
+            assert self.stack
+            pubkey_script = Script(self.stack.pop())
+            self.evaluate_script(pubkey_script)
+            if not self.stack or not cast_to_bool(self.stack[-1]):
+                return False
+
+        if self.flags & InterpreterFlags.REQUIRE_CLEANSTACK and self.stack:
+            raise CleanStackError('stack is not empty')
+
+        return True
 
 
 #
@@ -1507,23 +1564,25 @@ def handle_upgradeable_nop(state, op):
 
 
 def handle_CHECKLOCKTIMEVERIFY(state):
-    if state.is_utxo_after_genesis or not (state.flags & InterpreterFlags.CHECKLOCKTIMEVERIFY):
+    if not state.flags & InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY:
         handle_upgradeable_nops(state, OP_NOP2)
-    state.require_stack_depth(1)
-    locktime = state.to_number(state.stack[-1], length_limit=5)
-    if locktime < 0:
-        raise LockTimeError(f'locktime {locktime:,d} is negative')
-    state.validate_locktime(locktime)
+    else:
+        state.require_stack_depth(1)
+        locktime = state.to_number(state.stack[-1], length_limit=5)
+        if locktime < 0:
+            raise LockTimeError(f'locktime {locktime:,d} is negative')
+        state.validate_locktime(locktime)
 
 
 def handle_CHECKSEQUENCEVERIFY(state):
-    if state.is_utxo_after_genesis or not (state.flags & InterpreterFlags.CHECKSEQUENCEVERIFY):
+    if not state.flags & InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY:
         handle_upgradeable_nops(state, OP_NOP3)
-    state.require_stack_depth(1)
-    sequence = state.to_number(state.stack[-1], length_limit=5)
-    if sequence < 0:
-        raise LockTimeError(f'sequence {sequence:,d} is negative')
-    state.validate_sequence(sequence)
+    else:
+        state.require_stack_depth(1)
+        sequence = state.to_number(state.stack[-1], length_limit=5)
+        if sequence < 0:
+            raise LockTimeError(f'sequence {sequence:,d} is negative')
+        state.validate_sequence(sequence)
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
