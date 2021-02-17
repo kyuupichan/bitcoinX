@@ -1843,6 +1843,66 @@ class TestEvaluateScript:
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
+    @pytest.mark.parametrize("opcode", (
+        OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_BOOLAND, OP_BOOLOR, OP_NUMEQUAL,
+        OP_NUMEQUALVERIFY, OP_NUMNOTEQUAL, OP_LESSTHAN, OP_GREATERTHAN,
+        OP_LESSTHANOREQUAL, OP_GREATERTHANOREQUAL, OP_MIN, OP_MAX))
+    def test_binary_numeric_stack(self, state, opcode):
+        self.require_stack(state, 2, opcode)
+
+    @pytest.mark.parametrize("opcodes,result", (
+        ((OP_3, OP_5, OP_ADD), 8),
+        ((OP_1NEGATE, OP_5, OP_ADD), 4),
+        ((-5, -6, OP_ADD), -11),
+        ((b'\0', b'\x80', OP_ADD), 0),
+        ((b'\0', b'\x81', OP_SUB), 1),
+        ((b'', -1, OP_SUB), 1),
+        ((OP_3, OP_5, OP_SUB), -2),
+        ((OP_3, OP_5, OP_MUL), 15),
+        ((255, OP_0, OP_MUL), 0),
+        ((-15, -2, OP_MUL), 30),
+        ((12, 13, OP_MUL), 156),
+    ))
+    def test_binary_numeric(self, state, opcodes, result):
+        script = Script().push_many(opcodes)
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("a,b,div,mod", (
+        # These are smallnum tests
+        #(0x185377af, 0x85f41b01, -4, 0x00830bab),
+        #(408123311, -99883777, -4, 8588203),
+        (0x185377af, 0x00001b01, 0xe69d, 0x0212),
+        (408123311, 6913, 59037, 530),
+        (15, 4, 3, 3),
+        (15000, 4, 3750, 0),
+        (15000, 4000, 3, 3000),
+    ))
+    def test_div_mod(self, state, a, b, div, mod):
+        script = Script().push_many((a, b, OP_DIV, a, b, OP_MOD))
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(div), int_to_item(mod)]
+        assert not state.alt_stack
+
+        state.reset()
+        script = Script().push_many((a, -b, OP_DIV, a, -b, OP_MOD))
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(-div), int_to_item(mod)]
+        assert not state.alt_stack
+
+        state.reset()
+        script = Script().push_many((-a, b, OP_DIV, -a, b, OP_MOD))
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(-div), int_to_item(-mod)]
+        assert not state.alt_stack
+
+        state.reset()
+        script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
+        evaluate_script(state, script)
+        assert state.stack == [int_to_item(div), int_to_item(-mod)]
+        assert not state.alt_stack
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
