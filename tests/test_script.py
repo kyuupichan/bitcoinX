@@ -1640,6 +1640,19 @@ class TestEvaluateScript:
         assert state.stack[0].hex() == result
         assert not state.alt_stack
 
+    @pytest.mark.parametrize("value,size", (
+        (b'', 0),
+        (b'\x00', 1),
+        (b'\x00\x80', 2),
+        (bytes(20), 20),
+    ))
+    def test_SIZE(self, state, value, size):
+        self.require_stack(state, 1, OP_SIZE)
+        script = Script() << value << OP_SIZE
+        evaluate_script(state, script)
+        assert state.stack == [value, int_to_item(len(value))]
+        assert not state.alt_stack
+
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
