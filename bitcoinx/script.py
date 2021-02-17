@@ -14,7 +14,7 @@ __all__ = (
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
     'ItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
-    'VerifyFailed', 'OpReturnError', 'InvalidOpcode',
+    'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -90,6 +90,10 @@ class DisabledOpcode(InterpreterError):
 
 class InvalidOpcode(InterpreterError):
     '''Raised when an invalid opcode is encountered.'''
+
+
+class InvalidSplit(InterpreterError):
+    '''Raised when trying to split an item at an invalid position.'''
 
 
 class UnbalancedConditional(InterpreterError):
@@ -787,8 +791,9 @@ class InterpreterState:
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
 
-    def to_number(self, item, *, size_t_limited=False):   # pylint:disable=W0613
+    def to_number(self, item):
         # FIXME: handle pre-genesis numbers
+        # FIXME: size_t limited
         return item_to_int(item)
 
     # def item_to_int(self, item):
@@ -1042,15 +1047,17 @@ def handle_TUCK(state):
     state.stack.insert(-2, state.stack[-1])
 
 
-def handle_PICK_ROLL(state, pick):
+def handle_PICK_ROLL(state, op):
     # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
     # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
     state.require_stack_depth(2)
-    n = state.to_number(state.stack[-1], size_t_limited=True)
+    n = state.to_number(state.stack[-1])
     state.stack.pop()
-    if not (0 <= n < len(state.stack)):
-        raise InvalidStackOperation()
-    if pick:
+    depth = len(state.stack)
+    if not 0 <= n < depth:
+        raise InvalidStackOperation(f'{op.name} with argument {n:,d} used '
+                                    f'on stack with depth {depth:,d}')
+    if op == OP_PICK:
         state.stack.append(state.stack[-(n + 1)])
     else:
         state.stack.append(state.stack.pop(-(n + 1)))
@@ -1170,16 +1177,15 @@ def handle_CAT(state):
     state.stack[-1] = item
 
 
-# def handle_SPLIT(state):
-#     # (x posiition -- x1 x2)
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     x = state.stack[-2]
-#     n = item_to_int(state.stack[-1])
-#     if not 0 <= n <= len(x):
-#         raise InvalidSplitRangeError()
-#     state.stack[-2] = x[:n]
-#     state.stack[-1] = x[n:]
+def handle_SPLIT(state):
+    # (x posiition -- x1 x2)
+    state.require_stack_depth(2)
+    x = state.stack[-2]
+    n = state.to_number(state.stack[-1])
+    if not 0 <= n <= len(x):
+        raise InvalidSplit(f'cannot split item of length {len(x):,d} at position {n:,d}')
+    state.stack[-2] = x[:n]
+    state.stack[-1] = x[n:]
 
 
 # #
@@ -1220,8 +1226,8 @@ op_handlers[OP_2SWAP] = handle_2SWAP
 op_handlers[OP_IFDUP] = handle_IFDUP
 op_handlers[OP_DEPTH] = handle_DEPTH
 op_handlers[OP_NIP] = handle_NIP
-op_handlers[OP_PICK] = partial(handle_PICK_ROLL, pick=True)
-op_handlers[OP_ROLL] = partial(handle_PICK_ROLL, pick=False)
+op_handlers[OP_PICK] = partial(handle_PICK_ROLL, op=OP_PICK)
+op_handlers[OP_ROLL] = partial(handle_PICK_ROLL, op=OP_ROLL)
 op_handlers[OP_ROT] = handle_ROT
 op_handlers[OP_SWAP] = handle_SWAP
 op_handlers[OP_TUCK] = handle_TUCK
@@ -1230,7 +1236,7 @@ op_handlers[OP_TUCK] = handle_TUCK
 # Byte-string operations
 #
 op_handlers[OP_CAT] = handle_CAT
-# OP_SPLIT = 0x7f# after monolith upgrade (May 2018)
+op_handlers[OP_SPLIT] = handle_SPLIT
 # OP_NUM2BIN = 0x80  # after monolith upgrade (May 2018)
 # OP_BIN2NUM = 0x81  # after monolith upgrade (May 2018)
 # OP_SIZE = 0x82
