@@ -31,6 +31,7 @@ from .errors import (
     InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
     InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
+    InvalidPublicKeyCount, NullDummyError,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -695,10 +696,12 @@ class Condition:
 class InterpreterPolicy:
     '''Policy rules fixed over the node session.'''
 
-    def __init__(self, max_script_size, max_script_num_length, max_ops_per_script):
+    def __init__(self, max_script_size, max_script_num_length, max_ops_per_script,
+                 max_pubkeys_per_multisig):
         self.max_script_size = max_script_size
         self.max_script_num_length = max_script_num_length
         self.max_ops_per_script = max_ops_per_script
+        self.max_pubkeys_per_multisig = max_pubkeys_per_multisig
 
 
 class InterpreterFlags(IntEnum):
@@ -716,6 +719,8 @@ class InterpreterFlags(IntEnum):
     FORKID_ENABLED = 1 << 5
     # Fails script immediately if a failed signature was not null
     REQUIRE_NULLFAIL = 1 << 6
+    # Fails script is the CHECKMULTISIG dummy argument is not null
+    REQUIRE_NULLDUMMY = 1 << 7
 
 
 class InterpreterState:
@@ -730,6 +735,8 @@ class InterpreterState:
     MAX_STACK_ELEMENTS_BEFORE_GENESIS = 1_000
     MAX_OPS_PER_SCRIPT_BEFORE_GENESIS = 500
     MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT32_MAX
+    MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS = 20
+    MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS = UINT32_MAX
 
     def __init__(self, policy, *, flags=0, is_consensus=False, is_genesis_enabled=True,
                  is_utxo_after_genesis=True, signature_hash_func=None):
@@ -748,8 +755,8 @@ class InterpreterState:
         self.alt_stack = []
         self.conditions = []
         self.execute = False
+        self.iterator = None
         self.finished = False
-        self.script_code = None
         self.op_count = 0
         self.non_top_level_return_after_genesis = False
 
@@ -792,21 +799,28 @@ class InterpreterState:
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
 
-    def validate_number_length(self, size):
-        limit = self.max_script_num_length
+    def validate_number_length(self, size, *, limit=None):
+        if limit is None:
+            limit = self.max_script_num_length
         if size > limit:
             raise InvalidNumber(f'number of length {size:,d} exceeds the limit '
                                 f'of {limit:,d} bytes')
 
-    def to_number(self, item):
+    def to_number(self, item, *, length_limit=None):
         # FIXME: size_t limiting in some cases
-        self.validate_number_length(len(item))
+        self.validate_number_length(len(item), limit=length_limit)
 
         if (self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH
                 and not is_item_minimally_encoded(item)):
             raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
 
         return item_to_int(item)
+
+    def validate_pubkey_count(self, count):
+        limit = self.max_pubkeys_per_multisig
+        if not 0 <= count <= limit:
+            raise InvalidPublicKeyCount(f'number of public keys, {count:,d}, in OP_CHECKMULTISIG '
+                                        f'lies outside range 0 <= count <= {limit:d}')
 
     def validate_signature(self, sig_bytes):
         '''Raise the InvalidSignature exception if the signature does not meet the requirements of
@@ -847,6 +861,11 @@ class InterpreterState:
         '''Fail immediately if a failed signature was not null.'''
         if self.flags & InterpreterFlags.REQUIRE_NULLFAIL and sig_bytes:
             raise NullFailError('signature check failed on a non-null signature')
+
+    def validate_nulldummy(self):
+        '''Fail if the multisig duumy pop isn't an empty stack item.'''
+        if self.flags & InterpreterFlags.REQUIRE_NULLDUMMY and self.stack[-1]:
+            raise NullDummyError('multisig dummy argument was not null')
 
     def cleanup_script_code(self, sig_bytes, script_code):
         '''Return script_code with signatures deleted if pre-BCH fork.'''
@@ -894,6 +913,14 @@ class InterpreterState:
             return self.policy.max_script_num_length
         return self.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
 
+    @cachedproperty
+    def max_pubkeys_per_multisig(self):
+        if self.is_utxo_after_genesis:
+            if self.is_consensus:
+                return self.MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS
+            return self.policy.max_pubkeys_per_multisig
+        return self.MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
+
 
 def evaluate_script(state, script):
 
@@ -901,11 +928,11 @@ def evaluate_script(state, script):
         raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
                              f'{state.max_script_size:,d} bytes')
 
-    state.script_code = script
     state.op_count = 0
     state.non_top_level_return_after_genesis = False
+    state.iterator = ScriptIterator(script)
 
-    for op, item in script.ops_and_items():
+    for op, item in state.iterator.ops_and_items():
         # Check pushitem size first
         if item is not None:
             state.validate_item_size(len(item))
@@ -1286,6 +1313,11 @@ def handle_hash(state, hash_func):
     state.stack.append(hash_func(state.stack.pop()))
 
 
+def handle_CODESEPARATOR(state):
+    # script_code starts after the code separator
+    state.iterator.on_code_separator()
+
+
 def handle_CHECKSIG(state):
     # (sig pubkey -- bool)
     state.require_stack_depth(2)
@@ -1293,7 +1325,8 @@ def handle_CHECKSIG(state):
     pubkey_bytes = state.stack[-1]
     state.validate_signature(sig_btyes)
     state.validate_pubkey(pubkey_bytes)
-    script_code = state.cleanup_script_code(sig_bytes, state.script_code)
+    script_code = state.iterator.script_code()
+    script_code = state.cleanup_script_code(sig_bytes, script_code)
     is_good = state.check_sig(sig_bytes, pubkey_bytes, script_code)
     if not is_good:
         state.validate_nullfail(sig_bytes)
@@ -1306,6 +1339,68 @@ def handle_CHECKSIGVERIFY(state):
     handle_CHECKSIG(state)
     if state.stack[-1] == b_OP_0:
         raise CheckSigVerifyFailed('OP_CHECKSIGVERIFY failed')
+    state.stack.pop()
+
+
+def handle_CHECKMULTISIG(state):
+    # ([sig ...] sig_count [pubkey ...] pubkey_count -- bool)
+    state.require_stack_depth(1)
+    # Limit key count to 4 bytes
+    key_count = state.to_number(state.stack[-1], length_limit=4)
+    state.validate_pubkey_count(key_count)
+    state.bump_op_count(key_count)
+    # Ensure we can read sig_count, also limited to 4 bytes
+    state.require_stack_depth(key_count + 2)
+    sig_count = state.to_number(state.stack[-(key_count + 2)], length_limit=4)
+    if not 0 <= sig_count <= key_count:
+        raise InvalidSignatureCount(f'number of signatures, {sig_count:,d}, in OP_CHECKMULTISIG '
+                                    f'lies outside range 0 <= count <= {key_count:,d}')
+
+    # Ensure we have all the sigs
+    item_count = key_count + sig_count + 2
+    state.require_stack_depth(item_count)
+
+    # Remove signatures for pre-BCH fork scripts
+    script_code = state.iterator.script_code()
+    first_sig_index = -(key_count + 3)
+    for n in range(sig_count):
+        script_code = state.cleanup_script_code(state.stack[first_sig_index - n], script_code)
+
+    keys_remaining = key_count
+    sigs_remaining = sig_count
+    key_base_index = -(key_count + 2)
+    sig_base_index = key_base_index - (sig_count + 1)
+    # Loop while the remaining number of sigs to check does not exceed the remaining keys
+    while keys_remaining >= sigs_remaining > 0:
+        sig_bytes = state.stack[sig_base_index + sigs_remaining]
+        state.validate_signature(sig_btyes)
+        pubkey_bytes = state.stack[key_base_index + keys_remaining]
+        state.validate_pubkey(pubkey_bytes)
+        is_good = state.check_sig(sig_bytes, pubkey_bytes, script_code)
+        if is_good:
+            sigs_remaining -= 1
+        keys_remaining -= 1
+
+    is_good = keys_remaining >= sigs_remaining
+
+    # Clean up the stack
+    for n in range(item_count):
+        # If the operation failed NULLFAIL requires all signatures be empty
+        if not is_good and n >= key_count + 2:
+            state.validate_nullfail(state.stack[-1])
+        state.stack.pop()
+
+    # An old CHECKMULTISIG bug consumes an extra argument.  Check it's null.
+    state.require_stack_depth(1)
+    state.validate_nulldummy()
+    state.stack[-1] = bool_items[is_good]
+
+
+def handle_CHECKMULTISIGVERIFY(state):
+    # (sig pubkey -- )
+    handle_CHECKMULTISIG(state)
+    if state.stack[-1] == b_OP_0:
+        raise CheckMultiSigVerifyFailed('OP_CHECKMULTISIGVERIFY failed')
     state.stack.pop()
 
 
@@ -1457,23 +1552,16 @@ op_handlers[OP_SHA1] = partial(handle_hash, hash_func=sha1)
 op_handlers[OP_SHA256] = partial(handle_hash, hash_func=sha256)
 op_handlers[OP_HASH160] = partial(handle_hash, hash_func=hash160)
 op_handlers[OP_HASH256] = partial(handle_hash, hash_func=double_sha256)
+op_handlers[OP_CODESEPARATOR] = handle_CODESEPARATOR
+op_handlers[OP_CHECKSIG] = handle_CHECKSIG
+op_handlers[OP_CHECKSIGVERIFY] = handle_CHECKSIGVERIFY
+op_handlers[OP_CHECKMULTISIG] = handle_CHECKMULTISIG
+op_handlers[OP_CHECKMULTISIGVERIFY] = handle_CHECKMULTISIGVERIFY
 
-# # crypto
-# OP_CODESEPARATOR = 0xab
-# OP_CHECKSIG = 0xac
-# OP_CHECKSIGVERIFY = 0xad
-# OP_CHECKMULTISIG = 0xae
-# OP_CHECKMULTISIGVERIFY = 0xaf
-
-# # expansion
+#
+# Expansion
+#
 # OP_CHECKLOCKTIMEVERIFY = 0xb1
 # OP_NOP2 = OP_CHECKLOCKTIMEVERIFY
 # OP_CHECKSEQUENCEVERIFY = 0xb2
 # OP_NOP3 = OP_CHECKSEQUENCEVERIFY
-# OP_NOP4 = 0xb3
-# OP_NOP5 = 0xb4
-# OP_NOP6 = 0xb5
-# OP_NOP7 = 0xb6
-# OP_NOP8 = 0xb7
-# OP_NOP9 = 0xb8
-# OP_NOP10 = 0xb9
