@@ -1,12 +1,8 @@
 import pytest
 
-from bitcoinx import pack_byte, be_bytes_to_int, Script
+from bitcoinx import pack_byte, be_bytes_to_int, Script, InvalidSignature
 from bitcoinx.signature import *
 from bitcoinx.signature import MISSING_SIG_BYTES
-
-
-def test_exceptions():
-    assert issubclass(InvalidSignatureError, ValueError)
 
 
 # List of (der_sig, compact_sig)
@@ -29,9 +25,9 @@ def test_compact_signature_to_der(der_sig, compact_sig):
 
 
 def test_compact_signature_to_der_bad():
-    with pytest.raises(InvalidSignatureError):
+    with pytest.raises(InvalidSignature):
         compact_signature_to_der(bytes(63))
-    with pytest.raises(InvalidSignatureError):
+    with pytest.raises(InvalidSignature):
         compact_signature_to_der('a' * 64)
 
 
@@ -83,7 +79,7 @@ class TestSignature:
         assert s.is_present()
 
     def test_constructor_bad(self):
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             Signature(b'\x30')
 
     def test_eq(self):
@@ -136,7 +132,7 @@ class TestSignature:
 
     def test_der_signature(self):
         s = Signature(MISSING_SIG_BYTES)
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             s.der_signature
         der_sig = serialization_testcases[0][0]
         s = Signature(der_sig + pack_byte(0x41))
@@ -150,7 +146,7 @@ class TestSignature:
 
     def test_sighash_bad(self):
         s = Signature(MISSING_SIG_BYTES)
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             s.sighash
 
     @pytest.mark.parametrize("sig, text", (

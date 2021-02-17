@@ -8,8 +8,7 @@
 '''Signatures of various kinds.'''
 
 __all__ = (
-    'Signature', 'SigHash',
-    'der_signature_to_compact', 'compact_signature_to_der', 'InvalidSignatureError',
+    'Signature', 'SigHash', 'der_signature_to_compact', 'compact_signature_to_der',
 )
 
 from base64 import b64decode
@@ -17,6 +16,7 @@ from binascii import Error as binascii_Error
 
 from electrumsv_secp256k1 import ffi, lib
 from .consts import HALF_CURVE_ORDER
+from .errors import InvalidSignature
 from .misc import CONTEXT, be_bytes_to_int
 from .packing import pack_byte
 
@@ -28,20 +28,16 @@ MAX_SIG_LENGTH = 72
 MISSING_SIG_BYTES = b'\xff'
 
 
-class InvalidSignatureError(ValueError):
-    pass
-
-
 def _cdata_recsig(recoverable_sig):
     if len(recoverable_sig) != 65:
-        raise InvalidSignatureError('invalid recoverable signature')
+        raise InvalidSignature('invalid recoverable signature')
     cdata_recsig = ffi.new('secp256k1_ecdsa_recoverable_signature *')
     recid = recoverable_sig[-1]
     if not 0 <= recid <= 3:
-        raise InvalidSignatureError('invalid recoverable signature')
+        raise InvalidSignature('invalid recoverable signature')
     if not lib.secp256k1_ecdsa_recoverable_signature_parse_compact(
             CONTEXT, cdata_recsig, recoverable_sig, recid):
-        raise InvalidSignatureError('invalid recoverable signature')
+        raise InvalidSignature('invalid recoverable signature')
     return cdata_recsig
 
 
@@ -49,7 +45,7 @@ def public_key_from_recoverable_signature(recoverable_sig, msg_hash):
     cdata_recsig = _cdata_recsig(recoverable_sig)
     public_key = ffi.new('secp256k1_pubkey *')
     if not lib.secp256k1_ecdsa_recover(CONTEXT, public_key, cdata_recsig, msg_hash):
-        raise InvalidSignatureError('invalid recoverable signature')
+        raise InvalidSignature('invalid recoverable signature')
     return public_key
 
 
@@ -66,7 +62,7 @@ def _cdata_signature_to_der(signature):
 def _der_signature_to_cdata(der_sig):
     cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
     if not lib.secp256k1_ecdsa_signature_parse_der(CONTEXT, cdata_sig, der_sig, len(der_sig)):
-        raise InvalidSignatureError('invalid DER-encoded signature')
+        raise InvalidSignature('invalid DER-encoded signature')
     return cdata_sig
 
 
@@ -80,7 +76,7 @@ def der_signature_to_compact(der_sig):
 
 def compact_signature_to_der(compact_sig):
     if not (isinstance(compact_sig, bytes) and len(compact_sig) == 64):
-        raise InvalidSignatureError('compact signature must be 64 bytes')
+        raise InvalidSignature('compact signature must be 64 bytes')
     cdata_sig = ffi.new('secp256k1_ecdsa_signature *')
     lib.secp256k1_ecdsa_signature_parse_compact(CONTEXT, cdata_sig, compact_sig)
     return _cdata_signature_to_der(cdata_sig)
@@ -135,11 +131,11 @@ def to_recoverable_signature(message_sig):
         try:
             message_sig = b64decode(message_sig, validate=True)
         except binascii_Error:
-            raise InvalidSignatureError('invalid base64 encoding of message signature') from None
+            raise InvalidSignature('invalid base64 encoding of message signature') from None
     if not isinstance(message_sig, bytes) or len(message_sig) != 65:
-        raise InvalidSignatureError('message signature must be 65 bytes')
+        raise InvalidSignature('message signature must be 65 bytes')
     if not 27 <= message_sig[0] < 35:
-        raise InvalidSignatureError('invalid message signature format')
+        raise InvalidSignature('invalid message signature format')
     return message_sig[1:] + pack_byte((message_sig[0] - 27) & 3)
 
 
@@ -187,7 +183,7 @@ class Signature:
     def __init__(self, raw):
         '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.
 
-        Raises InvalidSignatureError.'''
+        Raises InvalidSignature.'''
         if raw != MISSING_SIG_BYTES:
             # Validate the DER encoding
             der_signature_to_compact(raw[:-1])
@@ -242,13 +238,13 @@ class Signature:
     @property
     def der_signature(self):
         if self._raw == MISSING_SIG_BYTES:
-            raise InvalidSignatureError('signature is missing')
+            raise InvalidSignature('signature is missing')
         return self._raw[:-1]
 
     @property
     def sighash(self):
         if self._raw == MISSING_SIG_BYTES:
-            raise InvalidSignatureError('signature is missing')
+            raise InvalidSignature('signature is missing')
         return SigHash(self._raw[-1])
 
     @classmethod
