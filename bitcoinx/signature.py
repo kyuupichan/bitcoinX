@@ -15,9 +15,9 @@ from base64 import b64decode
 from binascii import Error as binascii_Error
 
 from electrumsv_secp256k1 import ffi, lib
-from .consts import HALF_CURVE_ORDER
+from .consts import CURVE_ORDER, HALF_CURVE_ORDER
 from .errors import InvalidSignature
-from .misc import CONTEXT, be_bytes_to_int
+from .misc import CONTEXT, be_bytes_to_int, int_to_be_bytes
 from .packing import pack_byte
 
 
@@ -186,6 +186,8 @@ class SigHash(int):
 class Signature:
     '''A bitcoin DER signature, as raw bytes.'''
 
+    DER_SIG_ZEROES = bytes.fromhex('3006020100020100')
+
     def __init__(self, raw):
         '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.
 
@@ -252,6 +254,67 @@ class Signature:
         if self._raw == MISSING_SIG_BYTES:
             raise InvalidSignature('signature is missing')
         return SigHash(self._raw[-1])
+
+    @classmethod
+    def parse_der_lax(cls, sig):
+        '''Implementation of ecdsa_signature_parse_der_lax() from bitcoin-sv/src/pubkey.cpp'''
+        def read_byte(pos):
+            if pos >= len(sig):
+                raise SyntaxError
+            return sig[pos]
+
+        def require_byte(value, pos):
+            if read_byte(pos) != value:
+                raise SyntaxError
+            return pos + 1
+
+        def _read_be_integer(n, pos):
+            if pos + n > len(sig):
+                raise SyntaxError
+            return be_bytes_to_int(sig[pos: pos + n]), pos + n
+
+        def read_length(pos):
+            length = read_byte(pos)
+            pos += 1
+            if length & 0x80:
+                length, pos = _read_be_integer(length - 0x80, pos)
+            return length, pos
+
+        def read_integer(pos):
+            pos = require_byte(0x02, pos)
+            length, pos = read_length(pos)
+            return _read_be_integer(length, pos)
+
+        try:
+            pos = require_byte(0x30, 0)
+            # Signature length is unchecked
+            _ignore, pos = read_length(pos)
+            r, pos = read_integer(pos)
+            s, pos = read_integer(pos)
+        except SyntaxError:
+            raise InvalidSignature('invalid lax DER encoding') from None
+
+        # Force low S.
+        if CURVE_ORDER > s > HALF_CURVE_ORDER:
+            s = CURVE_ORDER - s
+
+        try:
+            compact_sig = int_to_be_bytes(r, size=32) + int_to_be_bytes(s, size=32)
+        except OverflowError:
+            return cls.DER_SIG_ZEROES
+
+        return compact_signature_to_der(compact_sig, raise_on_overflow=False)
+
+    @classmethod
+    def normalize_der_signature(cls, sig):
+        '''Given a bitcoin signature taken from script (including the trailing sighash byte),
+        return a normalized DER signature and a SigHash object.
+
+        Raises InvalidSignature if the signature is not an acceptable DER encoding.
+        Acceptable encodings are rather lax to account for on-chain signatures accepted
+        in earlier times by OpenSSL.
+        '''
+        return cls.parse_der_lax(sig), SigHash(sig[-1])
 
     @classmethod
     def is_strict_der_encoding(cls, sig):

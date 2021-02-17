@@ -26,11 +26,11 @@ import attr
 from .consts import JSONFlags
 from .errors import (
     ScriptError, TruncatedScriptError, InterpreterError,
-    StackSizeTooLarge, MinimalEncodingError,
+    StackSizeTooLarge, MinimalEncodingError, InvalidPublicKeyEncoding,
     ScriptTooLarge, TooManyOps, MinimalIfError, DivisionByZero, NegativeShiftCount,
     InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
-    InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature,
+    InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -714,6 +714,8 @@ class InterpreterFlags(IntEnum):
     REQUIRE_STRICT_ENCODING = 1 << 4
     # Set if FORKID is enabled (post BTC/BCH fork)
     FORKID_ENABLED = 1 << 5
+    # Fails script immediately if a failed signature was not null
+    REQUIRE_NULLFAIL = 1 << 6
 
 
 class InterpreterState:
@@ -730,14 +732,14 @@ class InterpreterState:
     MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT32_MAX
 
     def __init__(self, policy, *, flags=0, is_consensus=False, is_genesis_enabled=True,
-                 is_utxo_after_genesis=True, sig_checker=None):
+                 is_utxo_after_genesis=True, signature_hash_func=None):
         # These inputs must not be changed after construction because of caching
         self.policy = policy
         self.flags = flags
         self.is_consensus = is_consensus
         self.is_genesis_enabled = is_genesis_enabled
         self.is_utxo_after_genesis = is_utxo_after_genesis
-        self.sig_checker = sig_checker
+        self.signature_hash_func = signature_hash_func
         self.reset()
 
     def reset(self):
@@ -800,12 +802,16 @@ class InterpreterState:
         # FIXME: size_t limiting in some cases
         self.validate_number_length(len(item))
 
-        if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH and not is_minimally_encoded(item):
+        if (self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH
+                and not is_item_minimally_encoded(item)):
             raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
 
         return item_to_int(item)
 
     def validate_signature(self, sig_bytes):
+        '''Raise the InvalidSignature exception if the signature does not meet the requirements of
+        self.flags.
+        '''
         if not sig_bytes:
             return
 
@@ -825,6 +831,44 @@ class InterpreterState:
                 raise InvalidSignature('sighash must not use FORKID')
             if not sighash.has_forkid() and (self.flags & InterpreterFlags.FORKID_ENABLED):
                 raise InvalidSignature('sighash must use FORKID')
+
+    def validate_pubkey(self, pubkey_bytes):
+        '''Raise the InvalidPublicKeyEncoding exception if the public key is not a standard
+        compressed or uncompressed encoding and REQUIRE_STRICT_ENCODING is flagged.'''
+        if self.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
+            length = len(pubkey_bytes)
+            if length == 33 and pubkey_bytes[0] in {2, 3}:
+                return
+            if length == 65 and pubkey_bytes[0] == 4:
+                return
+            raise InvalidPublicKeyEncoding('invalid public key encoding')
+
+    def validate_nullfail(self, sig_bytes):
+        '''Fail immediately if a failed signature was not null.'''
+        if self.flags & InterpreterFlags.REQUIRE_NULLFAIL and sig_bytes:
+            raise NullFailError('signature check failed on a non-null signature')
+
+    def cleanup_script_code(self, sig_bytes, script_code):
+        '''Return script_code with signatures deleted if pre-BCH fork.'''
+        sighash = SigHash(sig_bytes[-1])
+        if self.flags & InterpreterFlags.FORKID_ENABLED or sighash.has_forkid():
+            return script_code
+        else:
+            return script_code.find_and_delete(Script() << sig_bytes)
+
+    def check_sig(self, pubkey_bytes, sig_bytes, script_code):
+        '''Check a signature.  Returns True or False.'''
+        if not sig_bytes or not self.signature_hash_func:
+            return False
+        try:
+            pubkey = PublicKey(pubkey_bytes)
+        except ValueError:
+            return False
+
+        # Split out the DER signature and the sighash
+        der_sig, sighash = Signature.normalize_der_signature(sig_bytes)
+        message_hash = self.signature_hash_func(script_code, sighash=sighash)
+        return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
 
     @cachedproperty
     def max_ops_per_script(self):
@@ -1242,27 +1286,27 @@ def handle_hash(state, hash_func):
     state.stack.append(hash_func(state.stack.pop()))
 
 
-# def handle_CHECKSIG(state):
-#     # (sig pubkey -- bool)
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     sig = state.stack[-2]
-#     pubkey = state.stack[-1]
-#     # FIXME: check encodings
-#     # FIXME: remove signature for pre-fork scripts
-#     is_good = state.sig_checker(sig, pubkey, state.script_code)  # FIXME: forkid flags
-#     # FIXME: NULLFAIL to not pop
-#     state.stack.pop()
-#     state.stack.pop()
-#     state.stack.append(bools[is_good])
+def handle_CHECKSIG(state):
+    # (sig pubkey -- bool)
+    state.require_stack_depth(2)
+    sig_bytes = state.stack[-2]
+    pubkey_bytes = state.stack[-1]
+    state.validate_signature(sig_btyes)
+    state.validate_pubkey(pubkey_bytes)
+    script_code = state.cleanup_script_code(sig_bytes, state.script_code)
+    is_good = state.check_sig(sig_bytes, pubkey_bytes, script_code)
+    if not is_good:
+        state.validate_nullfail(sig_bytes)
+    state.stack.pop()
+    state.stack[-1] = bool_items[is_good]
 
 
-# def handle_CHECKSIGVERIFY(state):
-#     # (sig pubkey -- )
-#     handle_CHECKSIG(state)
-#     if state.stack[-1] == b_OP_0:
-#         raise CHECKSIGVERIFYError()
-#     state.stack.pop()
+def handle_CHECKSIGVERIFY(state):
+    # (sig pubkey -- )
+    handle_CHECKSIG(state)
+    if state.stack[-1] == b_OP_0:
+        raise CheckSigVerifyFailed('OP_CHECKSIGVERIFY failed')
+    state.stack.pop()
 
 
 #

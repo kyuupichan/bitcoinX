@@ -1,4 +1,5 @@
 import pytest
+import random
 
 from bitcoinx import (
     pack_byte, be_bytes_to_int, Script, InvalidSignature, int_to_be_bytes, CURVE_ORDER,
@@ -93,6 +94,7 @@ class TestSigHash:
         (0x81, "ALL|ANYONE_CAN_PAY"),
         (0x82, "NONE|ANYONE_CAN_PAY"),
         (0x83, "SINGLE|ANYONE_CAN_PAY"),
+        (0xa3, "SINGLE|ANYONE_CAN_PAY|0x20"),
     ))
     def test_to_string(self, n, text):
         assert SigHash(n).to_string() == text
@@ -101,6 +103,38 @@ class TestSigHash:
 defined_sighashes = {SigHash.ALL, SigHash.NONE, SigHash.SINGLE}
 defined_sighashes.update(s | SigHash.ANYONE_CAN_PAY for s in list(defined_sighashes))
 defined_sighashes.update(s | SigHash.FORKID for s in list(defined_sighashes))
+
+lax_der_testcases = [
+    # Zero total length, zero R len, zero S len
+    ('300002000200', '3006020100020100'),
+    # 0x70 total length, R=2, S=3
+    ('3070020102020103', '3006020102020103'),
+    # 0x80 total length, R=2, S=3
+    ('3080020102020103', '3006020102020103'),
+    # 0x8101 total length, R=2, S=3
+    ('308101020102020103', '3006020102020103'),
+    # 0x80 total length, R=0002, S=0003
+    ('30800202000202020003', '3006020102020103'),
+    # 0x80 total length, Rlen=820002 R=0005, SLen=83000001 S=20
+    ('3080028200020005028300000120', '3006020105020120'),
+    # 0x70 total length, R=2, S=3  excess bytes
+    ('3070020102020103deadbeef', '3006020102020103'),
+    # R = TOO BIG, S=1  gives (0, 0)
+    ('3046022170fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141020101',
+     '3006020100020100'),
+    # R = 1, S = TOO BIG, S=1  gives (0, 0)
+    ('3046020101022170fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
+     '3006020100020100'),
+    # R = CURVE_ORDER, S=1  gives (0, 0)
+    ('3046022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141020101',
+     '3006020100020100'),
+    # R = 1, S = CURVE_ORDER  gives (0, 0)
+    ('3046020101022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
+     '3006020100020100'),
+    # R = 4, S = CURVE_ORDER - 1   gives (4, 1)
+    ('3046020104022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140',
+     '3006020104020101'),
+]
 
 
 class TestSignature:
@@ -262,3 +296,49 @@ class TestSignature:
     def test_is_strict_der_encoding(self, hex_str):
         raw_sig = bytes.fromhex(hex_str)
         assert Signature.is_strict_der_encoding(raw_sig) is True
+
+
+    @pytest.mark.parametrize("sig_hex", (
+        # Too short
+        '',
+        # Not 0x30 at start
+        '00',
+        # Too short with -0 length byte
+        '3080',
+        # Too short with -1 length byte
+        '3081',
+        # R not integer
+        '300001',
+        # RLen not present
+        '30000281',
+        # R not present
+        '30000220',
+        # S not present
+        '3000020108',
+        # S not integer
+        '300002010801',
+        # SLen not present
+        '300002010802',
+        # SLen not present
+        '30000201080281',
+        # S not present
+        '30000201080201',
+        # S missing a byte
+        '3000020108020201',
+    ))
+    def test_parse_der_lax_bad(self, sig_hex):
+        with pytest.raises(InvalidSignature) as e:
+            Signature.parse_der_lax(bytes.fromhex(sig_hex))
+        assert 'invalid lax DER encoding' in str(e.value)
+
+    @pytest.mark.parametrize("sig_hex, normalized", lax_der_testcases)
+    def test_parse_der_lax_good(self, sig_hex, normalized):
+        sig_bytes = bytes.fromhex(sig_hex)
+        assert Signature.parse_der_lax(sig_bytes).hex() == normalized
+
+    @pytest.mark.parametrize("sig_hex, normalized", lax_der_testcases)
+    def test_normalize_der_signature(self, sig_hex, normalized):
+        sighash_byte = random.randrange(0, 256)
+        sig_bytes = bytes.fromhex(sig_hex) + pack_byte(sighash_byte)
+        normalized_sig, sighash = Signature.normalize_der_signature(sig_bytes)
+        assert (normalized_sig.hex(), sighash) == (normalized, SigHash(sighash_byte))
