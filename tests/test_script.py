@@ -976,6 +976,36 @@ class TestEvaluateScript:
     def xtest_test_execute_stack(self, state):
         pass
 
+    def test_DROP(self, state):
+        script = Script() << OP_DROP
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert not state.stack
+        state.reset()
+
+        script = Script() << OP_14 << OP_DROP
+        evaluate_script(state, script)
+        assert not state.stack
+        assert not state.alt_stack
+
+    def test_2DROP(self, state):
+        script = Script() << OP_2DROP
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert not state.stack
+        state.reset()
+
+        script = Script() << b'foo' << OP_2DROP
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        assert state.stack == [b'foo']
+        state.reset()
+
+        script = Script() << b'foo' << b'bar' << OP_2DROP
+        evaluate_script(state, script)
+        assert not state.stack
+        assert not state.alt_stack
+
     def test_DUP(self, state):
         script = Script() << OP_DUP
         with pytest.raises(InvalidStackOperation):
