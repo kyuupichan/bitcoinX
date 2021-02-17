@@ -21,13 +21,13 @@ from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
 from .consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
+from .errors import InvalidSignature
 from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT
 from .packing import pack_byte, pack_varbytes
 from .signature import (
     sign_der, sign_recoverable, verify_der_signature, verify_recoverable_signature,
     public_key_from_recoverable_signature, to_message_signature, to_recoverable_signature,
-    InvalidSignatureError,
 )
 from .util import cachedproperty
 
@@ -478,7 +478,7 @@ class PublicKey:
         '''
         try:
             public_key = cls.from_signed_message(message_sig, message, hasher)
-        except InvalidSignatureError:
+        except InvalidSignature:
             return False
         if isinstance(address, P2PKH_Address):
             hash160 = address.hash160()

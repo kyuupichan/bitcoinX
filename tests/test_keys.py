@@ -5,10 +5,10 @@ import pytest
 
 from bitcoinx.coin import Bitcoin, BitcoinTestnet
 from bitcoinx.consts import CURVE_ORDER
+from bitcoinx.errors import InvalidSignature
 from bitcoinx.keys import *
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
-from bitcoinx.signature import InvalidSignatureError
 from bitcoinx import pack_byte, base58_encode_check, Address
 
 
@@ -822,7 +822,7 @@ class TestPublicKey:
         sig_rec = priv.sign_recoverable(message)
 
         P = priv.public_key
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_der_signature(sig_rec, message)
 
         for n in (10, 20, 30, 40):
@@ -830,7 +830,7 @@ class TestPublicKey:
             bad_der[n] ^= 0x10
             try:
                 assert not P.verify_der_signature(bytes(bad_der), message)
-            except InvalidSignatureError:
+            except InvalidSignature:
                 pass
 
 
@@ -854,15 +854,15 @@ class TestPublicKey:
         P = priv.public_key
         # Bad recid
         bad_sig = bytes([0x01]) * 64 + bytes([4])
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_recoverable_signature(bad_sig, message)
         # Overflow
         bad_sig = bytes([0xff]) * 64 + bytes([1])
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_recoverable_signature(bad_sig, message)
         # Invalid sig
         bad_sig = bytes([sig[0] ^ 1]) + sig[1:]
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_recoverable_signature(bad_sig, message)
 
 
@@ -878,7 +878,7 @@ class TestPublicKey:
 
     def test_from_recoverable_signature_bad(self):
         message = b'BitcoinSV'
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             PublicKey.from_recoverable_signature(b'1' * 64, message)
 
 
@@ -887,7 +887,7 @@ class TestPublicKey:
         message = b'BitcoinSV'
         rec_sig = priv.sign_recoverable(message)
         bad_sig = bytes(32) + rec_sig[32:]
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             PublicKey.from_recoverable_signature(bad_sig, message)
 
 
@@ -909,7 +909,7 @@ class TestPublicKey:
         P1 = PublicKey.from_signed_message(message_sig, message)
         P2 = PublicKey.from_signed_message(b64encode(message_sig).decode(), message)
         assert P1 == P2 == priv.public_key
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             PublicKey.from_signed_message('abcd%', message)
 
 
@@ -975,7 +975,7 @@ class TestPublicKey:
         message_sig = priv.sign_message(message)
         P.verify_message(message_sig, message)
         P.verify_message(b64encode(message_sig).decode(), message)
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_message('abcd%', message)
 
     def test_verify_message_and_address_coin(self):
@@ -1015,14 +1015,14 @@ class TestPublicKey:
         msg = b'BitcoinSV'
         msg_sig = priv.sign_message(msg)
 
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_message(b'bar', msg)
-        with pytest.raises(InvalidSignatureError):
+        with pytest.raises(InvalidSignature):
             P.verify_message(msg_sig[:-1], msg)
         msg_sig = bytearray(msg_sig)
         for n in (26, 35):
             msg_sig[0] = n
-            with pytest.raises(InvalidSignatureError):
+            with pytest.raises(InvalidSignature):
                 P.verify_message(bytes(msg_sig), msg)
 
 

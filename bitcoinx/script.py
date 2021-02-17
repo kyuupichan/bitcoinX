@@ -37,7 +37,7 @@ from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32, unpack_le_uint16, unpack_le_uint32,
 )
-from .signature import Signature, InvalidSignatureError, SigHash
+from .signature import Signature, SigHash
 from .util import cachedproperty
 
 
@@ -548,11 +548,11 @@ class Script:
             if len(op) <= 4:
                 return str(item_to_int(op))
             # Print signatures as strings showing the sighash text.  Without sighash byte
-            # DER-encoded signatures are between 8 and 72 bytes
+            # normalized DER-encoded signatures are between 8 and 72 bytes
             if decode_sighash and op[0] == 0x30 and 9 <= len(op) <= 73:
                 try:
                     return Signature(op).to_string()
-                except InvalidSignatureError:
+                except InvalidSignature:
                     pass
             return op.hex()
         try:
