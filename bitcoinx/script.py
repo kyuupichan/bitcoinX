@@ -14,6 +14,7 @@ __all__ = (
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
     'PushItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
+    'VerifyFailed',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -92,6 +93,10 @@ class InvalidOpcode(InterpreterError):
 class UnbalancedConditional(InterpreterError):
     '''Raised when a script contains unepxected OP_ELSE, OP_ENDIF conditionals, or if
     open condition blocks are unterminated.'''
+
+
+class VerifyFailed(InterpreterError):
+    '''OP_VERIFY was executed and the top of stack was zero.'''
 
 
 class Ops(IntEnum):
@@ -861,15 +866,6 @@ def evaluate_script(state, script):
 # Control
 #
 
-# def handle_VERIFY(state):
-#     # (true -- ) or (false -- false) and return
-#     if not state.stack:
-#         raise InvalidStackOperationError()
-#     if cast_to_bool(state.stack[-1]) == b_OP_0:
-#         raise VERIFYError()
-#     state.stack.pop()
-
-
 def handle_NOP(_state):
     pass
 
@@ -903,6 +899,15 @@ def handle_ENDIF(state):
     if not state.conditions:
         raise UnbalancedConditional('unexpected OP_ENDIF')
     state.conditions.pop()
+
+
+def handle_VERIFY(state):
+    # (true -- ) or (false -- false) and return
+    state.require_stack_depth(1)
+    if not cast_to_bool(state.stack[-1]):
+        raise VerifyFailed()
+    state.stack.pop()
+
 
 #
 # # Post-genesis UTXOs permit OP_VER in unexecuted branches
@@ -1167,7 +1172,7 @@ op_handlers[OP_NOTIF] = partial(handle_IF, opcode=OP_NOTIF)
 #    OP_VERNOTIF = 0x66
 op_handlers[OP_ELSE] = handle_ELSE
 op_handlers[OP_ENDIF] = handle_ENDIF
-#    OP_VERIFY = 0x69
+op_handlers[OP_VERIFY] = handle_VERIFY
 #    OP_RETURN = 0x6a
 
 
