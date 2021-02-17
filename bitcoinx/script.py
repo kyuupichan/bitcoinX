@@ -894,14 +894,16 @@ def handle_nDUP(state, n):
     state.stack.extend(state.stack[-n:])
 
 
-# def handle_2OVER(state):
-#     # (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
-#     if len(state.stack) < 4:
-#         raise InvalidStackOperationError()
-#     x1 = state.stack[-4]
-#     x2 = state.stack[-3]
-#     state.stack.append(x1)
-#     state.stack.append(x2)
+def handle_OVER(state):
+    # (x1 x2 -- x1 x2 x1)
+    state.require_stack_depth(2)
+    state.stack.append(state.stack[-2])
+
+
+def handle_2OVER(state):
+    # (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
+    state.require_stack_depth(4)
+    state.stack.extend(state.stack[-4: -2])
 
 
 # def handle_2ROT(state):
@@ -1107,14 +1109,13 @@ op_handlers[OP_2DROP] = handle_2DROP
 op_handlers[OP_DUP] = partial(handle_nDUP, n=1)
 op_handlers[OP_2DUP] = partial(handle_nDUP, n=2)
 op_handlers[OP_3DUP] = partial(handle_nDUP, n=3)
-
-# OP_2OVER = 0x70
+op_handlers[OP_OVER] = handle_OVER
+op_handlers[OP_2OVER] = handle_2OVER
 # OP_2ROT = 0x71
 # OP_2SWAP = 0x72
 # OP_IFDUP = 0x73
 # OP_DEPTH = 0x74
 # OP_NIP = 0x77
-# OP_OVER = 0x78
 # OP_PICK = 0x79
 # OP_ROLL = 0x7a
 # OP_ROT = 0x7b
