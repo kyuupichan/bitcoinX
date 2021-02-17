@@ -974,3 +974,30 @@ class TestEvaluateScript:
 
     def xtest_test_execute_stack(self, state):
         pass
+
+    def test_DUP(self, state):
+        script = Script() << OP_DUP
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        script = Script() << OP_14 << OP_DUP
+        evaluate_script(state, script)
+        assert state.stack == [b'\x0e', b'\x0e']
+        assert not state.alt_stack
+
+    def test_TOALTSTACK(self, state):
+        script = Script() << OP_TOALTSTACK
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        script = Script() << OP_12 << OP_TOALTSTACK
+        evaluate_script(state, script)
+        assert not state.stack
+        assert state.alt_stack == [b'\x0c']
+
+    def test_FROMALTSTACK(self, state):
+        script = Script() << OP_FROMALTSTACK
+        with pytest.raises(InvalidStackOperation):
+            evaluate_script(state, script)
+        script = Script() << OP_10 << OP_TOALTSTACK << OP_8 << OP_FROMALTSTACK
+        evaluate_script(state, script)
+        assert state.stack == [b'\x08', b'\x0a']
+        assert not state.alt_stack

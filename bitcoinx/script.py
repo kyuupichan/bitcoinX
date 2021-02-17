@@ -13,8 +13,8 @@ __all__ = (
     'StackSizeTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
-    'PushItemTooLarge', 'DisabledOpcode', 'UnclosedConditionals',
-    'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
+    'PushItemTooLarge', 'DisabledOpcode', 'UnclosedConditionals', 'InvalidStackOperation',
+    'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
 )
@@ -58,6 +58,10 @@ class ScriptTooLarge(InterpreterError):
 
 class TooManyOps(InterpreterError):
     '''Raised when a script contains too many operations.'''
+
+
+class InvalidStackOperation(InterpreterError):
+    '''Raised when an opcode wants to access items deyond the stack depth.'''
 
 
 class MinimalPushOpNotUsed(InterpreterError):
@@ -329,6 +333,13 @@ def minimal_push_opcode(item):
     if dlen <= 0xffffffff:
         return OP_PUSHDATA4
     raise ValueError('item is too large')
+
+
+def cast_to_bool(item):
+    if not item:
+        return False
+    # It could be a negative zero
+    return item[-1] in {0, 0x80} and all(item[n] == 0 for n in range(-len(item), -1))
 
 
 def _to_bytes(item):
@@ -709,6 +720,15 @@ class InterpreterState:
         if self.op_count > self.max_ops_per_script:
             raise TooManyOps(f'op count exceeds the limit of {self.max_ops_per_script:,d}')
 
+    def require_depth(self, depth):
+        if len(self.stack) < depth:
+            raise InvalidStackOperation(f'stack depth {len(self.stack)} less than required '
+                                        f'depth of {depth}')
+
+    def require_alt_stack(self):
+        if not self.alt_stack:
+            raise InvalidStackOperation(f'alt stack is empty')
+
     def validate_minimal_push_opcode(self, op, item):
         if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH_OPCODE:
             expected_op = minimal_push_opcode(item)
@@ -801,15 +821,9 @@ def evaluate_script(state, script):
 
         if execute and item is not None:
             state.validate_minimal_push_opcode(op, item)
-            state.stack.append(op)
+            state.stack.append(item)
         elif execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
             op_handlers[op](state)
-
-            # Post-genesis UTXOs permit OP_VER in unexecuted branches
-            elif op in {OP_VERNOTIF, OP_VERIF} and state.is_utxo_after_genesis and not execute:
-                pass
-            else:
-                raise InvalidOpcode(f'invalid opcode: {op}')
 
         state.validate_stack_size()
 
@@ -817,31 +831,294 @@ def evaluate_script(state, script):
         raise UnclosedConditionals('unterminated if/else/endif condition evaluating script')
 
 
-def invalid_opcode(_state, op):
-    raise InvalidOpcode(f'invalid opcode: {op}')
-
-
 #
-# Control ops
+# Control
 #
+
+# def handle_VERIFY(state):
+#     # (true -- ) or (false -- false) and return
+#     if not state.stack:
+#         raise InvalidStackOperationError()
+#     if cast_to_bool(state.stack[-1]) == b_OP_0:
+#         raise VERIFYError()
+#     state.stack.pop()
+
 
 def handle_NOP(_state):
     pass
 
 
+#
+# # Post-genesis UTXOs permit OP_VER in unexecuted branches
+# elif op in {OP_VERNOTIF, OP_VERIF} and state.is_utxo_after_genesis and not execute:
+#  pass
+
+
+# TODO: OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_NOP1 .. OP_NOP_10, OP_IF, OP_NOTIF
+#       OP_ELSE, OP_ENDIF, OP_RETURN
+
+
+
+#
+# Stack operations
+#
+
+def handle_TOALTSTACK(state):
+    state.require_depth(1)
+    state.alt_stack.append(state.stack.pop())
+
+
+def handle_FROMALTSTACK(state):
+    state.require_alt_stack()
+    state.stack.append(state.alt_stack.pop())
+
+
+# def handle_DROP(state):
+#     # (x -- )
+#     if not state.stack:
+#         raise InvalidStackOperationError()
+#     state.stack.pop()
+
+
+# def handle_2DROP(state):
+#     # (x1 x2 -- )
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     state.stack.pop()
+#     state.stack.pop()
+
+
 def handle_DUP(state):
+    # (x -- x x)
     state.require_depth(1)
     state.stack.append(state.stack[-1])
 
 
+# def handle_2DUP(state):
+#     # (x1 x2 -- x1 x2 x1 x2)
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack[-2]
+#     x2 = state.stack[-1]
+#     state.stack.append(x1)
+#     state.stack.append(x2)
+
+
+# def handle_3DUP(state):
+#     # (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
+#     if len(state.stack) < 3:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack[-3]
+#     x2 = state.stack[-2]
+#     x3 = state.stack[-1]
+#     state.stack.append(x1)
+#     state.stack.append(x2)
+#     state.stack.append(x3)
+
+
+# def handle_2OVER(state):
+#     # (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
+#     if len(state.stack) < 4:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack[-4]
+#     x2 = state.stack[-3]
+#     state.stack.append(x1)
+#     state.stack.append(x2)
+
+
+# def handle_2ROT(state):
+#     # (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
+#     if len(state.stack) < 6:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack.pop(-6)
+#     x2 = state.stack.pop(-5)
+#     state.stack.append(x1)
+#     state.stack.append(x2)
+
+
+# def handle_2SWAP(state):
+#     # (x1 x2 x3 x4 -- x3 x4 x1 x2)
+#     if len(state.stack) < 4:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack.pop(-4)
+#     x2 = state.stack.pop(-3)
+#     state.stack.append(x1)
+#     state.stack.append(x2)
+
+
+# def handle_IFDUP(state):
+#     # (x - 0 | x x)
+#     if not state.stack:
+#         raise InvalidStackOperationError()
+#     if cast_to_bool(state.stack[-1]):
+#         state.stack.append(state.stack[-1])
+
+
+# def handle_DEPTH(state):
+#     # ( -- stacksize)
+#     state.stack.append(int_to_item(len(state.stack)))
+
+
+# def handle_SWAP(state):
+#     # ( x1 x2 -- x2 x1 )
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     state.stack[-1], state.stack[-2] = state.stack[-2], state.stack[-1]
+
+
+# def handle_TUCK(state):
+#     # ( x1 x2 -- x2 x1 x2 )
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     state.stack.insert(-2, state.stack[-1])
+
+
+# def handle_SIZE(state):
+#     # ( x -- x size(x) )
+#     if not state.stack:
+#         raise InvalidStackOperationError()
+#     state.stack.append(len(state.stack[-1]))
+
+
+# #
+# # Bitwise logic
+# #
+
+# def handle_AND(state):
+#     # (x1 x2 -- out)
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack[-1]
+#     x2 = state.stack[-2]
+#     if len(x1) != len(x2):
+#         raise InvalidOperandSizeError()
+#     x3 = bytes(b1 & b2 for b1, b2 in zip(x1, x2))
+#     state.stack.pop()
+#     state.stack[-1] = x3
+
+
+# # TODO: OP_LSHIFT, O_RSHIFT
+
+
+# def handle_EQUAL(state):
+#     # (x1 x2 -- bool).   Bitwise equality
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     state.stack.append(bools[state.stack.pop() == state.stack.pop()])
+
+
+# def handle_EQUALVERIFY(state):
+#     # (x1 x2 -- )
+#     handle_EQUAL(state)
+#     if state.stack[-1] == b_OP_0:
+#         raise EQUALVERIFYError()
+#     state.stack.pop()
+
+
+# #
+# # Numeric.  TODO: Many
+# #
+
+
+# def handle_ADD(state):
+#     # (x1 x2 -- out)
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     x2 = item_to_int(state.stack.pop())
+#     x1 = item_to_int(state.stack.pop())
+#     state.stack.append(int_to_item(x1 + x2))
+
+
+# def handle_WITHIN(state):
+#     # (x max min -- out)
+#     if len(state.stack) < 3:
+#         raise InvalidStackOperationError()
+#     x = item_to_int(state.stack[-3])
+#     mn = item_to_int(state.stack[-2])
+#     mx = item_to_int(state.stack[-1])
+#     state.stack.pop()
+#     state.stack.pop()
+#     state.stack.pop()
+#     state.stack.append(bools[mn <= x <= mx])
+
+
+# #
+# # Crypto.  TODO: OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH256, OP_CODESEPARATOR,
+# #                OP_CHCEKMULTISIG, OP_CHECKMULTISIGVERIFY
+# #
+
+# def handle_HASH160(state):
+#     # (x -- x x)
+#     if not state.stack:
+#         raise InvalidStackOperationError()
+#     state.stack.append(hash160(state.stack.pop()))
+
+
+# def handle_CHECKSIG(state):
+#     # (sig pubkey -- bool)
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     sig = state.stack[-2]
+#     pubkey = state.stack[-1]
+#     # FIXME: check encodings
+#     # FIXME: remove signature for pre-fork scripts
+#     is_good = state.sig_checker(sig, pubkey, state.script_code)  # FIXME: forkid flags
+#     # FIXME: NULLFAIL to not pop
+#     state.stack.pop()
+#     state.stack.pop()
+#     state.stack.append(bools[is_good])
+
+
+# def handle_CHECKSIGVERIFY(state):
+#     # (sig pubkey -- )
+#     handle_CHECKSIG(state)
+#     if state.stack[-1] == b_OP_0:
+#         raise CHECKSIGVERIFYError()
+#     state.stack.pop()
+
+
+# #
+# # Byte string operations
+# #
+
+# def handle_CAT(state):
+#     # (x1 x2 -- out)
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     x1 = state.stack[-2]
+#     x2 = state.stack[-1]
+#     # FIXME: stack check
+#     state.stack.pop()
+#     state.stack[-1] = x1 + x2
+
+
+# def handle_SPLIT(state):
+#     # (x posiition -- x1 x2)
+#     if len(state.stack) < 2:
+#         raise InvalidStackOperationError()
+#     x = state.stack[-2]
+#     n = item_to_int(state.stack[-1])
+#     if not 0 <= n <= len(x):
+#         raise InvalidSplitRangeError()
+#     state.stack[-2] = x[:n]
+#     state.stack[-1] = x[n:]
+
+
+# #
+# # Conversion operations  TODO: both
+# #
+
+
+def invalid_opcode(_state, op):
+    raise InvalidOpcode(f'invalid opcode: {op}')
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
 op_handlers[OP_DUP] = handle_DUP
 op_handlers[OP_NOP] = handle_NOP
+op_handlers[OP_TOALTSTACK] = handle_TOALTSTACK
+op_handlers[OP_FROMALTSTACK] = handle_FROMALTSTACK
 
-    # OP_TOALTSTACK = 0x6b
-    # OP_FROMALTSTACK = 0x6c
     # OP_2DROP = 0x6d
     # OP_2DUP = 0x6e
     # OP_3DUP = 0x6f
@@ -922,7 +1199,6 @@ op_handlers[OP_NOP] = handle_NOP
     # OP_CHECKMULTISIGVERIFY = 0xaf
 
     # # expansion
-    # OP_NOP1 = 0xb0
     # OP_CHECKLOCKTIMEVERIFY = 0xb1
     # OP_NOP2 = OP_CHECKLOCKTIMEVERIFY
     # OP_CHECKSEQUENCEVERIFY = 0xb2
@@ -934,4 +1210,3 @@ op_handlers[OP_NOP] = handle_NOP
     # OP_NOP8 = 0xb7
     # OP_NOP9 = 0xb8
     # OP_NOP10 = 0xb9
-]
