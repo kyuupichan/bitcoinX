@@ -797,7 +797,7 @@ class TestPublicKey:
 
     def test_combine_keys_bad_intermediate(self):
         priv = PrivateKey.from_random()
-        priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int()))
+        priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int(), size=32))
         # But combining with bad intermediate result but good final is fine
         P = PublicKey.combine_keys([priv.public_key, priv2.public_key, priv.public_key])
         assert P == priv.public_key
