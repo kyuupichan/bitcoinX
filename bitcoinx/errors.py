@@ -15,7 +15,7 @@ __all__ = (
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
     'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'NullFailError',
     'InvalidPublicKeyEncoding', 'InvalidSignature', 'NullDummyError',
-    'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed',
+    'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
 )
 
 
@@ -122,12 +122,20 @@ class NullDummyError(InterpreterError):
     '''Raised if the dummy multisig argument is non-null with REQUIRE_NULLDUMMY.'''
 
 
+class UpgradeableNopError(InterpreterError):
+    '''Raised if an upgradeable NOP is encountered.'''
+
+
 class InvalidPublicKeyCount(InterpreterError):
     '''Raised if the number of public keys in an OP_CHECKMULTISIG operation is out of range.'''
 
 
 class InvalidSignatureCount(InterpreterError):
     '''Raised if the number of sigs in an OP_CHECKMULTISIG operation is out of range.'''
+
+
+class LockTimeError(InterpreterError):
+    '''Raised for various failures of OP_CHECKLOCKTIMEVERIFY and OP_CHECKSEQUENCEVERIFY.'''
 
 
 class VerifyFailed(InterpreterError):

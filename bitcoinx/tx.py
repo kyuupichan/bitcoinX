@@ -14,7 +14,7 @@ import attr
 import datetime
 from io import BytesIO
 
-from .consts import JSONFlags
+from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, SEQUENCE_FINAL
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
@@ -22,11 +22,6 @@ from .packing import (
 )
 from .script import Script
 from .signature import SigHash
-
-
-ZERO = bytes(32)
-UINT32_MAX = (1 << 32) - 1
-LOCKTIME_THRESHOLD = 500_000_000
 
 
 @attr.s(slots=True)
@@ -197,7 +192,7 @@ class TxInput:
 
     def is_coinbase(self):
         '''Return True iff the input is the single input of a coinbase transaction.'''
-        return self.prev_idx == UINT32_MAX and self.prev_hash == ZERO
+        return self.prev_idx == 0xffffffff and self.prev_hash == ZERO
 
     @classmethod
     def read(cls, read):
@@ -244,7 +239,7 @@ class TxInput:
         return 40 + varint_len(n) + n
 
     def is_final(self):
-        return self.sequence == 0xffffffff
+        return self.sequence == SEQUENCE_FINAL
 
     def to_json(self, flags, index=None):
         if self.is_coinbase():

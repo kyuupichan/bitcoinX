@@ -905,8 +905,8 @@ def test_find_and_delete(script, delete, expected):
 
 
 @pytest.fixture(params=(
-    (100_000, 512, 20_000),
-    (1_000_000, 2048, 100_000),
+    (100_000, 512, 20_000, 100),
+    (1_000_000, 2048, 100_000, 1_000),
 ))
 def policy(request):
     yield InterpreterPolicy(*request.param)
