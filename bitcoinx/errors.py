@@ -7,15 +7,15 @@
 
 '''Exception hierarchy.'''
 
-
 __all__ = (
     'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError',
     'ScriptTooLarge', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
-    'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed',
+    'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'NullFailError',
     'InvalidPublicKeyEncoding', 'InvalidSignature',
+    'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed',
 )
 
 
@@ -114,6 +114,10 @@ class InvalidSignature(InterpreterError):
     '''Raised on various invalid signature encodings when checking a signature.'''
 
 
+class NullFailError(InterpreterError):
+    '''Raised if a signature check failed on a non-null signature with REQUIRE_NULLFAIL.'''
+
+
 class VerifyFailed(InterpreterError):
     '''OP_VERIFY was executed and the top of stack was zero.'''
 
@@ -124,3 +128,11 @@ class EqualVerifyFailed(VerifyFailed):
 
 class NumEqualVerifyFailed(VerifyFailed):
     '''OP_NUMEQUALVERIFY was executed and it failed.'''
+
+
+class CheckSigVerifyFailed(VerifyFailed):
+    '''OP_CHECKSIGVERIFY was executed and it failed.'''
+
+
+class CheckMultiSigVerifyFailed(VerifyFailed):
+    '''OP_CHECKMULTISIGVERIFY was executed and it failed.'''

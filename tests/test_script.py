@@ -295,6 +295,10 @@ class TestScript:
         S = Script(script)
         assert str(S) == script.hex()
 
+    def test_repr(self):
+        S = Script(b'abcd')
+        assert repr(S) == 'Script<"61626364">'
+
     def test_str_does_bytes_conversion(self):
         str(P2PKH_script)
 
@@ -543,6 +547,15 @@ class TestScript:
     ))
     def test_op_to_asm_word(self, op, word):
         assert Script.op_to_asm_word(op, False) == word
+
+    @pytest.mark.parametrize("op_hex,word", (
+        ('30' * 10, '30' * 10),
+        ('302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a001',
+         '302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0[ALL]'),
+    ))
+    def test_op_to_asm_word_decode_sighash(self, op_hex, word):
+        op = bytes.fromhex(op_hex)
+        assert Script.op_to_asm_word(op, True) == word
 
     def test_to_bytes(self):
         data = os.urandom(15)
@@ -1066,19 +1079,100 @@ class TestInterpreterState:
         else:
             state.validate_signature(sig_bytes)
 
-    @pytest.mark.parametrize('number, after_genesis, value', (
-        ('01020304', False, 0x04030201),
-        ('01020304', True, 0x04030201),
-        ('0102030405', False, None),
-        ('0102030405', True, 0x0504030201),
-        ('0102030400', False, None),
-        ('0102030400', True, 0x04030201),
+    @pytest.mark.parametrize('pubkey,flags,fail', (
+        ('', 0, False),
+        ('', InterpreterFlags.REQUIRE_STRICT_DER, False),
+        ('', InterpreterFlags.REQUIRE_LOW_S, False),
+        ('', InterpreterFlags.REQUIRE_STRICT_ENCODING, True),
+        ('00' * 33, 0, False),
+        ('00' * 33, InterpreterFlags.REQUIRE_STRICT_ENCODING, True),
+        ('00' * 65, 0, False),
+        ('00' * 65, InterpreterFlags.REQUIRE_STRICT_ENCODING, True),
+        # Good compressed
+        ('036d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e2', 0, False),
+        ('036d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e2',
+         InterpreterFlags.REQUIRE_STRICT_ENCODING, False),
+        # Bad compressed
+        ('03' + '00' * 32, 0, False),
+        ('03' + '00' * 32, InterpreterFlags.REQUIRE_STRICT_ENCODING, False),
+        # Good uncompressed
+        ('046d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e'
+         '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab', 0, False),
+        ('046d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e'
+         '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab',
+         InterpreterFlags.REQUIRE_STRICT_ENCODING, False),
+        # Bad uncompressed
+        ('04' + '00' * 64, 0, False),
+        ('04' + '00' * 64, InterpreterFlags.REQUIRE_STRICT_ENCODING, False),
+        # Good hybrid
+        ('076d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e'
+         '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab', 0, False),
+        ('076d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e'
+         '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab',
+         InterpreterFlags.REQUIRE_STRICT_ENCODING, True),
+        # Bad hybrid
+        ('06' + '00' * 64, 0, False),
+        ('06' + '00' * 64, InterpreterFlags.REQUIRE_STRICT_ENCODING, True),
     ))
-    def test_to_number_number_length(self, state, after_genesis, number, value):
-        state.is_utxo_after_genesis = after_genesis
+    def test_validate_pubkey(self, policy, pubkey, flags, fail):
+        pubkey_bytes = bytes.fromhex(pubkey)
+        state = InterpreterState(policy, flags=flags)
+        if fail:
+            with pytest.raises(InvalidPublicKeyEncoding) as e:
+                state.validate_pubkey(pubkey_bytes)
+            assert 'invalid public key encoding' in str(e.value)
+        else:
+            state.validate_pubkey(pubkey_bytes)
+
+    @pytest.mark.parametrize('sig_hex,flags,script_code,result', (
+        ('30454501', 0, Script() << OP_1 << bytes.fromhex('30454501') << OP_2,
+         Script() << OP_1 << OP_2),
+        ('30454501', InterpreterFlags.FORKID_ENABLED,
+         Script() << OP_1 << bytes.fromhex('30454501') << OP_2, None),
+        ('30454541', 0, Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
+        ('30454541', InterpreterFlags.FORKID_ENABLED,
+         Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
+    ))
+    def test_cleanup_script_code(self, policy, sig_hex, flags, script_code, result):
+        sig_bytes = bytes.fromhex(sig_hex)
+        state = InterpreterState(policy, flags=flags)
+        if result is None:
+            assert state.cleanup_script_code(sig_bytes, script_code) == script_code
+        else:
+            assert state.cleanup_script_code(sig_bytes, script_code) == result
+
+    @pytest.mark.parametrize('sig_hex,flags,raises', (
+        ('', 0, False),
+        ('', InterpreterFlags.REQUIRE_NULLFAIL, False),
+        ('30454501', 0, False),
+        ('30454541', InterpreterFlags.REQUIRE_NULLFAIL, True),
+    ))
+    def test_validate_nullfail(self, policy, sig_hex, flags, raises):
+        sig_bytes = bytes.fromhex(sig_hex)
+        state = InterpreterState(policy, flags=flags)
+        if raises:
+            with pytest.raises(NullFailError):
+                state.validate_nullfail(sig_bytes)
+        else:
+            state.validate_nullfail(sig_bytes)
+
+    @pytest.mark.parametrize('number, flags, after_genesis, value', (
+        ('01020304', 0, False, 0x04030201),
+        ('01020304', 0, True, 0x04030201),
+        ('0102030405', 0, False, InvalidNumber),
+        ('0102030405', 0, True, 0x0504030201),
+        ('0102030400', 0, False, InvalidNumber),
+        ('0102030400', 0, True, 0x04030201),
+        ('0100', 0, False, 0x01),
+        ('0100', 0, True, 0x01),
+        ('0100', InterpreterFlags.REQUIRE_MINIMAL_PUSH, False, MinimalEncodingError),
+        ('0100', InterpreterFlags.REQUIRE_MINIMAL_PUSH, True, MinimalEncodingError),
+    ))
+    def test_to_number_failures(self, policy, number, flags, after_genesis, value):
+        state = InterpreterState(policy, flags=flags, is_utxo_after_genesis = after_genesis)
         number = bytes.fromhex(number)
-        if value is None:
-            with pytest.raises(InvalidNumber):
+        if not isinstance(value, int):
+            with pytest.raises(value):
                 state.to_number(number)
         else:
             assert state.to_number(number) == value
@@ -1968,6 +2062,7 @@ class TestEvaluateScript:
 
     @pytest.mark.parametrize("x1,x2", (
         ('', ''),
+        ('dead', 'dead'),
         ('01', '07'),
         ('01', '0100'),
     ))
@@ -1981,6 +2076,7 @@ class TestEvaluateScript:
             assert state.stack == [b'\1' if truth else b'']
         else:
             if truth:
+                evaluate_script(state, script)
                 assert not state.stack
             else:
                 with pytest.raises(EqualVerifyFailed):
@@ -2295,3 +2391,9 @@ class TestEvaluateScript:
         script = Script() << x << low << high << OP_WITHIN
         evaluate_script(state, script)
         assert state.stack == [int_to_item(result)]
+
+    def test_invalid_opcode(self, state):
+        script = Script(b'\xff')
+        with pytest.raises(InvalidOpcode) as e:
+            evaluate_script(state, script)
+        assert 'invalid opcode 255' in str(e.value)
