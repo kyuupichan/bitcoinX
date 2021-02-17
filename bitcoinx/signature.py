@@ -16,13 +16,14 @@ from base64 import b64decode
 from binascii import Error as binascii_Error
 
 from electrumsv_secp256k1 import ffi, lib
-
+from .consts import HALF_CURVE_ORDER
 from .misc import CONTEXT, be_bytes_to_int
 from .packing import pack_byte
 
 
 CDATA_SIG_LENGTH = 64
 # This is for the ECDSA signature without the sighash suffix
+MIN_SIG_LENGTH = 8
 MAX_SIG_LENGTH = 72
 MISSING_SIG_BYTES = b'\xff'
 
@@ -249,6 +250,69 @@ class Signature:
         if self._raw == MISSING_SIG_BYTES:
             raise InvalidSignatureError('signature is missing')
         return SigHash(self._raw[-1])
+
+    @classmethod
+    def is_strict_der_encoding(cls, sig):
+        '''Enforce stricter standard for DER encoding than libsecp256k.  Other requirements are
+        tested by libsecp256k1 in the call der_signature_to_compact().  R and S are
+        positive 32-bit numbers.  They are encoded as big-endian numbers with a sign-bit.
+
+        0x30 LEN 0x02 RLEN R 0x02 SLEN S SIGHASH.
+        '''
+        # Valid size range (including sighash byte)
+        if not 9 <= len(sig) <= 73:
+            return False
+
+        # Must be compound
+        if sig[0] != 0x30:
+            return False
+        # Length must cover everything
+        if sig[1] != len(sig) - 3:
+            return False
+
+        # Validate lengths
+        lenR = sig[3]
+        if 5 + lenR >= len(sig):
+            return False
+        lenS = sig[5 + lenR]
+        if lenR + lenS + 7 != len(sig):
+            return False
+
+        # R must be an integer
+        if sig[2] != 0x02:
+            return False
+        # R cannot have length 0
+        if not lenR:
+            return False
+        # R cannot be negative
+        if sig[4] & 0x80:
+            return False
+        # Leading zero only if otherwise negative
+        if lenR > 1 and sig[4] == 0x00 and not sig[5] & 0x80:
+            return False
+
+        # S must be an integer
+        if sig[lenR + 4] != 0x02:
+            return False
+        # S cannot have length 0
+        if not lenS:
+            return False
+        # S cannot be negative
+        if sig[lenR + 6] & 0x80:
+            return False
+        # Leading zero only if otherwise negative
+        if lenS > 1 and sig[lenR + 6] == 0x00 and not sig[lenR + 7] & 0x80:
+            return False
+
+        return True
+
+    @classmethod
+    def is_low_S(cls, sig):
+        '''Return True if S is low.  sig must have passed is_strict_der_encoding().'''
+        lenR = sig[3]
+        lenS = sig[5 + lenR]
+        S = be_bytes_to_int(sig[6 + lenR:6 + lenR + lenS])
+        return S <= HALF_CURVE_ORDER
 
 
 # Sighash values

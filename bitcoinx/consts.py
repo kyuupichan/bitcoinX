@@ -7,11 +7,18 @@
 
 
 __all__ = (
-    'JSONFlags',
+    'JSONFlags', 'CURVE_ORDER', 'HALF_CURVE_ORDER', 'SIGNED_MESSAGE_PREFIX',
 )
 
 
 from enum import IntFlag
+
+from .packing import pack_varbytes
+
+
+CURVE_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+HALF_CURVE_ORDER = CURVE_ORDER // 2
+SIGNED_MESSAGE_PREFIX = pack_varbytes('Bitcoin Signed Message:\n'.encode())
 
 
 class JSONFlags(IntFlag):

@@ -4,6 +4,7 @@ from base64 import b64decode, b64encode
 import pytest
 
 from bitcoinx.coin import Bitcoin, BitcoinTestnet
+from bitcoinx.consts import CURVE_ORDER
 from bitcoinx.keys import *
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
@@ -789,7 +790,7 @@ class TestPublicKey:
 
     def test_combine_keys_bad(self):
         priv = PrivateKey.from_random()
-        priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int()))
+        priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int(), size=32))
         with pytest.raises(ValueError):
             PublicKey.combine_keys([priv.public_key, priv2.public_key])
 

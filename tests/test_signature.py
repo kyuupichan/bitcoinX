@@ -169,3 +169,67 @@ class TestSignature:
     @pytest.mark.parametrize("sighash", range(300))
     def test_has_forkid(self, sighash):
         assert SigHash(sighash).has_forkid() is bool(sighash & SigHash.FORKID)
+
+    @pytest.mark.parametrize("hex_str,is_low", (
+        ('3046022100820121109528efda8bb20ca28788639e5ba5b365e0a84f8bd85744321e7312c6022100a7c86a'
+         '21446daa405306fe10d0a9906e37d1a2c6b6fdfaaf6700053058029bbe41', False),
+        ('3045022100b135074e08cc93904a1712b2600d3cb01899a5b1cc7498caa4b8585bcf5f27e7022074ab5440'
+         '45285baef0a63f0fb4c95e577dcbf5c969c0bf47c7da8e478909d66941', True),
+        # R = S = 1
+        ('300602010102010141', True),
+        # R = S = 0
+        ('300602010002010041', True),
+        # R = 1, S = HALF_CURVE_ORDER
+        ('302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a041',
+         True),
+        # R = 1, S = HALF_CURVE_ORDER + 1
+        ('302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a141',
+         False),
+    ))
+    def test_is_low_S(self, hex_str, is_low):
+        raw_sig = bytes.fromhex(hex_str)
+        assert Signature.is_strict_der_encoding(raw_sig)
+        assert Signature.is_low_S(raw_sig) is is_low
+
+    @pytest.mark.parametrize("hex_str", (
+        # Bad Length
+        '',
+        '30' * 8,
+        '30' * 74,
+        # Not leading 0x30
+        '310602010102010141',
+        # Bad total length
+        '300702010102010141',
+        '300502010102010141',
+        # Bad R length
+        '300602610902010141',
+        # Bad S length
+        '300602010102020141',
+        # R not integer
+        '300601010002010041',
+        # R length zero
+        '300602000202010041',
+        # R negative
+        '300602018102010141',
+        # R unnecessary leading zero
+        '30070202000102010141',
+        # S not ingeger
+        '300602010001010041',
+        # S length zero
+        '300602020101020041',
+        # S negative
+        '300602010102019141',
+        # S unnecessary leading zero
+        '30070201010202007141',
+    ))
+    def test_is_not_strict_der_encoding(self, hex_str):
+        raw_sig = bytes.fromhex(hex_str)
+        assert Signature.is_strict_der_encoding(raw_sig) is False
+
+    @pytest.mark.parametrize("hex_str", (
+        # Test a zero value for R and S is accepted.
+        '300602010002010041',
+    ))
+    def test_is_strict_der_encoding(self, hex_str):
+        raw_sig = bytes.fromhex(hex_str)
+        assert Signature.is_strict_der_encoding(raw_sig) is True

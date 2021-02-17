@@ -7,7 +7,7 @@
 
 '''Public and Private keys of various kinds.'''
 
-__all__ = ('PrivateKey', 'PublicKey', 'CURVE_ORDER', 'DecryptionError', )
+__all__ = ('PrivateKey', 'PublicKey', 'DecryptionError', )
 
 
 from base64 import b64decode, b64encode
@@ -20,6 +20,7 @@ from .address import P2PKH_Address, P2PK_Output
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
+from .consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
 from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT
 from .packing import pack_byte, pack_varbytes
@@ -30,13 +31,8 @@ from .signature import (
 )
 from .util import cachedproperty
 
-
-KEY_SIZE = 32
-CURVE_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 EC_COMPRESSED = lib.SECP256K1_EC_COMPRESSED
 EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED
-SIGNED_MESSAGE_PREFIX = pack_varbytes('Bitcoin Signed Message:\n'.encode())
-
 
 class DecryptionError(ValueError):
     pass
@@ -77,7 +73,7 @@ class PrivateKey:
         If there is no implicit coin and client code does specify one, Bitcoin is used.
         '''
         if isinstance(secret, bytes):
-            if len(secret) != KEY_SIZE:
+            if len(secret) != 32:
                 raise ValueError('private key must be 32 bytes')
             if not lib.secp256k1_ec_seckey_verify(CONTEXT, secret):
                 raise ValueError('private key out of range')
