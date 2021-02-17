@@ -878,6 +878,18 @@ def state(request, policy):
                            is_genesis_enabled=is_genesis_enabled,
                            is_utxo_after_genesis=is_utxo_after_genesis)
 
+@pytest.fixture(params=(
+    # is_consensus, is_genesis_enabled
+    (False, False),
+    (False, True),
+    (True, False),
+    (True, True),
+))
+def state_old_utxo(request, policy):
+    is_consensus, is_genesis_enabled = request.param
+    yield InterpreterState(policy, is_consensus=is_consensus,
+                           is_genesis_enabled=is_genesis_enabled, is_utxo_after_genesis=False)
+
 
 class TestInterpreterState:
 
@@ -912,19 +924,22 @@ class TestInterpreterState:
         assert state.max_script_size == policy.max_script_size
 
     def test_max_script_num_length(self, policy):
-        state = InterpreterState(policy)
-        state.is_genesis_enabled = False
-        assert state.max_script_num_length == state.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
+        for is_genesis_enabled in (False, True):
+            for is_consensus in (False, True):
+                state = InterpreterState(policy)
+                state.is_utxo_after_genesis = False
+                state.is_genesis_enabled = is_genesis_enabled
+                state.is_consensus = is_consensus
+                assert state.max_script_num_length == state.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
 
-        state = InterpreterState(policy)
-        state.is_genesis_enabled = True
-        state.is_consensus = True
-        assert state.max_script_num_length == state.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
-
-        state = InterpreterState(policy)
-        state.is_genesis_enabled = True
-        state.is_consensus = False
-        assert state.max_script_num_length == policy.max_script_num_length
+                state = InterpreterState(policy)
+                state.is_utxo_after_genesis = True
+                state.is_genesis_enabled = is_genesis_enabled
+                state.is_consensus = is_consensus
+                if is_consensus:
+                    assert state.max_script_num_length == state.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
+                else:
+                    assert state.max_script_num_length == policy.max_script_num_length
 
     def test_validate_item_size(self, policy):
         state = InterpreterState(policy)
@@ -952,9 +967,9 @@ class TestInterpreterState:
     def test_validate_minimal_push_opcode(self, policy):
         state = InterpreterState(policy, flags=0)
         state.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
-        state = InterpreterState(policy, flags=InterpreterFlags.REQUIRE_MINIMAL_PUSH_OPCODE)
+        state = InterpreterState(policy, flags=InterpreterFlags.REQUIRE_MINIMAL_PUSH)
         state.validate_minimal_push_opcode(OP_1, b'\1')
-        with pytest.raises(MinimalPushOpNotUsed):
+        with pytest.raises(MinimalEncodingError):
             state.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
 
     def test_validate_stack_size(self, policy):
@@ -970,6 +985,24 @@ class TestInterpreterState:
         state.alt_stack.append(b'')
         with pytest.raises(StackSizeTooLarge):
             state.validate_stack_size()
+
+
+    @pytest.mark.parametrize('number, after_genesis, value', (
+        ('01020304', False, 0x04030201),
+        ('01020304', True, 0x04030201),
+        ('0102030405', False, None),
+        ('0102030405', True, 0x0504030201),
+        ('0102030400', False, None),
+        ('0102030400', True, 0x04030201),
+    ))
+    def test_to_number_number_length(self, state, after_genesis, number, value):
+        state.is_utxo_after_genesis = after_genesis
+        number = bytes.fromhex(number)
+        if value is None:
+            with pytest.raises(InvalidNumber):
+                state.to_number(number)
+        else:
+            assert state.to_number(number) == value
 
 
 reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
@@ -1869,40 +1902,6 @@ class TestEvaluateScript:
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("a,b,div,mod", (
-        # These are smallnum tests
-        #(0x185377af, 0x85f41b01, -4, 0x00830bab),
-        #(408123311, -99883777, -4, 8588203),
-        (0x185377af, 0x00001b01, 0xe69d, 0x0212),
-        (408123311, 6913, 59037, 530),
-        (15, 4, 3, 3),
-        (15000, 4, 3750, 0),
-        (15000, 4000, 3, 3000),
-    ))
-    def test_div_mod(self, state, a, b, div, mod):
-        script = Script().push_many((a, b, OP_DIV, a, b, OP_MOD))
-        evaluate_script(state, script)
-        assert state.stack == [int_to_item(div), int_to_item(mod)]
-        assert not state.alt_stack
-
-        state.reset()
-        script = Script().push_many((a, -b, OP_DIV, a, -b, OP_MOD))
-        evaluate_script(state, script)
-        assert state.stack == [int_to_item(-div), int_to_item(mod)]
-        assert not state.alt_stack
-
-        state.reset()
-        script = Script().push_many((-a, b, OP_DIV, -a, b, OP_MOD))
-        evaluate_script(state, script)
-        assert state.stack == [int_to_item(-div), int_to_item(-mod)]
-        assert not state.alt_stack
-
-        state.reset()
-        script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
-        evaluate_script(state, script)
-        assert state.stack == [int_to_item(div), int_to_item(-mod)]
-        assert not state.alt_stack
-
     @pytest.mark.parametrize("hash_op,hash_func", (
         (OP_RIPEMD160, ripemd160),
         (OP_SHA1, sha1),
@@ -1916,3 +1915,82 @@ class TestEvaluateScript:
         evaluate_script(state, script)
         assert state.stack == [hash_func(b'foo')]
         assert not state.alt_stack
+
+    @pytest.mark.parametrize("a,b,div,mod", (
+        (0x185377af, -0x05f41b01, -4, 0x00830bab),
+        (408123311, -99883777, -4, 8588203),
+        (0x185377af, 0x00001b01, 0xe69d, 0x0212),
+        (408123311, 6913, 59037, 530),
+        (15, 4, 3, 3),
+        (15000, 4, 3750, 0),
+        (15000, 4000, 3, 3000),
+    ))
+    def test_div_mod(self, state_old_utxo, a, b, div, mod):
+        script = Script().push_many((a, b, OP_DIV, a, b, OP_MOD))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [int_to_item(div), int_to_item(mod)]
+        assert not state_old_utxo.alt_stack
+
+        state_old_utxo.reset()
+        script = Script().push_many((a, -b, OP_DIV, a, -b, OP_MOD))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [int_to_item(-div), int_to_item(mod)]
+        assert not state_old_utxo.alt_stack
+
+        state_old_utxo.reset()
+        script = Script().push_many((-a, b, OP_DIV, -a, b, OP_MOD))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [int_to_item(-div), int_to_item(-mod)]
+        assert not state_old_utxo.alt_stack
+
+        state_old_utxo.reset()
+        script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [int_to_item(div), int_to_item(-mod)]
+        assert not state_old_utxo.alt_stack
+
+        state_old_utxo.reset()
+        script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
+        evaluate_script(state_old_utxo, script)
+        assert state_old_utxo.stack == [int_to_item(div), int_to_item(-mod)]
+        assert not state_old_utxo.alt_stack
+
+        for value in a, b:
+            for zeroes in ('00', '80', '0000', '0080'):
+                state_old_utxo.reset()
+                script = Script().push_many((value, 0, OP_DIV))
+                with pytest.raises(DivisionByZero) as e:
+                    evaluate_script(state_old_utxo, script)
+                assert 'division by zero' in str(e.value)
+
+                state_old_utxo.reset()
+                script = Script().push_many((value, 0, OP_MOD))
+                with pytest.raises(DivisionByZero) as e:
+                    evaluate_script(state_old_utxo, script)
+                assert 'modulo by zero' in str(e.value)
+
+            # Division identities
+            state_old_utxo.reset()
+            script = Script().push_many((value, 1, OP_DIV, value, b'\x81', OP_DIV,
+                                         value, value, OP_DIV, value, -value, OP_DIV))
+            evaluate_script(state_old_utxo, script)
+            assert state_old_utxo.stack == [int_to_item(value), int_to_item(-value),
+                                            b'\1', b'\x81']
+
+
+    @pytest.mark.parametrize("a,b", (
+        ('0102030405', '0102030405'),
+        ('0105', '0102030405'),
+        ('0102030405', '01'),
+    ))
+    def test_div_mod_error(self, state_old_utxo, a, b):
+        a = bytes.fromhex(a)
+        b = bytes.fromhex(b)
+
+        script = Script().push_many((a, b, OP_DIV))
+        with pytest.raises(InvalidNumber):
+            evaluate_script(state_old_utxo, script)
+
+        script = Script().push_many((a, b, OP_MOD))
+        with pytest.raises(InvalidNumber):
+            evaluate_script(state_old_utxo, script)

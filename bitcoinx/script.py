@@ -10,12 +10,12 @@
 
 __all__ = (
     'Ops', 'Script', 'ScriptError', 'TruncatedScriptError', 'InterpreterError',
-    'StackSizeTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed',
+    'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
-    'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
+    'ScriptTooLarge', 'TooManyOps', 'MinimalIfError', 'DivisionByZero',
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
-    'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed',
+    'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'ScriptNumberOverflow',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -70,8 +70,9 @@ class InvalidStackOperation(InterpreterError):
     '''Raised when an opcode wants to access items deyond the stack depth.'''
 
 
-class MinimalPushOpNotUsed(InterpreterError):
-    '''Raised when a stack push happens not using the minimally-encoded push operation.'''
+class MinimalEncodingError(InterpreterError):
+    '''Raised when a stack push happens not using the minimally-encoded push operation, or
+    of a non-minally-encoded number.'''
 
 
 class InvalidPushSize(InterpreterError):
@@ -92,6 +93,10 @@ class InvalidOperandSize(InterpreterError):
 
 class StackSizeTooLarge(InterpreterError):
     '''Raised when the stack size it too large.'''
+
+
+class DivisionByZero(InterpreterError):
+    '''Raised when a division or modulo by zero is executed.'''
 
 
 class MinimalIfError(InterpreterError):
@@ -340,7 +345,7 @@ def int_to_item(value, size=None):
     cannot be done.
     '''
     try:
-        encoding = int_to_le_bytes(abs(value), size)
+        encoding = int_to_le_bytes(abs(int(value)), size)
     except OverflowError:
         pass
     else:
@@ -705,24 +710,52 @@ class Script:
 
 class SmallNum:
     '''Legacy Bitcoin Core mess.'''
-    # TODO: needs to handle arithmetic operations and get_int().
 
     def __init__(self, value):
-        assert -(1 << 63) <= value < (1 << 63)
         self.value = value
+        assert -(1 << 63) <= self.value < (1 << 63)
 
     @classmethod
-    def from_item(self, item):
+    def from_item(cls, item):
         '''Insane.'''
-        value = le_bytes_to_int(item[:8])
-
+        # FIXME: 8 byte restriction
+        if not item:
+            return cls(0)
         if item[-1] & 0x80:
-            return -(value & 0x7fffffffffffffff)
+            return cls(-le_bytes_to_int(item[:-1] + pack_byte(item[-1] & 0x7f)))
+        else:
+            return cls(le_bytes_to_int(item))
 
-        if value & 0x8000000000000000:
-            value -= 0x10000000000000000
+    def __abs__(self):
+        return SmallNum(abs(self.value))
 
-        return value
+    def __int__(self):
+        return self.value
+
+    def __neg__(self):
+        return SmallNum(-self.value)
+
+    def __eq__(self, other):
+        return self.value == int(other)
+
+    def __ge__(self, other):
+        return self.value >= int(other)
+
+    def __gt__(self, other):
+        return self.value > int(other)
+
+    def __floordiv__(self, other):
+        assert self.value >= 0
+        assert int(other) >= 0
+        return SmallNum(self.value // int(other))
+
+    def __mod__(self, other):
+        assert self.value >= 0
+        assert int(other) >= 0
+        return SmallNum(self.value % int(other))
+
+    def __repr__(self):
+        return f'CSmallNum<{self.value}>'
 
 
 UINT32_MAX = 0xffffffff
@@ -748,8 +781,8 @@ class InterpreterPolicy:
 
 
 class InterpreterFlags(IntEnum):
-    # Require most compact opcode for pushing stack data
-    REQUIRE_MINIMAL_PUSH_OPCODE = 1 << 0
+    # Require most compact opcode for pushing stack data, and require minimal-encoding of numbers
+    REQUIRE_MINIMAL_PUSH = 1 << 0
     # Top of stack on OP_IF and OP_ENDIF must be boolean.
     REQUIRE_MINIMAL_IF = 1 << 1
 
@@ -776,8 +809,6 @@ class InterpreterState:
         self.is_genesis_enabled = is_genesis_enabled
         self.is_utxo_after_genesis = is_utxo_after_genesis
         self.sig_checker = sig_checker
-        # False is not currently supported but I think this is a function of is_genesis_enabled
-        self.big_num = True
         self.reset()
 
     def reset(self):
@@ -806,10 +837,10 @@ class InterpreterState:
             raise InvalidStackOperation('alt stack is empty')
 
     def validate_minimal_push_opcode(self, op, item):
-        if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH_OPCODE:
+        if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             expected_op = minimal_push_opcode(item)
             if op != expected_op:
-                raise MinimalPushOpNotUsed(f'item not pushed with minimal opcode {expected_op}')
+                raise MinimalEncodingError(f'item not pushed with minimal opcode {expected_op}')
 
     def stack_size(self):
         return len(self.stack) + len(self.alt_stack)
@@ -837,22 +868,17 @@ class InterpreterState:
                                 f'of {limit:,d} bytes')
 
     def to_number(self, item):
-        # FIXME: handle pre-genesis numbers
-        # FIXME: size_t limited
-        return item_to_int(item)
+        # FIXME: size_t limiting in some cases
+        self.validate_number_length(len(item))
 
-    # def item_to_int(self, item):
-    #     if len(item) > self.max_num_size:
-    #         raise ScriptNumberOverflow(f'number encoding has {len(item):,d} bytes exceeding '
-    #                                    f'the limit of {self.max_num_size:,d} bytes')
+        if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH and not is_minimally_encoded(item):
+            raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
 
-    #     if self.require_minimal_data and not is_minimally_encoded(item):
-    #         raise ScriptNumberOverflow(f'number is not minimally encoded: {item.hex()}')
-
-    #     if big_num:
-    #         return item_to_int(item)
-    #     else:
-    #         return SmallNum.from_item(item)
+        if self.is_utxo_after_genesis:
+            # A bignum
+            return item_to_int(item)
+        else:
+            return SmallNum.from_item(item)
 
     @cachedproperty
     def max_ops_per_script(self):
@@ -872,7 +898,7 @@ class InterpreterState:
 
     @cachedproperty
     def max_script_num_length(self):
-        if self.is_genesis_enabled:
+        if self.is_utxo_after_genesis:
             if self.is_consensus:
                 return self.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
             return self.policy.max_script_num_length
@@ -1162,7 +1188,7 @@ def handle_binary_numeric(state, binary_op):
     try:
         result = binary_op(x1, x2)
     except ZeroDivisionError:
-        raise DivisionByZero('division by zero' if binary_op == bitcoin_div
+        raise DivisionByZero('division by zero' if binary_op is bitcoin_div
                              else 'modulo by zero') from None
     state.stack.pop()
     state.stack[-1] = int_to_item(result)
