@@ -134,6 +134,14 @@ class InvalidSignatureCount(InterpreterError):
     '''Raised if the number of sigs in an OP_CHECKMULTISIG operation is out of range.'''
 
 
+class PushOnlyError(InterpreterError):
+    '''Raised if a script-sig is not pushdata only with REQUIRE_PUSH_ONLY.'''
+
+
+class CleanStackError(InterpreterError):
+    '''Raised if the stack is not clean after verify_script() with REQUIRE_CLEANSTACK.'''
+
+
 class LockTimeError(InterpreterError):
     '''Raised for various failures of OP_CHECKLOCKTIMEVERIFY and OP_CHECKSEQUENCEVERIFY.'''
 

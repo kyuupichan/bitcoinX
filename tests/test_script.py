@@ -1062,12 +1062,13 @@ class TestInterpreterState:
         (has_forkid_sig, InterpreterFlags.REQUIRE_STRICT_DER, None),
         (has_forkid_sig, InterpreterFlags.REQUIRE_LOW_S, None),
         (has_forkid_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING, 'sighash must not use FORKID'),
-        (no_forkid_sig, InterpreterFlags.FORKID_ENABLED, None),
-        (no_forkid_sig, InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.FORKID_ENABLED,
-         None),
-        (no_forkid_sig, InterpreterFlags.REQUIRE_LOW_S | InterpreterFlags.FORKID_ENABLED, None),
+        (no_forkid_sig, InterpreterFlags.ENABLE_FORKID, 'sighash must use FORKID'),
+        (no_forkid_sig, InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.ENABLE_FORKID,
+         'sighash must use FORKID'),
+        (no_forkid_sig, InterpreterFlags.REQUIRE_LOW_S | InterpreterFlags.ENABLE_FORKID,
+         'sighash must use FORKID'),
         (no_forkid_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING
-         | InterpreterFlags.FORKID_ENABLED, 'sighash must use FORKID'),
+         | InterpreterFlags.ENABLE_FORKID, 'sighash must use FORKID'),
     ))
     def test_validate_signature(self, policy, sig_hex, flags, err_text):
         sig_bytes = bytes.fromhex(sig_hex)
@@ -1127,10 +1128,10 @@ class TestInterpreterState:
     @pytest.mark.parametrize('sig_hex,flags,script_code,result', (
         ('30454501', 0, Script() << OP_1 << bytes.fromhex('30454501') << OP_2,
          Script() << OP_1 << OP_2),
-        ('30454501', InterpreterFlags.FORKID_ENABLED,
+        ('30454501', InterpreterFlags.ENABLE_FORKID,
          Script() << OP_1 << bytes.fromhex('30454501') << OP_2, None),
         ('30454541', 0, Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
-        ('30454541', InterpreterFlags.FORKID_ENABLED,
+        ('30454541', InterpreterFlags.ENABLE_FORKID,
          Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
     ))
     def test_cleanup_script_code(self, policy, sig_hex, flags, script_code, result):
