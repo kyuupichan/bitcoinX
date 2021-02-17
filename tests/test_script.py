@@ -1913,6 +1913,23 @@ class TestEvaluateScript:
     def test_unary_numeric(self, state, opcode):
         self.require_stack(state, 1, opcode)
 
+    @pytest.mark.parametrize("op", (OP_2MUL, OP_2DIV))
+    def test_disabled(self, state, op):
+        script = Script() << OP_0 << op
+        # Invalid in executed branch
+        with pytest.raises(DisabledOpcode) as e:
+            evaluate_script(state, script)
+        assert f'{op.name} is disabled' in str(e.value)
+
+        state.reset()
+        script = Script() << OP_0 << OP_IF << op << OP_ENDIF
+        # Valid in unexecuted branch if UTXO is after-genesis
+        if state.is_utxo_after_genesis:
+            evaluate_script(state, script)
+        else:
+            with pytest.raises(DisabledOpcode):
+                evaluate_script(state, script)
+
     @pytest.mark.parametrize("value, result", (
         (0, 1),
         (-1, 0),
