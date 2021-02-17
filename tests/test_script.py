@@ -926,6 +926,12 @@ def state_old_utxo(request, policy):
     yield InterpreterState(policy, is_consensus=is_consensus,
                            is_genesis_enabled=is_genesis_enabled, is_utxo_after_genesis=False)
 
+# Note: this is just SIGHASH_ALL without FORKID
+high_S_sig = '302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a101'
+undefined_sighash_sig = '300602010102010100'
+has_forkid_sig = '300602010102010142'
+no_forkid_sig = '300602010102010103'
+
 
 class TestInterpreterState:
 
@@ -1022,6 +1028,43 @@ class TestInterpreterState:
         with pytest.raises(StackSizeTooLarge):
             state.validate_stack_size()
 
+    @pytest.mark.parametrize('sig_bytes,flags,err_text', (
+        ('', 0, None),
+        ('', InterpreterFlags.REQUIRE_STRICT_DER, None),
+        ('', InterpreterFlags.REQUIRE_LOW_S, None),
+        ('', InterpreterFlags.REQUIRE_STRICT_ENCODING, None),
+        ('300602610902010141', 0, None),
+        ('300602610902010141', InterpreterFlags.REQUIRE_STRICT_DER, 'strict DER'),
+        ('300602610902010141', InterpreterFlags.REQUIRE_LOW_S, 'strict DER'),
+        ('300602610902010141', InterpreterFlags.REQUIRE_STRICT_ENCODING, 'strict DER'),
+        (high_S_sig, 0, None),
+        (high_S_sig, InterpreterFlags.REQUIRE_STRICT_DER, None),
+        (high_S_sig, InterpreterFlags.REQUIRE_LOW_S, 'high S value'),
+        (high_S_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING, None),
+        (undefined_sighash_sig, 0, None),
+        (undefined_sighash_sig, InterpreterFlags.REQUIRE_STRICT_DER, None),
+        (undefined_sighash_sig, InterpreterFlags.REQUIRE_LOW_S, None),
+        (undefined_sighash_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING, 'undefined sighash'),
+        (has_forkid_sig, 0, None),
+        (has_forkid_sig, InterpreterFlags.REQUIRE_STRICT_DER, None),
+        (has_forkid_sig, InterpreterFlags.REQUIRE_LOW_S, None),
+        (has_forkid_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING, 'sighash must not use FORKID'),
+        (no_forkid_sig, InterpreterFlags.FORKID_ENABLED, None),
+        (no_forkid_sig, InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.FORKID_ENABLED,
+         None),
+        (no_forkid_sig, InterpreterFlags.REQUIRE_LOW_S | InterpreterFlags.FORKID_ENABLED, None),
+        (no_forkid_sig, InterpreterFlags.REQUIRE_STRICT_ENCODING
+         | InterpreterFlags.FORKID_ENABLED, 'sighash must use FORKID'),
+    ))
+    def test_validate_signature(self, policy, sig_bytes, flags, err_text):
+        sig_bytes = bytes.fromhex(sig_bytes)
+        state = InterpreterState(policy, flags=flags)
+        if err_text:
+            with pytest.raises(InvalidSignature) as e:
+                state.validate_signature(sig_bytes)
+            assert err_text in str(e.value)
+        else:
+            state.validate_signature(sig_bytes)
 
     @pytest.mark.parametrize('number, after_genesis, value', (
         ('01020304', False, 0x04030201),

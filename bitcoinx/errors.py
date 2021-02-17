@@ -15,7 +15,7 @@ __all__ = (
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
     'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed',
-    'InvalidSighashType', 'InvalidPublicKeyEncoding',
+    'InvalidPublicKeyEncoding', 'InvalidSignature',
 )
 
 
@@ -110,8 +110,8 @@ class InvalidPublicKeyEncoding(InterpreterError):
     '''Raised on an invalid public key encoding when checking a signature.'''
 
 
-class InvalidSighashType(InterpreterError):
-    '''Raised on an invalid signature sighash byte when checking a signature.'''
+class InvalidSignature(InterpreterError):
+    '''Raised on various invalid signature encodings when checking a signature.'''
 
 
 class VerifyFailed(InterpreterError):

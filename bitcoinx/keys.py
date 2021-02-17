@@ -34,6 +34,7 @@ from .util import cachedproperty
 EC_COMPRESSED = lib.SECP256K1_EC_COMPRESSED
 EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED
 
+
 class DecryptionError(ValueError):
     pass
 
