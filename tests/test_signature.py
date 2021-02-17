@@ -69,6 +69,11 @@ class TestSigHash:
         assert SigHash(n).to_string() == text
 
 
+defined_sighashes = {SigHash.ALL, SigHash.NONE, SigHash.SINGLE}
+defined_sighashes.update(s | SigHash.ANYONE_CAN_PAY for s in list(defined_sighashes))
+defined_sighashes.update(s | SigHash.FORKID for s in list(defined_sighashes))
+
+
 class TestSignature:
 
     def test_constructor(self):
@@ -156,3 +161,11 @@ class TestSignature:
     ))
     def test_to_string(self, sig, text):
         assert Signature.from_hex(sig).to_string() == text
+
+    @pytest.mark.parametrize("sighash", range(300))
+    def test_is_defined(self, sighash):
+        assert SigHash(sighash).is_defined() is (sighash in defined_sighashes)
+
+    @pytest.mark.parametrize("sighash", range(300))
+    def test_has_forkid(self, sighash):
+        assert SigHash(sighash).has_forkid() is bool(sighash & SigHash.FORKID)
