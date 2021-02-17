@@ -5,6 +5,7 @@ import pytest
 import random
 
 from bitcoinx.consts import JSONFlags
+from bitcoinx.errors import *
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from bitcoinx.script import *
 from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len

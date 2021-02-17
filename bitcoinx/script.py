@@ -10,12 +10,7 @@
 
 __all__ = (
     'Ops', 'Script', 'ScriptError', 'TruncatedScriptError', 'InterpreterError',
-    'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError',
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
-    'ScriptTooLarge', 'TooManyOps', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
-    'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
-    'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
-    'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'ScriptNumberOverflow',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -29,6 +24,15 @@ from functools import partial
 import attr
 
 from .consts import JSONFlags
+from .errors import (
+    ScriptError, TruncatedScriptError, InterpreterError,
+    StackSizeTooLarge, MinimalEncodingError,
+    ScriptTooLarge, TooManyOps, MinimalIfError, DivisionByZero, NegativeShiftCount,
+    InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
+    VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
+    InvalidNumber, InvalidOperandSize, EqualVerifyFailed,
+    #InvalidSighashType, InvalidPublicKeyEncoding,
+)
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
 from .packing import (
@@ -36,109 +40,6 @@ from .packing import (
 )
 from .signature import Signature, InvalidSignatureError
 from .util import cachedproperty
-
-#
-# Exception Hierarchy
-#
-
-
-class ScriptError(Exception):
-    '''Base class for script errors.'''
-
-
-class TruncatedScriptError(ScriptError):
-    '''Raised when a script is truncated because a pushed item is not all present.'''
-
-
-class InterpreterError(ScriptError):
-    '''Base class for interpreter errors.'''
-
-
-class ScriptNumberOverflow(InterpreterError):
-    '''Raised when a script number is too long or not minimally encoded.'''
-
-
-class ScriptTooLarge(InterpreterError):
-    '''Raised when a script is too long.'''
-
-
-class TooManyOps(InterpreterError):
-    '''Raised when a script contains too many operations.'''
-
-
-class InvalidStackOperation(InterpreterError):
-    '''Raised when an opcode wants to access items deyond the stack depth.'''
-
-
-class MinimalEncodingError(InterpreterError):
-    '''Raised when a stack push happens not using the minimally-encoded push operation, or
-    of a non-minally-encoded number.'''
-
-
-class InvalidPushSize(InterpreterError):
-    '''Raised when an item size is negative or too large.'''
-
-
-class ImpossibleEncoding(InterpreterError):
-    '''Raised when an OP_NUM2BIN encoding will not fit in the required size.'''
-
-
-class InvalidNumber(InterpreterError):
-    '''Raised when an OP_BIN2NUM result exceeds the maximum number size.'''
-
-
-class InvalidOperandSize(InterpreterError):
-    '''Raised when the operands to a binary operator are of invalid sizes.'''
-
-
-class StackSizeTooLarge(InterpreterError):
-    '''Raised when the stack size it too large.'''
-
-
-class DivisionByZero(InterpreterError):
-    '''Raised when a division or modulo by zero is executed.'''
-
-
-class MinimalIfError(InterpreterError):
-    '''Raised when the top of stack is not boolean processing OP_IF or OP_NOTIF.'''
-
-
-class DisabledOpcode(InterpreterError):
-    '''Raised when a disabled opcode is encountered.'''
-
-
-class InvalidOpcode(InterpreterError):
-    '''Raised when an invalid opcode is encountered.'''
-
-
-class NegativeShiftCount(InterpreterError):
-    '''Raised when a shift of a negative number of bits is encountered.'''
-
-
-class InvalidSplit(InterpreterError):
-    '''Raised when trying to split an item at an invalid position.'''
-
-
-class UnbalancedConditional(InterpreterError):
-    '''Raised when a script contains unepxected OP_ELSE, OP_ENDIF conditionals, or if
-    open condition blocks are unterminated.'''
-
-
-class VerifyFailed(InterpreterError):
-    '''OP_VERIFY was executed and the top of stack was zero.'''
-
-
-class EqualVerifyFailed(VerifyFailed):
-    '''OP_EQUALVERIFY was executed and it failed.'''
-
-
-class NumEqualVerifyFailed(VerifyFailed):
-    '''OP_NUMEQUALVERIFY was executed and it failed.'''
-
-
-class OpReturnError(InterpreterError):
-    '''OP_RETURN was encountered pre-genesis.'''
-
 
 class Ops(IntEnum):
     OP_0 = 0x00
@@ -805,6 +706,14 @@ class InterpreterFlags(IntEnum):
     REQUIRE_MINIMAL_PUSH = 1 << 0
     # Top of stack on OP_IF and OP_ENDIF must be boolean.
     REQUIRE_MINIMAL_IF = 1 << 1
+    # Enforces strict DER signature encoding
+    REQUIRE_STRICT_DER = 1 << 2
+    # Enforces low-S signatures
+    REQUIRE_LOW_S = 1 << 3
+    # Enforces SigHash checks and public key encoding checks
+    REQUIRE_STRICT_ENCODING = 1 << 4
+    # Set if FORKID is enabled (post BTC/BCH fork)
+    FORKID_ENABLED = 1 << 5
 
 
 class InterpreterState:

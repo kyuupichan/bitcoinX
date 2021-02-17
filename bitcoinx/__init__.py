@@ -4,6 +4,7 @@ from .bip32 import *
 from .chain import *
 from .coin import *
 from .consts import *
+from .errors import *
 from .hashes import *
 from .keys import *
 from .misc import *
@@ -24,6 +25,7 @@ __all__ = sum((
     chain.__all__,
     coin.__all__,
     consts.__all__,
+    errors.__all__,
     hashes.__all__,
     keys.__all__,
     misc.__all__,
