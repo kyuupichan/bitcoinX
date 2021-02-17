@@ -1131,6 +1131,33 @@ class TestEvaluateScript:
         assert state.stack == list(datas) + [int_to_item(len(push_datas))]
         assert not state.alt_stack
 
+    def test_NIP(self, state):
+        self.require_stack(state, 2, OP_NIP)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_NIP
+        evaluate_script(state, script)
+        assert state.stack == [datas[1]]
+        assert not state.alt_stack
+
+    def test_SWAP(self, state):
+        self.require_stack(state, 2, OP_SWAP)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_SWAP
+        evaluate_script(state, script)
+        assert state.stack == list(reversed(datas))
+        assert not state.alt_stack
+
+    def test_TUCK(self, state):
+        self.require_stack(state, 2, OP_TUCK)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_TUCK
+        evaluate_script(state, script)
+        assert state.stack == [datas[-1]] + list(datas)
+        assert not state.alt_stack
+
     def test_TOALTSTACK(self, state):
         self.require_stack(state, 1, OP_TOALTSTACK)
         script = Script() << OP_12 << OP_TOALTSTACK

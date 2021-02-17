@@ -912,6 +912,12 @@ def handle_2ROT(state):
     state.stack.extend([state.stack.pop(-6), state.stack.pop(-5)])
 
 
+def handle_SWAP(state):
+    # ( x1 x2 -- x2 x1 )
+    state.require_stack_depth(2)
+    state.stack.append(state.stack.pop(-2))
+
+
 def handle_2SWAP(state):
     # (x1 x2 x3 x4 -- x3 x4 x1 x2)
     state.require_stack_depth(4)
@@ -931,18 +937,16 @@ def handle_DEPTH(state):
     state.stack.append(int_to_item(len(state.stack)))
 
 
-# def handle_SWAP(state):
-#     # ( x1 x2 -- x2 x1 )
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     state.stack[-1], state.stack[-2] = state.stack[-2], state.stack[-1]
+def handle_NIP(state):
+    # (x1 x2 -- x2)
+    state.require_stack_depth(2)
+    state.stack.pop(-2)
 
 
-# def handle_TUCK(state):
-#     # ( x1 x2 -- x2 x1 x2 )
-#     if len(state.stack) < 2:
-#         raise InvalidStackOperationError()
-#     state.stack.insert(-2, state.stack[-1])
+def handle_TUCK(state):
+    # ( x1 x2 -- x2 x1 x2 )
+    state.require_stack_depth(2)
+    state.stack.insert(-2, state.stack[-1])
 
 
 # def handle_SIZE(state):
@@ -1107,12 +1111,12 @@ op_handlers[OP_2ROT] = handle_2ROT
 op_handlers[OP_2SWAP] = handle_2SWAP
 op_handlers[OP_IFDUP] = handle_IFDUP
 op_handlers[OP_DEPTH] = handle_DEPTH
-# OP_NIP = 0x77
+op_handlers[OP_NIP] = handle_NIP
 # OP_PICK = 0x79
 # OP_ROLL = 0x7a
 # OP_ROT = 0x7b
-# OP_SWAP = 0x7c
-# OP_TUCK = 0x7d
+op_handlers[OP_SWAP] = handle_SWAP
+op_handlers[OP_TUCK] = handle_TUCK
 
 # # splice ops
 # OP_CAT = 0x7e
