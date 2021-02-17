@@ -14,7 +14,7 @@ __all__ = (
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
     'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'NullFailError',
-    'InvalidPublicKeyEncoding', 'InvalidSignature',
+    'InvalidPublicKeyEncoding', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed',
 )
 
@@ -116,6 +116,18 @@ class InvalidSignature(InterpreterError):
 
 class NullFailError(InterpreterError):
     '''Raised if a signature check failed on a non-null signature with REQUIRE_NULLFAIL.'''
+
+
+class NullDummyError(InterpreterError):
+    '''Raised if the dummy multisig argument is non-null with REQUIRE_NULLDUMMY.'''
+
+
+class InvalidPublicKeyCount(InterpreterError):
+    '''Raised if the number of public keys in an OP_CHECKMULTISIG operation is out of range.'''
+
+
+class InvalidSignatureCount(InterpreterError):
+    '''Raised if the number of sigs in an OP_CHECKMULTISIG operation is out of range.'''
 
 
 class VerifyFailed(InterpreterError):
