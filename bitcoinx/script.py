@@ -14,7 +14,7 @@ __all__ = (
     'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
     'ScriptTooLarge', 'TooManyOps', 'MinimalPushOpNotUsed', 'MinimalIfError',
     'PushItemTooLarge', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
-    'VerifyFailed',
+    'VerifyFailed', 'OpReturnError', 'InvalidOpcode',
     'cast_to_bool', 'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
     'classify_output_script', 'evaluate_script'
@@ -38,6 +38,8 @@ from .util import cachedproperty
 #
 # Exception Hierarchy
 #
+
+
 class ScriptError(Exception):
     '''Base class for script errors.'''
 
@@ -97,6 +99,10 @@ class UnbalancedConditional(InterpreterError):
 
 class VerifyFailed(InterpreterError):
     '''OP_VERIFY was executed and the top of stack was zero.'''
+
+
+class OpReturnError(InterpreterError):
+    '''OP_RETURN was encountered pre-genesis.'''
 
 
 class Ops(IntEnum):
@@ -737,6 +743,7 @@ class InterpreterState:
         self.alt_stack = []
         self.conditions = []
         self.execute = False
+        self.finished = False
         self.script_code = None
         self.op_count = 0
         self.non_top_level_return_after_genesis = False
@@ -772,7 +779,7 @@ class InterpreterState:
         if stack_size > limit:
             raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
 
-    def to_number(self, item, *, size_t_limited=False):
+    def to_number(self, item, *, size_t_limited=False):   # pylint:disable=W0613
         # FIXME: handle pre-genesis numbers
         return item_to_int(item)
 
@@ -854,6 +861,8 @@ def evaluate_script(state, script):
             state.stack.append(item)
         elif state.execute or Ops.OP_IF <= op <= Ops.OP_ENDIF:
             op_handlers[op](state)
+            if state.finished:
+                return
 
         state.validate_stack_size()
 
@@ -907,6 +916,19 @@ def handle_VERIFY(state):
     if not cast_to_bool(state.stack[-1]):
         raise VerifyFailed()
     state.stack.pop()
+
+
+def handle_RETURN(state):
+    if state.is_utxo_after_genesis:
+        if state.conditions:
+            # Check for invalid grammar if OP_RETURN in an if statement after genesis
+            state.non_top_level_return_after_genesis = True
+        else:
+            # Terminate execution successfully.  The remainder of the script is ignored
+            # even in the presence of unbalanced IFs, invalid opcodes etc.
+            state.finished = True
+    else:
+        raise OpReturnError('OP_RETURN encountered')
 
 
 #
@@ -1173,8 +1195,7 @@ op_handlers[OP_NOTIF] = partial(handle_IF, opcode=OP_NOTIF)
 op_handlers[OP_ELSE] = handle_ELSE
 op_handlers[OP_ENDIF] = handle_ENDIF
 op_handlers[OP_VERIFY] = handle_VERIFY
-#    OP_RETURN = 0x6a
-
+op_handlers[OP_RETURN] = handle_RETURN
 
 #
 # Stack Operations
