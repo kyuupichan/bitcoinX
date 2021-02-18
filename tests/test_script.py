@@ -2182,6 +2182,12 @@ class TestStackOperations(TestEvaluateScriptBase):
         assert state.stack == list(datas) + [int_to_item(len(push_datas))]
         assert not state.alt_stack
 
+    def test_DEPTH_empty(self, state):
+        script = Script() << OP_DEPTH
+        state.evaluate_script(script)
+        assert state.stack == [b'']
+        assert not state.alt_stack
+
     def test_NIP(self, state):
         self.require_stack(state, 2, OP_NIP)
         push_datas = [self.random_push_data() for _ in range(2)]
@@ -2279,7 +2285,7 @@ class TestStackOperations(TestEvaluateScriptBase):
         (b'\x00', 1),
         (b'\x00\x80', 2),
         (bytes(20), 20),
-    ))
+   ))
     def test_SIZE(self, state, value, size):
         self.require_stack(state, 1, OP_SIZE)
         script = Script() << value << OP_SIZE
@@ -2304,6 +2310,75 @@ class TestStackOperations(TestEvaluateScriptBase):
         assert not state.alt_stack
 
 
+a, b, aorb, aandb, axorb = (
+    '340e7e1783661a81458d2626bcbd56e7f21cecf6798c3e580f86cf53be668fa7bef630128d0100377f5b64'
+    '5063406a44f57e02c7ab45cf6a9861e8b8c49e11e830710773a24ddda66cf42a22a0acdcf4ccfb4de355de'
+    '4446323693b4d9d13b06096a64c31858c49f1b6aa3ab5937bd36973526876358086e5e46cf1533fc464597'
+    '614bb8ecdd1b696e8a27f9cd4b5ca48418d52350c663becad3d09139166a6ed6091852056aa7f764a3f0ba'
+    '75c59cf7bb7068654fdbd03614fb1af66eea8dc8a5ad61c6044cc3b9688ca4e404aeeecae752a7ba169126'
+    '9bae31cd6f4e7e476040f0bce220afc14f26549337fcbf50d3f23070fc671582d33927a24fce10ed1173c4'
+    '48e965a15ef20c813b80e19f53314973c80a6ea4e1e1e2aceb0ba54bc547f6f1151031f0cb6fedd3507db2'
+    '8687ab625c4c4bb00a2019b98c1af5e629a08a5588a0f5efe6506d367b75e514c8fbc65be799376256db8f'
+    '4043548d6819c2f5c037edee0eab0b772927ac0770faa9692851f565587accc9fe3ca00d6e873836b71a41'
+    '6c9a13fa8613e6c9ec9f5015c3744c29670aa77e7f3cabe944616e6450471e172364299c9cef5b28e30ea5'
+    '2a2f2dc66cd3aa0348150c9280862fc2bd5e8261a188dd5eeaef19f98466f7bb44adf9f72f2ad537ef283d'
+    '1adc6cf1cccad52b5863c0349187d9362f90ebf1de8b8c205183fdf4fde74068f35a178021f3c1903c7523'
+    '481c98b5',
+    'd29e99c9e7117b0e4b8e1108d15cf4b82c143f4575e98aeb81f8d8a38e4b630e7f1efd84837c261ff0c937'
+    '1c5ff5f33d672b2730db3ee72f7b7d1c40062a725a370cd5a8a381d473ef1e4e6cb9103d046ecae7df627b'
+    '64006ab6da029674a7c2bb2869dfc809ff6c6f7af88269f159f83de06da571fb392e1751cb942ad04e02af'
+    'a5d53956da102ea2910bd2cab1ac6dd2efad5954bcd3444c6ce25cedabc0046d3e92f94ace76ed45509329'
+    '17939cf0d83ccdf7529f27572affe033b6a441a3350bab0c0bdd98101d97247a8ecba37ae9a873f44a4c6b'
+    'b73165ca5ac4d83ce0ad302a2e342e4084dd5d08ed1012ca3f242d085b86b6f470005c9d302a81d25ca170'
+    'cf990ff594ef541dab9124594ff6cbb86d1421f1fb145c294e6eb04d640c38ee1963149b3db4192591e6de'
+    'f4342b8799bdec1cd39234b7baef00aedcec9dd1fa839f958db0edc067aece15db288b8fcbc49b0d466796'
+    'b086b2db3c896e57accb3457378000347871f01a2c28879f08217c0e7e29fb9a2c77482f88e2f06a87150c'
+    '4cbfcbddee75e1bc3831dce961531ec84b80945c03dd4baea854e98b232021c80383335f1137fcd5b3119a'
+    '060dbfcdc72288b8c93fec7c11966aa057df5bdea20911d3fdbf847a9d3aba0f6d01adbcb9d88ae4d6a204'
+    '93e002d24549148e849c7c571b0527f65983d1f4b62fbe6e357e9710f5421ac94db907716dd196c388b6e6'
+    '0e8a8ad7',
+    'f69effdfe7777b8f4f8f372efdfdf6fffe1cfff77dedbefb8ffedff3be6fefaffffefd968f7d263fffdb77'
+    '5c7ff5fb7df77f27f7fb7fef6ffb7dfcf8c6be73fa377dd7fba3cdddf7effe6e6eb9bcfdf4eefbefff77ff'
+    '64467ab6dbb6dff5bfc6bb6a6ddfd859ffff7f7afbab79f7fdfebff56fa773fb396e5f57cf953bfc4e47bf'
+    'e5dfb9fedf1b6fee9b2ffbcffbfcedd6fffd7b54fef3fecefff2ddfdbfea6eff3f9afb4feef7ff65f3f3bb'
+    '77d79cf7fb7cedf75fdff7773efffaf7feeecdebb5afebce0fdddbb97d9fa4fe8eefeffaeffaf7fe5edd6f'
+    'bfbf75cf7fcefe7fe0edf0beee34afc1cfff5d9bfffcbfdafff63d78ffe7b7f6f3397fbf7fee91ff5df3f4'
+    'cff96ff5deff5c9dbb91e5df5ff7cbfbed1e6ff5fbf5feadef6fb54fe54ffeff1d7335fbfffffdf7d1fffe'
+    'f6b7abe7ddfdefbcdbb23dbfbefff5eefdec9fd5faa3ffffeff0edf67fffef15dbfbcfdfefddbf6f56ff9f'
+    'f0c7f6df7c99eef7ecfffdff3fab0b777977fc1f7cfaafff2871fd6f7e7bffdbfe7fe82feee7f87eb71f4d'
+    '6cbfdbffee77e7fdfcbfdcfde3775ee96f8ab77e7ffdebefec75efef73673fdf23e73bdf9dfffffdf31fbf'
+    '2e2fbfcfeff3aabbc93fecfe91966fe2ffdfdbffa389dddfffff9dfb9d7effbf6dadfdffbffadff7ffaa3d'
+    '9bfc6ef3cdcbd5afdcfffc779b87fff67f93fbf5feafbe6e75fffff4fde75ae9fffb17f16df3d7d3bcf7e7'
+    '4e9e9af7',
+    '100e180183001a00418c0000901c54a020142c4471880a480180c8038e4203063e16300081000017704924'
+    '1043406204652a02008b04c72a18610800040a104830000520a201d4226c140a20a0001c044cca45c3405a'
+    '44002236920090502302092860c30808c40c0b6aa08249311930152024856158082e1640cb1422d0460087'
+    '21413844d81028228003d0c8010c2480088501508443044840c0102902400444081050004a26e544009028'
+    '15819cf098304865429b001600fb003226a0018025092104004c801008842460048aa24ae10023b0020022'
+    '932021c84a4458046000302822202e400404540025101240132020005806148050000480000a00c0102140'
+    '488905a114e204012b80201943304930480020a0e10040284a0aa049440430e01100109009240901106492'
+    '84042b02180c4810020010b1880a00a608a088518880958584106d006324c414c828820bc3801300464386'
+    '000210892809425580032446068000342821a00220288109080174045828c8882c34000d08823022871000'
+    '4c9a03d88611e0882811500141500c084300845c031c0ba800406800000000000300211c10275800a30080'
+    '020d2dc44402880048150c1000862a80155e0240a0081152e8af00788422b20b4401a9b429088024c62004'
+    '12c000d04448140a00004014110501360980c1f0960b8c2011029510f54200484118070021d18080083422'
+    '08088895',
+    'e690e7de6477618f0e03372e6de1a25fde08d3b30c65b4b38e7e17f0302deca9c1e8cd960e7d26288f9253'
+    '4c3cb59979925525f7707b2845e31cf4f8c2b463b2077dd2db01cc09d583ea644e19bce1f0a231aa3c37a5'
+    '2046588049b64fa59cc4b2420d1cd0513bf374105b2930c6e4ceaad54b2212a3314049170481192c084738'
+    'c49e81ba070b47cc1b2c2b07faf0c956f7787a047ab0fa86bf32cdd4bdaa6abb378aab4fa4d11a21f36393'
+    '62560007634ca5921d44f7613e04fac5d84ecc6b90a6caca0f915ba9751b809e8a654db00efad44e5cdd4d'
+    '2c9f5407358aa67b80edc096cc148181cbfb099bdaecad9aecd61d78a7e1a376a3397b3f7fe4913f4dd2b4'
+    '87706a54ca1d589c9011c5c61cc782cba51e4f551af5be85a5651506a14bce1f0c73256bf6dbf4f6c19b6c'
+    '72b380e5c5f1a7acd9b22d0e36f5f548f54c178472236a7a6be080f61cdb2b0113d34dd42c5dac6f10bc19'
+    'f0c5e6565490aca26cfcd9b9392b0b4351565c1d5cd22ef62070896b26533753d24be822e665c85c300f4d'
+    '2025d82768660775d4ae8cfca22752e12c8a33227ce1e047ec3587ef73673fdf20e71ac38dd8a7fd501f3f'
+    '2c22920babf122bb812ae0ee91104562ea81d9bf0381cc8d17509d83195c4db429ac544b96f25fd3398a39'
+    '893c6e238983c1a5dcffbc638a82fec076133a0568a4324e64fd6ae408a55aa1bee310f14c225753b4c3c5'
+    '46961262',
+)
+
+
 class TestBitwiseLogic(TestEvaluateScriptBase):
 
     @pytest.mark.parametrize("value,result", (
@@ -2322,8 +2397,11 @@ class TestBitwiseLogic(TestEvaluateScriptBase):
         ('', '', ''),
         ('01', '07', '01'),
         ('01', '0700', None),
+        ('0100', '07', None),
         ('011f', '07ff', '011f'),
         ('f1f1f1f1f1f1f1f1', '7777777777777777', '7171717171717171'),
+        (a, b, aandb),
+        (b, a, aandb),
     ))
     def test_AND(self, state, x1, x2, result):
         self.require_stack(state, 1, OP_AND)
@@ -2341,8 +2419,11 @@ class TestBitwiseLogic(TestEvaluateScriptBase):
         ('', '', ''),
         ('01', '07', '07'),
         ('01', '0700', None),
+        ('01', '', None),
         ('011f', '07ff', '07ff'),
         ('f1f1f1f1f1f1f1f1', '7777777777777777', 'f7f7f7f7f7f7f7f7'),
+        (a, b, aorb),
+        (b, a, aorb),
     ))
     def test_OR(self, state, x1, x2, result):
         self.require_stack(state, 1, OP_OR)
@@ -2362,6 +2443,9 @@ class TestBitwiseLogic(TestEvaluateScriptBase):
         ('01', '0700', None),
         ('011f', '07ff', '06e0'),
         ('f1f1f1f1f1f1f1f1', '7777777777777777', '8686868686868686'),
+        (a, a, '0' * len(a)),
+        (a, b, axorb),
+        (b, a, axorb),
     ))
     def test_XOR(self, state, x1, x2, result):
         self.require_stack(state, 1, OP_XOR)
