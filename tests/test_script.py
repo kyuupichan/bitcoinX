@@ -9,7 +9,11 @@ from bitcoinx.consts import JSONFlags
 from bitcoinx.errors import *
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from bitcoinx.script import *
-from bitcoinx import pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len
+from bitcoinx import (
+    pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len, SigHash
+)
+
+from .utils import random_tx, random_value
 
 
 def _zeroes():
@@ -1660,20 +1664,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("hash_op,hash_func", (
-        (OP_RIPEMD160, ripemd160),
-        (OP_SHA1, sha1),
-        (OP_SHA256, sha256),
-        (OP_HASH160, hash160),
-        (OP_HASH256, double_sha256),
-    ))
-    def test_RIPEMD160(self, state, hash_op, hash_func):
-        self.require_stack(state, 1, hash_op)
-        script = Script() << b'foo' << hash_op
-        state.evaluate_script(script)
-        assert state.stack == [hash_func(b'foo')]
-        assert not state.alt_stack
-
     @pytest.mark.parametrize("a,b,mul", (
         ('05', '06', '1e'),
         ('05', '26', 'be00'),
@@ -2611,3 +2601,56 @@ class TestBitwiseLogic(TestEvaluateScriptBase):
                     state.evaluate_script(script)
                 assert len(state.stack) == 1
         assert not state.alt_stack
+
+
+class TestCrypto(TestEvaluateScriptBase):
+
+    @classmethod
+    def setup_class(cls):
+        cls.tx = random_tx()
+
+    @pytest.mark.parametrize("hash_op,hash_func", (
+        (OP_RIPEMD160, ripemd160),
+        (OP_SHA1, sha1),
+        (OP_SHA256, sha256),
+        (OP_HASH160, hash160),
+        (OP_HASH256, double_sha256),
+    ))
+    def test_hash_op(self, state, hash_op, hash_func):
+        self.require_stack(state, 1, hash_op)
+        script = Script() << b'foo' << hash_op
+        state.evaluate_script(script)
+        assert state.stack == [hash_func(b'foo')]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("script_pubkey, script_code", (
+        (Script(), Script()),
+        (Script() << OP_CODESEPARATOR, Script()),
+        (Script() << OP_0 << OP_CODESEPARATOR << OP_DROP, Script() << OP_DROP),
+        (Script() << OP_0 << OP_CODESEPARATOR << OP_1 << OP_CODESEPARATOR << OP_2DROP,
+         Script() << OP_2DROP),
+        (Script() << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF,
+         Script() << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF),
+        (Script() << OP_1 << OP_IF << OP_CODESEPARATOR << OP_ENDIF, Script() << OP_ENDIF),
+    ))
+    def test_code_separator(self, policy, script_pubkey, script_code):
+        input_index = random.randrange(0, len(self.tx.inputs))
+        value = random_value()
+        state = InterpreterState(policy, flags=0, is_consensus=False, is_genesis_enabled=True,
+                                 is_utxo_after_genesis=True, tx=self.tx, input_index=input_index,
+                                 value=value)
+
+        # APPEND OP_CHECKSIGVERIFY to check if the correct script_code has been signed
+        script_pubkey <<= OP_CHECKSIGVERIFY
+        script_code <<= OP_CHECKSIGVERIFY
+
+        # Create a random private key and sign the transaction
+        privkey = PrivateKey.from_random()
+        sighash = SigHash(SigHash.ALL)
+        message_hash = self.tx.signature_hash(input_index, value, script_code, sighash=sighash)
+        sig = privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
+        script_sig = Script() << sig << privkey.public_key.to_bytes()
+
+        # This should complete if the correct script is signed
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)

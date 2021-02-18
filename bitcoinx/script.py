@@ -35,6 +35,7 @@ from .errors import (
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
     InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
     InvalidPublicKeyCount, NullDummyError, UpgradeableNopError, LockTimeError, PushOnlyError,
+    CheckSigVerifyFailed, CheckMultiSigVerifyFailed,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -909,12 +910,13 @@ class InterpreterState:
         else:
             return script_code.find_and_delete(Script() << sig_bytes)
 
-    def check_sig(self, pubkey_bytes, sig_bytes, script_code):
+    def check_sig(self, sig_bytes, pubkey_bytes, script_code):
         '''Check a signature.  Returns True or False.'''
         if not sig_bytes or not self.tx:
             return False
+        from .keys import PublicKey
         try:
-            pubkey = PublicKey(pubkey_bytes)
+            pubkey = PublicKey.from_bytes(pubkey_bytes)
         except ValueError:
             return False
 
@@ -1419,7 +1421,7 @@ def handle_CHECKSIG(state):
     state.require_stack_depth(2)
     sig_bytes = state.stack[-2]
     pubkey_bytes = state.stack[-1]
-    state.validate_signature(sig_btyes)
+    state.validate_signature(sig_bytes)
     state.validate_pubkey(pubkey_bytes)
     script_code = state.iterator.script_code()
     script_code = state.cleanup_script_code(sig_bytes, script_code)
@@ -1433,7 +1435,7 @@ def handle_CHECKSIG(state):
 def handle_CHECKSIGVERIFY(state):
     # (sig pubkey -- )
     handle_CHECKSIG(state)
-    if state.stack[-1] == b_OP_0:
+    if not cast_to_bool(state.stack[-1]):
         raise CheckSigVerifyFailed('OP_CHECKSIGVERIFY failed')
     state.stack.pop()
 
@@ -1495,7 +1497,7 @@ def handle_CHECKMULTISIG(state):
 def handle_CHECKMULTISIGVERIFY(state):
     # (sig pubkey -- )
     handle_CHECKMULTISIG(state)
-    if state.stack[-1] == b_OP_0:
+    if not cast_to_bool(state.stack[-1]):
         raise CheckMultiSigVerifyFailed('OP_CHECKMULTISIGVERIFY failed')
     state.stack.pop()
 
