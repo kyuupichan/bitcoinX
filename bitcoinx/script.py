@@ -1471,7 +1471,7 @@ def handle_CHECKMULTISIG(state):
     # Loop while the remaining number of sigs to check does not exceed the remaining keys
     while keys_remaining >= sigs_remaining > 0:
         sig_bytes = state.stack[sig_base_index + sigs_remaining]
-        state.validate_signature(sig_btyes)
+        state.validate_signature(sig_bytes)
         pubkey_bytes = state.stack[key_base_index + keys_remaining]
         state.validate_pubkey(pubkey_bytes)
         is_good = state.check_sig(sig_bytes, pubkey_bytes, script_code)

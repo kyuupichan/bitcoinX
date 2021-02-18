@@ -2607,6 +2607,7 @@ class TestCrypto(TestEvaluateScriptBase):
 
     @classmethod
     def setup_class(cls):
+        super().setup_class()
         cls.tx = random_tx()
 
     @pytest.mark.parametrize("hash_op,hash_func", (
@@ -2633,7 +2634,7 @@ class TestCrypto(TestEvaluateScriptBase):
          Script() << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF),
         (Script() << OP_1 << OP_IF << OP_CODESEPARATOR << OP_ENDIF, Script() << OP_ENDIF),
     ))
-    def test_code_separator(self, policy, script_pubkey, script_code):
+    def test_CODESEPARATOR(self, policy, script_pubkey, script_code):
         input_index = random.randrange(0, len(self.tx.inputs))
         value = random_value()
         state = InterpreterState(policy, flags=0, is_consensus=False, is_genesis_enabled=True,
@@ -2654,3 +2655,118 @@ class TestCrypto(TestEvaluateScriptBase):
         # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
+
+    @pytest.mark.parametrize(
+        "op, is_consensus, is_genesis_enabled, is_utxo_after_genesis, sighash", product(
+            (OP_CHECKSIG, OP_CHECKSIGVERIFY),
+            (True, False), # is_consensus
+            (True, False), # is_genesis_enabled
+            (True, False), # is_utxo_after_genesis
+            (SigHash(SigHash.ALL), SigHash(SigHash.NONE), SigHash(SigHash.ALL | SigHash.FORKID)),
+        ))
+    def test_CHECKSIG(self, policy, op, is_consensus, is_genesis_enabled,
+                      is_utxo_after_genesis, sighash):
+        input_index = random.randrange(0, len(self.tx.inputs))
+        value = random_value()
+        state = InterpreterState(
+            policy, flags=0, is_consensus=is_consensus,
+            is_genesis_enabled=is_genesis_enabled, is_utxo_after_genesis=is_utxo_after_genesis,
+            tx=self.tx, input_index=input_index, value=value)
+
+        self.require_stack(state, 2, op)
+
+        script_pubkey = Script() << op
+
+        # Create a random private key and sign the transaction
+        privkey = PrivateKey.from_random()
+        message_hash = self.tx.signature_hash(input_index, value, script_pubkey, sighash=sighash)
+        sig = privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
+        script_sig = Script() << sig << privkey.public_key.to_bytes()
+
+        # This should complete if the correct script is signed
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+
+        if op == OP_CHECKSIG:
+            assert state.stack == [b'\1']
+        else:
+            assert not state.stack
+        assert not state.alt_stack
+
+        # Now try with a bad sig
+        state.reset()
+        message_hash = self.tx.signature_hash(input_index, value + 1, script_pubkey,
+                                              sighash=sighash)
+        sig = privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
+        script_sig = Script() << sig << privkey.public_key.to_bytes()
+
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKSIG:
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
+        assert state.stack == [b'']
+
+    @pytest.mark.parametrize(
+        "op, is_consensus, is_genesis_enabled, is_utxo_after_genesis, sighash", product(
+            (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY),
+            (True, False), # is_consensus
+            (True, False), # is_genesis_enabled
+            (True, False), # is_utxo_after_genesis
+            (SigHash(SigHash.ALL), SigHash(SigHash.NONE), SigHash(SigHash.ALL | SigHash.FORKID)),
+        ))
+    def test_CHECKMULTISIG(self, policy, op, is_consensus, is_genesis_enabled,
+                           is_utxo_after_genesis, sighash):
+        input_index = random.randrange(0, len(self.tx.inputs))
+        value = random_value()
+        state = InterpreterState(
+            policy, flags=0, is_consensus=is_consensus,
+            is_genesis_enabled=is_genesis_enabled, is_utxo_after_genesis=is_utxo_after_genesis,
+            tx=self.tx, input_index=input_index, value=value)
+
+        # Let's test m of n multisig.  m, and or n, can be zero.
+        n = random.randrange(0, 6)
+        m = random.randrange(0, n + 1)
+
+        privkeys = [PrivateKey.from_random() for _ in range(n)]
+        # Pubkey script pushes the public keys and then their count followed by OP_CHECKMULTISIG
+        script_pubkey = Script() << m
+        script_pubkey = script_pubkey.push_many(privkey.public_key.to_bytes()
+                                                for privkey in privkeys)
+        script_pubkey = script_pubkey.push_many((n, op))
+
+        # Sign the transaction with the first m keys after a random shuffle. The script_sig
+        # must begin with the dummy push.
+        keys_to_use = list(privkeys)[:m]
+        random.shuffle(keys_to_use)
+        message_hash = self.tx.signature_hash(input_index, value, script_pubkey, sighash=sighash)
+        # Sigs must be in order of the keys
+        sigs = [privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
+                for privkey in privkeys if privkey in keys_to_use]
+        script_sig = Script() << OP_0
+        script_sig = script_sig.push_many(sigs)
+
+        # This should complete if the correct script is signed
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+
+        if op == OP_CHECKMULTISIG:
+            assert state.stack == [b'\1']
+        else:
+            assert not state.stack
+        assert not state.alt_stack
+
+        # Now test with sigs in wrong order
+        if m >= 2:
+            state.reset()
+            script_sig = Script() << OP_0
+            script_sig = script_sig.push_many(reversed(sigs))
+
+            state.evaluate_script(script_sig)
+            if op == OP_CHECKMULTISIG:
+                state.evaluate_script(script_pubkey)
+            else:
+                with pytest.raises(CheckMultiSigVerifyFailed):
+                    state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
