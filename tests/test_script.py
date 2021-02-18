@@ -1195,7 +1195,45 @@ def negate_bytes(x):
     return int_to_item(-item_to_int(value_bytes(x)))
 
 
-class TestEvaluateScript:
+class TestEvaluateScriptBase:
+
+    @classmethod
+    def setup_class(cls):
+        cls._random_pushes = [
+            OP_0, OP_1, OP_2, OP_3, OP_4, OP_5, OP_6, OP_7, OP_8, OP_9, OP_10,
+            OP_11, OP_12, OP_13, OP_14, OP_15, OP_16, OP_1NEGATE
+        ]
+        # Avoid breaking small limits for some states
+        cls._random_pushes.extend(os.urandom(random.randrange(1, 500)) for _ in range(10))
+
+    def random_push_data(self):
+        push = random.choice(self._random_pushes)
+        if isinstance(push, bytes):
+            return push, push
+        if push == OP_0:
+            return push, b''
+        if push >= OP_1:
+            return push, pack_byte(push - OP_1 + 1)
+        assert push == OP_1NEGATE
+        return push, b'\x81'
+
+    def random_push(self):
+        return self.random_push_data()[0]
+
+    def require_stack(self, state, size, op):
+        # Create a stack of size n and assert failure
+        for n in range(size):
+            script = Script()
+            for _ in range(n):
+                script <<= self.random_push()
+            script <<= op
+            with pytest.raises(InvalidStackOperation):
+                state.evaluate_script(script)
+            assert len(state.stack) == n
+            state.reset()
+
+
+class TestEvaluateScript(TestEvaluateScriptBase):
 
     def test_max_script_size(self, state):
         limit = state.max_script_size = min(state.max_script_size, 1_000_000)
@@ -1342,255 +1380,6 @@ class TestEvaluateScript:
         state = InterpreterState(policy, flags=InterpreterFlags.REJECT_UPGRADEABLE_NOPS,
                                  is_utxo_after_genesis=is_utxo_after_genesis)
         state.evaluate_script(script)
-
-    @classmethod
-    def setup_class(cls):
-        cls._random_pushes = [
-            OP_0, OP_1, OP_2, OP_3, OP_4, OP_5, OP_6, OP_7, OP_8, OP_9, OP_10,
-            OP_11, OP_12, OP_13, OP_14, OP_15, OP_16, OP_1NEGATE
-        ]
-        # Avoid breaking small limits for some states
-        cls._random_pushes.extend(os.urandom(random.randrange(1, 500)) for _ in range(10))
-
-    def random_push_data(self):
-        push = random.choice(self._random_pushes)
-        if isinstance(push, bytes):
-            return push, push
-        if push == OP_0:
-            return push, b''
-        if push >= OP_1:
-            return push, pack_byte(push - OP_1 + 1)
-        assert push == OP_1NEGATE
-        return push, b'\x81'
-
-    def random_push(self):
-        return self.random_push_data()[0]
-
-    def require_stack(self, state, size, op):
-        # Create a stack of size n and assert failure
-        for n in range(size):
-            script = Script()
-            for _ in range(n):
-                script <<= self.random_push()
-            script <<= op
-            with pytest.raises(InvalidStackOperation):
-                state.evaluate_script(script)
-            assert len(state.stack) == n
-            state.reset()
-
-    def test_DROP(self, state):
-        self.require_stack(state, 1, OP_DROP)
-        script = Script() << self.random_push() << OP_DROP
-        state.evaluate_script(script)
-        assert not state.stack
-        assert not state.alt_stack
-
-    def test_2DROP(self, state):
-        self.require_stack(state, 2, OP_2DROP)
-        script = Script() << self.random_push() << self.random_push() << OP_2DROP
-        state.evaluate_script(script)
-        assert not state.stack
-        assert not state.alt_stack
-
-    def test_DUP(self, state):
-        self.require_stack(state, 1, OP_DUP)
-        push, data = self.random_push_data()
-        script = Script() << push << OP_DUP
-        state.evaluate_script(script)
-        assert state.stack == [data] * 2
-        assert not state.alt_stack
-
-    def test_2DUP(self, state):
-        self.require_stack(state, 2, OP_2DUP)
-        push_datas = [self.random_push_data() for _ in range(2)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_2DUP
-        state.evaluate_script(script)
-        assert state.stack == list(datas) * 2
-        assert not state.alt_stack
-
-    def test_3DUP(self, state):
-        self.require_stack(state, 3, OP_3DUP)
-        push_datas = [self.random_push_data() for _ in range(3)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_3DUP
-        state.evaluate_script(script)
-        assert state.stack == list(datas) * 2
-        assert not state.alt_stack
-
-    def test_OVER(self, state):
-        self.require_stack(state, 2, OP_OVER)
-        push_datas = [self.random_push_data() for _ in range(2)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_OVER
-        state.evaluate_script(script)
-        assert state.stack == [datas[0], datas[1], datas[0]]
-        assert not state.alt_stack
-
-    def test_2OVER(self, state):
-        self.require_stack(state, 4, OP_2OVER)
-        push_datas = [self.random_push_data() for _ in range(4)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_2OVER
-        state.evaluate_script(script)
-        assert state.stack == list(datas + datas[:2])
-        assert not state.alt_stack
-
-    def test_2ROT(self, state):
-        self.require_stack(state, 6, OP_2ROT)
-        push_datas = [self.random_push_data() for _ in range(8)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_2ROT
-        state.evaluate_script(script)
-        assert state.stack == list(datas[:2] + datas[4:] + datas[2:4])
-        assert not state.alt_stack
-
-    def test_2SWAP(self, state):
-        self.require_stack(state, 4, OP_2SWAP)
-        push_datas = [self.random_push_data() for _ in range(5)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_2SWAP
-        state.evaluate_script(script)
-        assert state.stack == list(datas[:1] + datas[3:] + datas[1:3])
-        assert not state.alt_stack
-
-    def test_IFDUP(self, state):
-        self.require_stack(state, 1, OP_IFDUP)
-        item = random.choice(zeroes)
-        script = Script() << item << OP_IFDUP
-        state.evaluate_script(script)
-        assert state.stack == [item]
-        assert not state.alt_stack
-        state.reset()
-
-        item = random.choice(non_zeroes)
-        script = Script() << item << OP_IFDUP
-        state.evaluate_script(script)
-        assert state.stack == [item] * 2
-        assert not state.alt_stack
-
-    def test_IPDUP_no_minimal_if(self, state):
-        # Has no effect
-        state.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
-        script = Script() << 2 << OP_IFDUP
-        state.evaluate_script(script)
-        assert state.stack == [b'\2'] * 2
-
-    def test_DEPTH(self, state):
-        push_datas = [self.random_push_data() for _ in range(10)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_DEPTH
-        state.evaluate_script(script)
-        assert state.stack == list(datas) + [int_to_item(len(push_datas))]
-        assert not state.alt_stack
-
-    def test_NIP(self, state):
-        self.require_stack(state, 2, OP_NIP)
-        push_datas = [self.random_push_data() for _ in range(2)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_NIP
-        state.evaluate_script(script)
-        assert state.stack == [datas[1]]
-        assert not state.alt_stack
-
-    def test_SWAP(self, state):
-        self.require_stack(state, 2, OP_SWAP)
-        push_datas = [self.random_push_data() for _ in range(2)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_SWAP
-        state.evaluate_script(script)
-        assert state.stack == list(reversed(datas))
-        assert not state.alt_stack
-
-    def test_TUCK(self, state):
-        self.require_stack(state, 2, OP_TUCK)
-        push_datas = [self.random_push_data() for _ in range(2)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_TUCK
-        state.evaluate_script(script)
-        assert state.stack == [datas[-1]] + list(datas)
-        assert not state.alt_stack
-
-    def test_ROT(self, state):
-        self.require_stack(state, 3, OP_ROT)
-        push_datas = [self.random_push_data() for _ in range(6)]
-        pushes, datas = list(zip(*push_datas))
-        script = Script().push_many(pushes) << OP_ROT
-        state.evaluate_script(script)
-        assert state.stack == list(datas[:3]) + list(datas[-2:]) + [datas[-3]]
-        assert not state.alt_stack
-
-    def test_PICK(self, state):
-        # If not 2 items; no pop
-        self.require_stack(state, 2, OP_PICK)
-
-        # Test good pick
-        count = random.randrange(1, 8)
-        n = random.randrange(0, count)
-        push_datas = [self.random_push_data() for _ in range(count)]
-        pushes = [pair[0] for pair in push_datas]
-        datas = [pair[1] for pair in push_datas]
-        script = Script().push_many(pushes) << n << OP_PICK
-        state.evaluate_script(script)
-        assert state.stack == list(datas) + [datas[-(n + 1)]]
-        assert not state.alt_stack
-        state.reset()
-
-        # Test bad pick
-        n = random.choice([-1, count])
-        push_datas = [self.random_push_data() for _ in range(count)]
-        pushes = [pair[0] for pair in push_datas]
-        datas = [pair[1] for pair in push_datas]
-        script = Script().push_many(pushes) << n << OP_PICK
-        with pytest.raises(InvalidStackOperation):
-            state.evaluate_script(script)
-        assert state.stack == list(datas)   # All intact, just n is popped
-        assert not state.alt_stack
-
-    def test_ROLL(self, state):
-        # If not 2 items; no pop
-        self.require_stack(state, 2, OP_ROLL)
-
-        # Test good roll
-        count = random.randrange(1, 8)
-        n = random.randrange(0, count)
-        push_datas = [self.random_push_data() for _ in range(count)]
-        pushes = [pair[0] for pair in push_datas]
-        datas = [pair[1] for pair in push_datas]
-        script = Script().push_many(pushes) << n << OP_ROLL
-        state.evaluate_script(script)
-        expected = list(datas)
-        expected.append(expected.pop(-(n + 1)))
-        assert state.stack == expected
-        assert not state.alt_stack
-        state.reset()
-
-        # Test bad roll
-        n = random.choice([-1, count])
-        push_datas = [self.random_push_data() for _ in range(count)]
-        pushes = [pair[0] for pair in push_datas]
-        datas = [pair[1] for pair in push_datas]
-        script = Script().push_many(pushes) << n << OP_ROLL
-        with pytest.raises(InvalidStackOperation):
-            state.evaluate_script(script)
-        assert state.stack == list(datas)   # All intact, just n is popped
-        assert not state.alt_stack
-
-    def test_TOALTSTACK(self, state):
-        self.require_stack(state, 1, OP_TOALTSTACK)
-        script = Script() << OP_12 << OP_TOALTSTACK
-        state.evaluate_script(script)
-        assert not state.stack
-        assert state.alt_stack == [b'\x0c']
-
-    def test_FROMALTSTACK(self, state):
-        script = Script() << OP_FROMALTSTACK
-        with pytest.raises(InvalidStackOperation):
-            state.evaluate_script(script)
-        script = Script() << OP_10 << OP_TOALTSTACK << OP_8 << OP_FROMALTSTACK
-        state.evaluate_script(script)
-        assert state.stack == [b'\x08', b'\x0a']
-        assert not state.alt_stack
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_IF_unbalanced_outer(self, state, op):
@@ -1969,228 +1758,6 @@ class TestEvaluateScript:
         assert state.stack[0].hex() == result
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("value,size", (
-        (b'', 0),
-        (b'\x00', 1),
-        (b'\x00\x80', 2),
-        (bytes(20), 20),
-    ))
-    def test_SIZE(self, state, value, size):
-        self.require_stack(state, 1, OP_SIZE)
-        script = Script() << value << OP_SIZE
-        state.evaluate_script(script)
-        assert state.stack == [value, int_to_item(len(value))]
-        assert not state.alt_stack
-
-    @pytest.mark.parametrize("value,result", (
-        (b'', b''),
-        (b'\1\2', b'\xfe\xfd'),
-        (bytes(range(256)), bytes(255 - x for x in range(256))),
-    ))
-    def test_INVERT(self, state, value, result):
-        self.require_stack(state, 1, OP_INVERT)
-        script = Script() << value << OP_INVERT
-        state.evaluate_script(script)
-        assert state.stack == [result]
-        assert not state.alt_stack
-
-    @pytest.mark.parametrize("x1,x2,result", (
-        ('', '', ''),
-        ('01', '07', '01'),
-        ('01', '0700', None),
-        ('011f', '07ff', '011f'),
-        ('f1f1f1f1f1f1f1f1', '7777777777777777', '7171717171717171'),
-    ))
-    def test_AND(self, state, x1, x2, result):
-        self.require_stack(state, 1, OP_AND)
-        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_AND
-        if result is None:
-            with pytest.raises(InvalidOperandSize):
-                state.evaluate_script(script)
-            assert len(state.stack) == 2
-        else:
-            state.evaluate_script(script)
-            assert state.stack == [bytes.fromhex(result)]
-            assert not state.alt_stack
-
-    @pytest.mark.parametrize("x1,x2,result", (
-        ('', '', ''),
-        ('01', '07', '07'),
-        ('01', '0700', None),
-        ('011f', '07ff', '07ff'),
-        ('f1f1f1f1f1f1f1f1', '7777777777777777', 'f7f7f7f7f7f7f7f7'),
-    ))
-    def test_OR(self, state, x1, x2, result):
-        self.require_stack(state, 1, OP_OR)
-        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_OR
-        if result is None:
-            with pytest.raises(InvalidOperandSize):
-                state.evaluate_script(script)
-            assert len(state.stack) == 2
-        else:
-            state.evaluate_script(script)
-            assert state.stack == [bytes.fromhex(result)]
-            assert not state.alt_stack
-
-    @pytest.mark.parametrize("x1,x2,result", (
-        ('', '', ''),
-        ('01', '07', '06'),
-        ('01', '0700', None),
-        ('011f', '07ff', '06e0'),
-        ('f1f1f1f1f1f1f1f1', '7777777777777777', '8686868686868686'),
-    ))
-    def test_XOR(self, state, x1, x2, result):
-        self.require_stack(state, 1, OP_XOR)
-        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_XOR
-        if result is None:
-            with pytest.raises(InvalidOperandSize):
-                state.evaluate_script(script)
-            assert len(state.stack) == 2
-        else:
-            state.evaluate_script(script)
-            assert state.stack == [bytes.fromhex(result)]
-            assert not state.alt_stack
-
-    @pytest.mark.parametrize("a,b,result", (
-        ('0001', 0, '0001'),
-        ('0001', 1, '0002'),
-        ('0001', 2, '0004'),
-        ('0001', 3, '0008'),
-        ('0001', 5, '0020'),
-        ('0001', 8, '0100'),
-        ('0001', 15, '8000'),
-        ('0001', 16, '0000'),
-        ('0001', 1000, '0000'),
-        ('', 0, ''),
-        ('', 2, ''),
-        ('', 8, ''),
-        ('ff', 0, 'ff'),
-        ('ff', 1, 'fe'),
-        ('ff', 2, 'fc'),
-        ('ff', 3, 'f8'),
-        ('ff', 4, 'f0'),
-        ('ff', 5, 'e0'),
-        ('ff', 6, 'c0'),
-        ('ff', 7, '80'),
-        ('ff', 8, '00'),
-        ('0080', 1, '0100'),
-        ('008000', 1, '010000'),
-        ('000080', 1, '000100'),
-        ('800000', 1, '000000'),
-        ('9f11f555', 0, '9f11f555'),
-        ('9f11f555', 1, '3e23eaaa'),
-        ('9f11f555', 2, '7c47d554'),
-        ('9f11f555', 3, 'f88faaa8'),
-        ('9f11f555', 4, 'f11f5550'),
-        ('9f11f555', 5, 'e23eaaa0'),
-        ('9f11f555', 6, 'c47d5540'),
-        ('9f11f555', 7, '88faaa80'),
-        ('9f11f555', 8, '11f55500'),
-        ('9f11f555', 9, '23eaaa00'),
-        ('9f11f555', 10, '47d55400'),
-        ('9f11f555', 11, '8faaa800'),
-        ('9f11f555', 12, '1f555000'),
-        ('9f11f555', 13, '3eaaa000'),
-        ('9f11f555', 14, '7d554000'),
-        ('9f11f555', 15, 'faaa8000'),
-    ))
-    def test_LSHIFT(self, state_old_utxo, a, b, result):
-        script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
-        state_old_utxo.evaluate_script(script)
-        assert state_old_utxo.stack == [value_bytes(result)]
-
-    @pytest.mark.parametrize("a,b",(
-        ('000100', -1),
-        ('01000000', -2),
-    ))
-    def test_LSHIFT_error(self, state_old_utxo, a, b):
-        script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
-        with pytest.raises(NegativeShiftCount):
-            state_old_utxo.evaluate_script(script)
-        assert len(state_old_utxo.stack) == 2
-
-    @pytest.mark.parametrize("a,b,result", (
-        ('1000', 0, '1000'),
-        ('1000', 1, '0800'),
-        ('1000', 2, '0400'),
-        ('1000', 3, '0200'),
-        ('1000', 5, '0080'),
-        ('8000', 8, '0080'),
-        ('8000', 15, '0001'),
-        ('8000', 16, '0000'),
-        ('8000', 100, '0000'),
-        ('', 0, ''),
-        ('', 2, ''),
-        ('', 8, ''),
-        ('ff', 0, 'ff'),
-        ('ff', 1, '7f'),
-        ('ff', 2, '3f'),
-        ('ff', 3, '1f'),
-        ('ff', 4, '0f'),
-        ('ff', 5, '07'),
-        ('ff', 6, '03'),
-        ('ff', 7, '01'),
-        ('ff', 8, '00'),
-        ('0100', 1, '0080'),
-        ('010000', 1, '008000'),
-        ('000100', 1, '000080'),
-        ('000001', 1, '000000'),
-        ('9f11f555', 0, '9f11f555'),
-        ('9f11f555', 1, '4f88faaa'),
-        ('9f11f555', 2, '27c47d55'),
-        ('9f11f555', 3, '13e23eaa'),
-        ('9f11f555', 4, '09f11f55'),
-        ('9f11f555', 5, '04f88faa'),
-        ('9f11f555', 6, '027c47d5'),
-        ('9f11f555', 7, '013e23ea'),
-        ('9f11f555', 8, '009f11f5'),
-        ('9f11f555', 9, '004f88fa'),
-        ('9f11f555', 10, '0027c47d'),
-        ('9f11f555', 11, '0013e23e'),
-        ('9f11f555', 12, '0009f11f'),
-        ('9f11f555', 13, '0004f88f'),
-        ('9f11f555', 14, '00027c47'),
-        ('9f11f555', 15, '00013e23'),
-    ))
-    def test_RSHIFT(self, state_old_utxo, a, b, result):
-        script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
-        state_old_utxo.evaluate_script(script)
-        assert state_old_utxo.stack == [value_bytes(result)]
-
-    @pytest.mark.parametrize("a,b",(
-        ('000100', -1),
-        ('01000000', -2),
-    ))
-    def test_RSHIFT_error(self, state_old_utxo, a, b):
-        script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
-        with pytest.raises(NegativeShiftCount):
-            state_old_utxo.evaluate_script(script)
-        assert len(state_old_utxo.stack) == 2
-
-    @pytest.mark.parametrize("x1,x2", (
-        ('', ''),
-        ('dead', 'dead'),
-        ('01', '07'),
-        ('01', '0100'),
-    ))
-    @pytest.mark.parametrize("opcode", (OP_EQUAL, OP_EQUALVERIFY))
-    def test_EQUAL(self, state, x1, x2, opcode):
-        self.require_stack(state, 2, opcode)
-        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << opcode
-        truth = x1 == x2
-        if opcode == OP_EQUAL:
-            state.evaluate_script(script)
-            assert state.stack == [b'\1' if truth else b'']
-        else:
-            if truth:
-                state.evaluate_script(script)
-                assert not state.stack
-            else:
-                with pytest.raises(EqualVerifyFailed):
-                    state.evaluate_script(script)
-                assert len(state.stack) == 1
-        assert not state.alt_stack
-
     @pytest.mark.parametrize("opcode", (OP_1ADD, OP_1SUB, OP_NEGATE, OP_ABS, OP_NOT, OP_0NOTEQUAL))
     def test_unary_numeric(self, state, opcode):
         self.require_stack(state, 1, opcode)
@@ -2504,3 +2071,446 @@ class TestEvaluateScript:
         with pytest.raises(InvalidOpcode) as e:
             state.evaluate_script(script)
         assert 'invalid opcode 255' in str(e.value)
+
+
+
+class TestStackOperations(TestEvaluateScriptBase):
+
+    def test_DROP(self, state):
+        self.require_stack(state, 1, OP_DROP)
+        script = Script() << self.random_push() << OP_DROP
+        state.evaluate_script(script)
+        assert not state.stack
+        assert not state.alt_stack
+
+    def test_2DROP(self, state):
+        self.require_stack(state, 2, OP_2DROP)
+        script = Script() << self.random_push() << self.random_push() << OP_2DROP
+        state.evaluate_script(script)
+        assert not state.stack
+        assert not state.alt_stack
+
+    def test_DUP(self, state):
+        self.require_stack(state, 1, OP_DUP)
+        push, data = self.random_push_data()
+        script = Script() << push << OP_DUP
+        state.evaluate_script(script)
+        assert state.stack == [data] * 2
+        assert not state.alt_stack
+
+    def test_2DUP(self, state):
+        self.require_stack(state, 2, OP_2DUP)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2DUP
+        state.evaluate_script(script)
+        assert state.stack == list(datas) * 2
+        assert not state.alt_stack
+
+    def test_3DUP(self, state):
+        self.require_stack(state, 3, OP_3DUP)
+        push_datas = [self.random_push_data() for _ in range(3)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_3DUP
+        state.evaluate_script(script)
+        assert state.stack == list(datas) * 2
+        assert not state.alt_stack
+
+    def test_OVER(self, state):
+        self.require_stack(state, 2, OP_OVER)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_OVER
+        state.evaluate_script(script)
+        assert state.stack == [datas[0], datas[1], datas[0]]
+        assert not state.alt_stack
+
+    def test_2OVER(self, state):
+        self.require_stack(state, 4, OP_2OVER)
+        push_datas = [self.random_push_data() for _ in range(4)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2OVER
+        state.evaluate_script(script)
+        assert state.stack == list(datas + datas[:2])
+        assert not state.alt_stack
+
+    def test_2ROT(self, state):
+        self.require_stack(state, 6, OP_2ROT)
+        push_datas = [self.random_push_data() for _ in range(8)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2ROT
+        state.evaluate_script(script)
+        assert state.stack == list(datas[:2] + datas[4:] + datas[2:4])
+        assert not state.alt_stack
+
+    def test_2SWAP(self, state):
+        self.require_stack(state, 4, OP_2SWAP)
+        push_datas = [self.random_push_data() for _ in range(5)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_2SWAP
+        state.evaluate_script(script)
+        assert state.stack == list(datas[:1] + datas[3:] + datas[1:3])
+        assert not state.alt_stack
+
+    def test_IFDUP(self, state):
+        self.require_stack(state, 1, OP_IFDUP)
+        item = random.choice(zeroes)
+        script = Script() << item << OP_IFDUP
+        state.evaluate_script(script)
+        assert state.stack == [item]
+        assert not state.alt_stack
+        state.reset()
+
+        item = random.choice(non_zeroes)
+        script = Script() << item << OP_IFDUP
+        state.evaluate_script(script)
+        assert state.stack == [item] * 2
+        assert not state.alt_stack
+
+    def test_IPDUP_no_minimal_if(self, state):
+        # Has no effect
+        state.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
+        script = Script() << 2 << OP_IFDUP
+        state.evaluate_script(script)
+        assert state.stack == [b'\2'] * 2
+
+    def test_DEPTH(self, state):
+        push_datas = [self.random_push_data() for _ in range(10)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_DEPTH
+        state.evaluate_script(script)
+        assert state.stack == list(datas) + [int_to_item(len(push_datas))]
+        assert not state.alt_stack
+
+    def test_NIP(self, state):
+        self.require_stack(state, 2, OP_NIP)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_NIP
+        state.evaluate_script(script)
+        assert state.stack == [datas[1]]
+        assert not state.alt_stack
+
+    def test_SWAP(self, state):
+        self.require_stack(state, 2, OP_SWAP)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_SWAP
+        state.evaluate_script(script)
+        assert state.stack == list(reversed(datas))
+        assert not state.alt_stack
+
+    def test_TUCK(self, state):
+        self.require_stack(state, 2, OP_TUCK)
+        push_datas = [self.random_push_data() for _ in range(2)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_TUCK
+        state.evaluate_script(script)
+        assert state.stack == [datas[-1]] + list(datas)
+        assert not state.alt_stack
+
+    def test_ROT(self, state):
+        self.require_stack(state, 3, OP_ROT)
+        push_datas = [self.random_push_data() for _ in range(6)]
+        pushes, datas = list(zip(*push_datas))
+        script = Script().push_many(pushes) << OP_ROT
+        state.evaluate_script(script)
+        assert state.stack == list(datas[:3]) + list(datas[-2:]) + [datas[-3]]
+        assert not state.alt_stack
+
+    def test_PICK(self, state):
+        # If not 2 items; no pop
+        self.require_stack(state, 2, OP_PICK)
+
+        # Test good pick
+        count = random.randrange(1, 8)
+        n = random.randrange(0, count)
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_PICK
+        state.evaluate_script(script)
+        assert state.stack == list(datas) + [datas[-(n + 1)]]
+        assert not state.alt_stack
+        state.reset()
+
+        # Test bad pick
+        n = random.choice([-1, count])
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_PICK
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+        assert state.stack == list(datas)   # All intact, just n is popped
+        assert not state.alt_stack
+
+    def test_ROLL(self, state):
+        # If not 2 items; no pop
+        self.require_stack(state, 2, OP_ROLL)
+
+        # Test good roll
+        count = random.randrange(1, 8)
+        n = random.randrange(0, count)
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_ROLL
+        state.evaluate_script(script)
+        expected = list(datas)
+        expected.append(expected.pop(-(n + 1)))
+        assert state.stack == expected
+        assert not state.alt_stack
+        state.reset()
+
+        # Test bad roll
+        n = random.choice([-1, count])
+        push_datas = [self.random_push_data() for _ in range(count)]
+        pushes = [pair[0] for pair in push_datas]
+        datas = [pair[1] for pair in push_datas]
+        script = Script().push_many(pushes) << n << OP_ROLL
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+        assert state.stack == list(datas)   # All intact, just n is popped
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value,size", (
+        (b'', 0),
+        (b'\x00', 1),
+        (b'\x00\x80', 2),
+        (bytes(20), 20),
+    ))
+    def test_SIZE(self, state, value, size):
+        self.require_stack(state, 1, OP_SIZE)
+        script = Script() << value << OP_SIZE
+        state.evaluate_script(script)
+        assert state.stack == [value, int_to_item(len(value))]
+        assert not state.alt_stack
+
+    def test_TOALTSTACK(self, state):
+        self.require_stack(state, 1, OP_TOALTSTACK)
+        script = Script() << OP_12 << OP_TOALTSTACK
+        state.evaluate_script(script)
+        assert not state.stack
+        assert state.alt_stack == [b'\x0c']
+
+    def test_FROMALTSTACK(self, state):
+        script = Script() << OP_FROMALTSTACK
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+        script = Script() << OP_10 << OP_TOALTSTACK << OP_8 << OP_FROMALTSTACK
+        state.evaluate_script(script)
+        assert state.stack == [b'\x08', b'\x0a']
+        assert not state.alt_stack
+
+
+class TestBitwiseLogic(TestEvaluateScriptBase):
+
+    @pytest.mark.parametrize("value,result", (
+        (b'', b''),
+        (b'\1\2', b'\xfe\xfd'),
+        (bytes(range(256)), bytes(255 - x for x in range(256))),
+    ))
+    def test_INVERT(self, state, value, result):
+        self.require_stack(state, 1, OP_INVERT)
+        script = Script() << value << OP_INVERT
+        state.evaluate_script(script)
+        assert state.stack == [result]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2,result", (
+        ('', '', ''),
+        ('01', '07', '01'),
+        ('01', '0700', None),
+        ('011f', '07ff', '011f'),
+        ('f1f1f1f1f1f1f1f1', '7777777777777777', '7171717171717171'),
+    ))
+    def test_AND(self, state, x1, x2, result):
+        self.require_stack(state, 1, OP_AND)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_AND
+        if result is None:
+            with pytest.raises(InvalidOperandSize):
+                state.evaluate_script(script)
+            assert len(state.stack) == 2
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [bytes.fromhex(result)]
+            assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2,result", (
+        ('', '', ''),
+        ('01', '07', '07'),
+        ('01', '0700', None),
+        ('011f', '07ff', '07ff'),
+        ('f1f1f1f1f1f1f1f1', '7777777777777777', 'f7f7f7f7f7f7f7f7'),
+    ))
+    def test_OR(self, state, x1, x2, result):
+        self.require_stack(state, 1, OP_OR)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_OR
+        if result is None:
+            with pytest.raises(InvalidOperandSize):
+                state.evaluate_script(script)
+            assert len(state.stack) == 2
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [bytes.fromhex(result)]
+            assert not state.alt_stack
+
+    @pytest.mark.parametrize("x1,x2,result", (
+        ('', '', ''),
+        ('01', '07', '06'),
+        ('01', '0700', None),
+        ('011f', '07ff', '06e0'),
+        ('f1f1f1f1f1f1f1f1', '7777777777777777', '8686868686868686'),
+    ))
+    def test_XOR(self, state, x1, x2, result):
+        self.require_stack(state, 1, OP_XOR)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << OP_XOR
+        if result is None:
+            with pytest.raises(InvalidOperandSize):
+                state.evaluate_script(script)
+            assert len(state.stack) == 2
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [bytes.fromhex(result)]
+            assert not state.alt_stack
+
+    @pytest.mark.parametrize("a,b,result", (
+        ('0001', 0, '0001'),
+        ('0001', 1, '0002'),
+        ('0001', 2, '0004'),
+        ('0001', 3, '0008'),
+        ('0001', 5, '0020'),
+        ('0001', 8, '0100'),
+        ('0001', 15, '8000'),
+        ('0001', 16, '0000'),
+        ('0001', 1000, '0000'),
+        ('', 0, ''),
+        ('', 2, ''),
+        ('', 8, ''),
+        ('ff', 0, 'ff'),
+        ('ff', 1, 'fe'),
+        ('ff', 2, 'fc'),
+        ('ff', 3, 'f8'),
+        ('ff', 4, 'f0'),
+        ('ff', 5, 'e0'),
+        ('ff', 6, 'c0'),
+        ('ff', 7, '80'),
+        ('ff', 8, '00'),
+        ('0080', 1, '0100'),
+        ('008000', 1, '010000'),
+        ('000080', 1, '000100'),
+        ('800000', 1, '000000'),
+        ('9f11f555', 0, '9f11f555'),
+        ('9f11f555', 1, '3e23eaaa'),
+        ('9f11f555', 2, '7c47d554'),
+        ('9f11f555', 3, 'f88faaa8'),
+        ('9f11f555', 4, 'f11f5550'),
+        ('9f11f555', 5, 'e23eaaa0'),
+        ('9f11f555', 6, 'c47d5540'),
+        ('9f11f555', 7, '88faaa80'),
+        ('9f11f555', 8, '11f55500'),
+        ('9f11f555', 9, '23eaaa00'),
+        ('9f11f555', 10, '47d55400'),
+        ('9f11f555', 11, '8faaa800'),
+        ('9f11f555', 12, '1f555000'),
+        ('9f11f555', 13, '3eaaa000'),
+        ('9f11f555', 14, '7d554000'),
+        ('9f11f555', 15, 'faaa8000'),
+    ))
+    def test_LSHIFT(self, state_old_utxo, a, b, result):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
+        state_old_utxo.evaluate_script(script)
+        assert state_old_utxo.stack == [value_bytes(result)]
+
+    @pytest.mark.parametrize("a,b",(
+        ('000100', -1),
+        ('01000000', -2),
+    ))
+    def test_LSHIFT_error(self, state_old_utxo, a, b):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_LSHIFT
+        with pytest.raises(NegativeShiftCount):
+            state_old_utxo.evaluate_script(script)
+        assert len(state_old_utxo.stack) == 2
+
+    @pytest.mark.parametrize("a,b,result", (
+        ('1000', 0, '1000'),
+        ('1000', 1, '0800'),
+        ('1000', 2, '0400'),
+        ('1000', 3, '0200'),
+        ('1000', 5, '0080'),
+        ('8000', 8, '0080'),
+        ('8000', 15, '0001'),
+        ('8000', 16, '0000'),
+        ('8000', 100, '0000'),
+        ('', 0, ''),
+        ('', 2, ''),
+        ('', 8, ''),
+        ('ff', 0, 'ff'),
+        ('ff', 1, '7f'),
+        ('ff', 2, '3f'),
+        ('ff', 3, '1f'),
+        ('ff', 4, '0f'),
+        ('ff', 5, '07'),
+        ('ff', 6, '03'),
+        ('ff', 7, '01'),
+        ('ff', 8, '00'),
+        ('0100', 1, '0080'),
+        ('010000', 1, '008000'),
+        ('000100', 1, '000080'),
+        ('000001', 1, '000000'),
+        ('9f11f555', 0, '9f11f555'),
+        ('9f11f555', 1, '4f88faaa'),
+        ('9f11f555', 2, '27c47d55'),
+        ('9f11f555', 3, '13e23eaa'),
+        ('9f11f555', 4, '09f11f55'),
+        ('9f11f555', 5, '04f88faa'),
+        ('9f11f555', 6, '027c47d5'),
+        ('9f11f555', 7, '013e23ea'),
+        ('9f11f555', 8, '009f11f5'),
+        ('9f11f555', 9, '004f88fa'),
+        ('9f11f555', 10, '0027c47d'),
+        ('9f11f555', 11, '0013e23e'),
+        ('9f11f555', 12, '0009f11f'),
+        ('9f11f555', 13, '0004f88f'),
+        ('9f11f555', 14, '00027c47'),
+        ('9f11f555', 15, '00013e23'),
+    ))
+    def test_RSHIFT(self, state_old_utxo, a, b, result):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
+        state_old_utxo.evaluate_script(script)
+        assert state_old_utxo.stack == [value_bytes(result)]
+
+    @pytest.mark.parametrize("a,b",(
+        ('000100', -1),
+        ('01000000', -2),
+    ))
+    def test_RSHIFT_error(self, state_old_utxo, a, b):
+        script = Script() << value_bytes(a) << value_bytes(b) << OP_RSHIFT
+        with pytest.raises(NegativeShiftCount):
+            state_old_utxo.evaluate_script(script)
+        assert len(state_old_utxo.stack) == 2
+
+    @pytest.mark.parametrize("x1,x2", (
+        ('', ''),
+        ('dead', 'dead'),
+        ('01', '07'),
+        ('01', '0100'),
+    ))
+    @pytest.mark.parametrize("opcode", (OP_EQUAL, OP_EQUALVERIFY))
+    def test_EQUAL(self, state, x1, x2, opcode):
+        self.require_stack(state, 2, opcode)
+        script = Script() << bytes.fromhex(x1) << bytes.fromhex(x2) << opcode
+        truth = x1 == x2
+        if opcode == OP_EQUAL:
+            state.evaluate_script(script)
+            assert state.stack == [b'\1' if truth else b'']
+        else:
+            if truth:
+                state.evaluate_script(script)
+                assert not state.stack
+            else:
+                with pytest.raises(EqualVerifyFailed):
+                    state.evaluate_script(script)
+                assert len(state.stack) == 1
+        assert not state.alt_stack
