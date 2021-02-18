@@ -1565,7 +1565,7 @@ def handle_upgradeable_nop(state, op):
 
 def handle_CHECKLOCKTIMEVERIFY(state):
     if not state.flags & InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY:
-        handle_upgradeable_nops(state, OP_NOP2)
+        handle_upgradeable_nop(state, OP_NOP2)
     else:
         state.require_stack_depth(1)
         locktime = state.to_number(state.stack[-1], length_limit=5)
@@ -1576,7 +1576,7 @@ def handle_CHECKLOCKTIMEVERIFY(state):
 
 def handle_CHECKSEQUENCEVERIFY(state):
     if not state.flags & InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY:
-        handle_upgradeable_nops(state, OP_NOP3)
+        handle_upgradeable_nop(state, OP_NOP3)
     else:
         state.require_stack_depth(1)
         sequence = state.to_number(state.stack[-1], length_limit=5)

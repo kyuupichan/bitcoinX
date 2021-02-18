@@ -1,5 +1,6 @@
 import os
 import random
+from itertools import product
 
 import pytest
 import random
@@ -1283,7 +1284,7 @@ class TestEvaluateScript:
         state.evaluate_script(script)
         state.reset()
 
-        script = Script(pack_byte(1) + pack_byte(5))
+        script = Script(bytes([1, 5]))
         if flags == InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
                 state.evaluate_script(script)
@@ -1308,6 +1309,39 @@ class TestEvaluateScript:
         else:
             with pytest.raises(StackSizeTooLarge):
                 state.evaluate_script(script)
+
+    @pytest.mark.parametrize("op, is_utxo_after_genesis",
+                             product((OP_NOP1, OP_NOP2, OP_NOP3, OP_NOP4, OP_NOP5,
+                                      OP_NOP6, OP_NOP7, OP_NOP8, OP_NOP9, OP_NOP10),
+                                     (False, True))
+    )
+    def test_upgradeable_nops(self, policy, is_utxo_after_genesis, op):
+        # Not testing lock time junk
+        if op in {OP_NOP2, OP_NOP3} and not is_utxo_after_genesis:
+            return
+        script = Script() << op
+
+        # No effect with no flags
+        state = InterpreterState(policy, flags=0, is_utxo_after_genesis=is_utxo_after_genesis)
+        state.evaluate_script(script)
+
+        # Reject with flags
+        state = InterpreterState(policy, flags=InterpreterFlags.REJECT_UPGRADEABLE_NOPS,
+                                 is_utxo_after_genesis=is_utxo_after_genesis)
+        with pytest.raises(UpgradeableNopError) as e:
+            state.evaluate_script(script)
+        assert str(e.value) == f'encountered upgradeable NOP {op.name}'
+
+    @pytest.mark.parametrize("is_utxo_after_genesis", (False, True))
+    def test_NOP_not_upgradeable(self, policy, is_utxo_after_genesis):
+        script = Script() << OP_NOP
+
+        # No effect regardless of flags; it's not an upgradeable NOP
+        state = InterpreterState(policy, flags=0, is_utxo_after_genesis=is_utxo_after_genesis)
+        state.evaluate_script(script)
+        state = InterpreterState(policy, flags=InterpreterFlags.REJECT_UPGRADEABLE_NOPS,
+                                 is_utxo_after_genesis=is_utxo_after_genesis)
+        state.evaluate_script(script)
 
     @classmethod
     def setup_class(cls):
@@ -1578,9 +1612,7 @@ class TestEvaluateScript:
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script)
 
-    @pytest.mark.parametrize('op,truth', (
-        (op, truth) for op in (OP_IF, OP_NOTIF) for truth in (False, True)
-    ))
+    @pytest.mark.parametrize('op,truth', product((OP_IF, OP_NOTIF), (False, True)))
     def test_IF_data(self, state, op, truth):
         values = [b'foo', b'bar']
         script = Script() << truth << op << values[0] << OP_ELSE << values[1] << OP_ENDIF
