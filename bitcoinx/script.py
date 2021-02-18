@@ -842,7 +842,6 @@ class InterpreterState:
                                 f'of {limit:,d} bytes')
 
     def to_number(self, item, *, length_limit=None):
-        # FIXME: size_t limiting in some cases
         self.validate_number_length(len(item), limit=length_limit)
 
         if (self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH
