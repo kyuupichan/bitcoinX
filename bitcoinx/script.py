@@ -873,7 +873,7 @@ class InterpreterState:
             raise InvalidSignature('signature has high S value')
 
         if self.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
-            sighash = SigHash(sig_bytes[-1])
+            sighash = SigHash.from_sig_bytes(sig_bytes)
             if not sighash.is_defined():
                 raise InvalidSignature('undefined sighash type')
             if sighash.has_forkid() and not (self.flags & InterpreterFlags.ENABLE_FORKID):
@@ -904,7 +904,7 @@ class InterpreterState:
 
     def cleanup_script_code(self, sig_bytes, script_code):
         '''Return script_code with signatures deleted if pre-BCH fork.'''
-        sighash = SigHash(sig_bytes[-1])
+        sighash = SigHash.from_sig_bytes(sig_bytes)
         if self.flags & InterpreterFlags.ENABLE_FORKID or sighash.has_forkid():
             return script_code
         else:
