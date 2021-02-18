@@ -161,6 +161,12 @@ class SigHash(int):
         '''Return True if ANYONE_CAN_PAY is set.'''
         return bool(self & SigHash.ANYONE_CAN_PAY)
 
+    @classmethod
+    def from_sig_bytes(cls, sig_bytes):
+        if sig_bytes:
+            return cls(sig_bytes[-1])
+        return cls(0)
+
     def has_forkid(self):
         '''Return True if the FORKID bit is set.'''
         return bool(self & SigHash.FORKID)
