@@ -1206,20 +1206,97 @@ class TestEvaluateScript:
         with pytest.raises(ScriptTooLarge):
             state.evaluate_script(script)
 
-    def test_max_ops_per_script(self, state):
-        # TODO: check OP_RESERVED in unexecuted branch contributes to count
+    def test_validate_item_size(self, state):
+        # No limits after genesis
+        if state.is_utxo_after_genesis:
+            state.max_script_size = 10_000_010
+            script = Script() << bytes(10_000_000)
+            state.evaluate_script(script)
+        else:
+            script = Script() << bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
+            state.evaluate_script(script)
+            script = Script() << bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS + 1)
+            with pytest.raises(InvalidPushSize):
+                state.evaluate_script(script)
+
+    def test_max_ops_per_script_good(self, state):
         state.max_ops_per_script = 2
-        script = Script() << OP_NOP << OP_NOP << OP_15 # << OP_RESERVED
+        # Pushes do not contribute to limit
+        script = Script() << 15 << OP_NOP << b'foo' << OP_NOP << OP_15
         state.evaluate_script(script)
-        script = Script() << OP_NOP << OP_NOP << OP_NOP
+
+    def test_max_ops_per_script_op_reserved(self, state):
+        state.max_ops_per_script = 2
+        # OP_RESERVED does not contribute to limit
+        script = Script() << OP_0 << OP_IF << OP_RESERVED << OP_ENDIF
+        state.evaluate_script(script)
+
+    def test_max_ops_per_script_op_reserved(self, state):
+        state.max_ops_per_script = 2
+        script = Script() << OP_1 << OP_IF << OP_NOP << OP_ENDIF
         with pytest.raises(TooManyOps):
             state.evaluate_script(script)
 
-    def xtest_disabled_opcodes(self, state):
-        pass
+    @pytest.mark.parametrize("op", (OP_2MUL, OP_2DIV))
+    def test_disabled_opcodes(self, state, op):
+        script = Script() << op
+        with pytest.raises(DisabledOpcode) as e:
+            state.evaluate_script(script)
+        assert str(e.value) == f'{op.name} is disabled'
 
-    def xtest_minimal_push_opcode(self, state):
-        pass
+        script = Script() << OP_0 << OP_IF << op << OP_ENDIF
+        # After genesis they are OK in unexecuted branches
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(DisabledOpcode):
+                state.evaluate_script(script)
+
+    def test_truncated_script(self, state):
+        script = Script() << b'foobar'
+        script = Script(script.to_bytes()[:-1])
+        with pytest.raises(TruncatedScriptError):
+            state.evaluate_script(script)
+
+    def test_truncated_script_after_op_return(self, state):
+        script = Script() << OP_0 << OP_RETURN << b'foobar'
+        script = Script(script.to_bytes()[:-1])
+        # After genesis with top-level OP_RETURN truncated scripts are OK
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+            state.reset()
+            # But after non-top-level OP_RETURN they are not as grammar is checked
+            script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << b'foobar'
+            script = Script(script.to_bytes()[:-1])
+            with pytest.raises(TruncatedScriptError):
+                state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+
+    @pytest.mark.parametrize("flags", (0, InterpreterFlags.REQUIRE_MINIMAL_PUSH,
+                                       InterpreterFlags.REQUIRE_MINIMAL_IF))
+    def test_minimal_push_executed(self, policy, flags):
+        state = InterpreterState(policy, flags=flags)
+        # This is all fine
+        script = Script() << OP_0 << OP_1 << OP_16 << b'foo' << bytes(300)
+        state.evaluate_script(script)
+        state.reset()
+
+        script = Script(pack_byte(1) + pack_byte(5))
+        if flags == InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+        else:
+            state.evaluate_script(script)
+
+    @pytest.mark.parametrize("flags", (0, InterpreterFlags.REQUIRE_MINIMAL_PUSH,
+                                       InterpreterFlags.REQUIRE_MINIMAL_IF))
+    def test_minimal_push_unexecuted(self, policy, flags):
+        state = InterpreterState(policy, flags=flags)
+        # Not executed, not a problem
+        script = Script(bytes([OP_0, OP_IF, 1, 5, OP_ENDIF]))
+        state.evaluate_script(script)
 
     @pytest.mark.parametrize("big", (True, False))
     def test_validate_stack_size(self, state, big):
@@ -1231,9 +1308,6 @@ class TestEvaluateScript:
         else:
             with pytest.raises(StackSizeTooLarge):
                 state.evaluate_script(script)
-
-    def xtest_test_execute_stack(self, state):
-        pass
 
     @classmethod
     def setup_class(cls):
