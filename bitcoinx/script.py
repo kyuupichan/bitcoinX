@@ -1068,18 +1068,6 @@ class InterpreterState:
 #
 # Control
 #
-
-def opcode_name(op):
-    try:
-        return Ops(op).name
-    except ValueError:
-        return str(op)
-
-
-def invalid_opcode(_state, op):
-    raise InvalidOpcode(f'invalid opcode {opcode_name(op)}')
-
-
 def handle_NOP(_state):
     pass
 
@@ -1141,6 +1129,15 @@ def handle_RETURN(state):
             state.finished = True
     else:
         raise OpReturnError('OP_RETURN encountered')
+
+
+def invalid_opcode(_state, op):
+    try:
+        name = Ops(op).name
+    except ValueError:
+        name = str(op)
+
+    raise InvalidOpcode(f'invalid opcode {name}')
 
 
 #
@@ -1255,7 +1252,6 @@ def handle_PICK_ROLL(state, op):
 #
 # Bitwise logic
 #
-
 def handle_INVERT(state):
     # (x -- out)
     state.require_stack_depth(1)
@@ -1342,7 +1338,6 @@ def handle_RSHIFT(state):
 #
 # Numeric
 #
-
 def handle_unary_numeric(state, unary_op):
     # (x -- out)
     state.require_stack_depth(1)
@@ -1643,8 +1638,6 @@ op_handlers[OP_EQUAL] = handle_EQUAL
 op_handlers[OP_EQUALVERIFY] = handle_EQUALVERIFY
 op_handlers[OP_LSHIFT] = handle_LSHIFT
 op_handlers[OP_RSHIFT] = handle_RSHIFT
-op_handlers[OP_RESERVED1] = partial(invalid_opcode, op=OP_RESERVED1)
-op_handlers[OP_RESERVED2] = partial(invalid_opcode, op=OP_RESERVED2)
 
 #
 # Numeric

@@ -1370,245 +1370,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
             state.evaluate_script(script)
         assert str(e.value) == f'encountered upgradeable NOP {op.name}'
 
-    @pytest.mark.parametrize("is_utxo_after_genesis", (False, True))
-    def test_NOP_not_upgradeable(self, policy, is_utxo_after_genesis):
-        script = Script() << OP_NOP
-
-        # No effect regardless of flags; it's not an upgradeable NOP
-        state = InterpreterState(policy, flags=0, is_utxo_after_genesis=is_utxo_after_genesis)
-        state.evaluate_script(script)
-        state = InterpreterState(policy, flags=InterpreterFlags.REJECT_UPGRADEABLE_NOPS,
-                                 is_utxo_after_genesis=is_utxo_after_genesis)
-        state.evaluate_script(script)
-
-    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
-    def test_IF_unbalanced_outer(self, state, op):
-        script = Script() << OP_1 << op << OP_2
-        with pytest.raises(UnbalancedConditional) as e:
-            state.evaluate_script(script)
-        assert f'unterminated {op.name} at end of script' in str(e.value)
-
-    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
-    def test_IF_unbalanced_inner(self, state, op):
-        script = Script() << OP_2 << OP_2 << op << OP_IF << OP_ENDIF
-        with pytest.raises(UnbalancedConditional) as e:
-            state.evaluate_script(script)
-        assert f'unterminated {op.name} at end of script' in str(e.value)
-
-    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
-    def test_no_value_IF(self, state, op):
-        script = Script() << op
-        with pytest.raises(InvalidStackOperation):
-            state.evaluate_script(script)
-
-    @pytest.mark.parametrize('op,truth', product((OP_IF, OP_NOTIF), (False, True)))
-    def test_IF_data(self, state, op, truth):
-        values = [b'foo', b'bar']
-        script = Script() << truth << op << values[0] << OP_ELSE << values[1] << OP_ENDIF
-        state.evaluate_script(script)
-        assert state.stack == [values[(op == OP_IF) ^ truth]]
-
-    def test_ELSE_unbalanced(self, state):
-        script = Script() << OP_1 << OP_ELSE
-        with pytest.raises(UnbalancedConditional) as e:
-            state.evaluate_script(script)
-        assert 'unexpected OP_ELSE' in str(e.value)
-
-    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
-    def test_ELSE_unbalanced_2(self, state, op):
-        script = Script() << OP_1 << op << OP_ELSE << OP_ENDIF << OP_ELSE
-        with pytest.raises(UnbalancedConditional) as e:
-            state.evaluate_script(script)
-        assert 'unexpected OP_ELSE' in str(e.value)
-
-    def test_double_ELSE(self, state):
-        script = (Script() << OP_0 << OP_IF
-                  << OP_ELSE << b'foo' << OP_ELSE << b'bar' << OP_ELSE << b'baz'
-                  << OP_ENDIF)
-        if state.is_utxo_after_genesis:
-            with pytest.raises(UnbalancedConditional) as e:
-                state.evaluate_script(script)
-            assert 'unexpected OP_ELSE' in str(e.value)
-        else:
-            state.evaluate_script(script)
-            assert state.stack == [b'foo', b'baz']
-
-    def test_ENDIF_unbalanced(self, state):
-        script = Script() << OP_1 << OP_ENDIF
-        with pytest.raises(UnbalancedConditional) as e:
-            state.evaluate_script(script)
-        assert 'unexpected OP_ENDIF' in str(e.value)
-
-    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
-    def test_ENDIF_unbalanced_2(self, state, op):
-        script = Script() << OP_1 << op << OP_ELSE << OP_ENDIF << OP_ENDIF
-        with pytest.raises(UnbalancedConditional) as e:
-            state.evaluate_script(script)
-        assert 'unexpected OP_ENDIF' in str(e.value)
-
-    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
-    def test_require_minimal_if(self, state, op):
-        state.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
-        script = Script() << 2 << op << OP_ENDIF
-        with pytest.raises(MinimalIfError) as e:
-            state.evaluate_script(script)
-        assert 'top of stack not True or False' in str(e.value)
-        assert state.stack[-1] == b'\2'
-        state.reset()
-
-        script = Script() << bytes(1) << op << OP_ENDIF
-        with pytest.raises(MinimalIfError) as e:
-            state.evaluate_script(script)
-        assert 'top of stack not True or False' in str(e.value)
-        assert state.stack[-1] == b'\0'
-        state.reset()
-
-        script = Script() << b'\1\0' << op << OP_ENDIF
-        with pytest.raises(MinimalIfError) as e:
-            state.evaluate_script(script)
-        assert 'top of stack not True or False' in str(e.value)
-        assert state.stack[-1] == b'\1\0'
-        state.reset()
-
-        script = Script() << 0 << op << OP_ENDIF
-        state.evaluate_script(script)
-        state.reset()
-
-        script = Script() << 1 << op << OP_ENDIF
-        state.evaluate_script(script)
-
-    @pytest.mark.parametrize("push", (OP_1, OP_10, OP_1NEGATE, b'foo', b'\1\0', b'\0\1'))
-    def test_VERIFY(self, state, push):
-        self.require_stack(state, 1, OP_VERIFY)
-        script = Script() << push << OP_VERIFY
-        state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    @pytest.mark.parametrize("zero", zeroes)
-    def test_VERIFY_failed(self, state, zero):
-        script = Script() << zero << OP_VERIFY
-        with pytest.raises(VerifyFailed):
-            state.evaluate_script(script)
-        assert state.stack == [zero]
-        assert state.alt_stack == []
-
-    def test_RETURN_immediate(self, state):
-        script = Script() << OP_RETURN
-        if state.is_utxo_after_genesis:
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    def test_RETURN_not_immediate(self, state):
-        script = Script() << OP_1 << OP_RETURN
-        if state.is_utxo_after_genesis:
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == [b'\1']
-        assert state.alt_stack == []
-
-    def test_RETURN_unbalanced_IF(self, state):
-        # Unabalanced ifs after a post-genesis top-level OP_RETURN are fine
-        script = Script() << OP_1 << OP_RETURN << OP_IF
-        if state.is_utxo_after_genesis:
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == [b'\1']
-        assert state.alt_stack == []
-
-    def test_RETURN_invalid_op(self, state):
-        # Invalid opcodes after a post-genesis top-level OP_RETURN are fine
-        script = Script() << OP_0 << OP_RETURN << OP_RESERVED
-        script = Script(script.to_bytes() + b'\0xff')
-        if state.is_utxo_after_genesis:
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == [b'']
-        assert state.alt_stack == []
-
-    def test_RETURN_unexecuted(self, state):
-        # Unexecuted OP_RETURN ignored pre- and post-genesis
-        script = Script() << OP_0 << OP_IF << OP_RETURN << OP_ENDIF
-        state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    def test_RETURN_executed_branch_invalid_grammar(self, state):
-        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_IF
-        if state.is_utxo_after_genesis:
-            with pytest.raises(UnbalancedConditional):
-                state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    def test_RETURN_executed_branch_OP_RETURN_invalid_grammar(self, state):
-        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RETURN << OP_IF
-        if state.is_utxo_after_genesis:
-            # The unabalanced conditional is ignored as the top-level OP_RETURN stops execution
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    def test_RETURN_executed_branch_invalid_opcode_executed(self, state):
-        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RESERVED
-        if state.is_utxo_after_genesis:
-            # It's OK; only check IF grammar
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    def test_RETURN_executed_branch_invalid_opcode_unuexecuted(self, state):
-        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ELSE << OP_RESERVED << OP_ENDIF
-        if state.is_utxo_after_genesis:
-            # It's OK as unexecuted
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(OpReturnError):
-                state.evaluate_script(script)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    @pytest.mark.parametrize('op', (OP_VERIF, OP_VERNOTIF))
-    def test_VERIF_executed(self, state, op):
-        # Unexecuted OP_RETURN ignored pre- and post-genesis
-        script = Script() << op
-        with pytest.raises(InvalidOpcode) as e:
-            state.evaluate_script(script)
-        assert f'invalid opcode {op.name}' in str(e.value)
-        assert state.stack == []
-        assert state.alt_stack == []
-
-    @pytest.mark.parametrize('op', (OP_VERIF, OP_VERNOTIF))
-    def test_VERIF_unexecuted(self, state, op):
-        script = Script() << OP_0 << OP_IF << op << OP_ENDIF
-        if state.is_utxo_after_genesis:
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(InvalidOpcode) as e:
-                state.evaluate_script(script)
-            assert f'invalid opcode {op.name}' in str(e.value)
-        assert state.stack == []
-        assert state.alt_stack == []
-
     @pytest.mark.parametrize('op', reserved_ops)
     def test_reserved_executed(self, state, op):
         script = Script() << OP_0 << op
@@ -1964,11 +1725,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         script = Script().push_many((70000, 70000, OP_MUL, OP_0, OP_ADD))
         with pytest.raises(InvalidNumber):
             state_old_utxo.evaluate_script(script)
-        state_old_utxo.reset()
-
-        # OP_VERIFY (cast_to_bool) is fine
-        script = Script().push_many((70000, 70000, OP_MUL, OP_VERIFY))
-        state_old_utxo.evaluate_script(script)
 
     @pytest.mark.parametrize("a,b,div,mod", (
         (0x185377af, -0x05f41b01, -4, 0x00830bab),
@@ -2072,6 +1828,263 @@ class TestEvaluateScript(TestEvaluateScriptBase):
             state.evaluate_script(script)
         assert 'invalid opcode 255' in str(e.value)
 
+
+class TestControlOperations(TestEvaluateScriptBase):
+
+    def test_NOP(self, state):
+        script = Script() << OP_NOP << OP_NOP
+        state.evaluate_script(script)
+        assert not state.stack
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("is_utxo_after_genesis", (False, True))
+    def test_NOP_not_upgradeable(self, policy, is_utxo_after_genesis):
+        script = Script() << OP_NOP
+
+        # No effect regardless of flags; it's not an upgradeable NOP
+        state = InterpreterState(policy, flags=0, is_utxo_after_genesis=is_utxo_after_genesis)
+        state.evaluate_script(script)
+        state = InterpreterState(policy, flags=InterpreterFlags.REJECT_UPGRADEABLE_NOPS,
+                                 is_utxo_after_genesis=is_utxo_after_genesis)
+        state.evaluate_script(script)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_IF_unbalanced_outer(self, state, op):
+        script = Script() << OP_1 << op << OP_2
+        with pytest.raises(UnbalancedConditional) as e:
+            state.evaluate_script(script)
+        assert f'unterminated {op.name} at end of script' in str(e.value)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_IF_unbalanced_inner(self, state, op):
+        script = Script() << OP_2 << OP_2 << op << OP_IF << OP_ENDIF
+        with pytest.raises(UnbalancedConditional) as e:
+            state.evaluate_script(script)
+        assert f'unterminated {op.name} at end of script' in str(e.value)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_no_value_IF(self, state, op):
+        script = Script() << op
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_no_value_IF_unexecuted(self, state, op):
+        script = Script() << OP_0 << OP_IF << op << OP_ENDIF << OP_ENDIF
+        state.evaluate_script(script)
+
+    @pytest.mark.parametrize('op,truth', product((OP_IF, OP_NOTIF), (False, True)))
+    def test_IF_data(self, state, op, truth):
+        values = [b'foo', b'bar']
+        script = Script() << truth << op << values[0] << OP_ELSE << values[1] << OP_ENDIF
+        state.evaluate_script(script)
+        assert state.stack == [values[(op == OP_IF) ^ truth]]
+
+    def test_ELSE_unbalanced(self, state):
+        script = Script() << OP_1 << OP_ELSE
+        with pytest.raises(UnbalancedConditional) as e:
+            state.evaluate_script(script)
+        assert 'unexpected OP_ELSE' in str(e.value)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_ELSE_unbalanced_2(self, state, op):
+        script = Script() << OP_1 << op << OP_ELSE << OP_ENDIF << OP_ELSE
+        with pytest.raises(UnbalancedConditional) as e:
+            state.evaluate_script(script)
+        assert 'unexpected OP_ELSE' in str(e.value)
+
+    def test_double_ELSE(self, state):
+        script = (Script() << OP_0 << OP_IF
+                  << OP_ELSE << b'foo' << OP_ELSE << b'bar' << OP_ELSE << b'baz'
+                  << OP_ENDIF)
+        if state.is_utxo_after_genesis:
+            with pytest.raises(UnbalancedConditional) as e:
+                state.evaluate_script(script)
+            assert 'unexpected OP_ELSE' in str(e.value)
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [b'foo', b'baz']
+
+    def test_ENDIF_unbalanced(self, state):
+        script = Script() << OP_1 << OP_ENDIF
+        with pytest.raises(UnbalancedConditional) as e:
+            state.evaluate_script(script)
+        assert 'unexpected OP_ENDIF' in str(e.value)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_ENDIF_unbalanced_2(self, state, op):
+        script = Script() << OP_1 << op << OP_ELSE << OP_ENDIF << OP_ENDIF
+        with pytest.raises(UnbalancedConditional) as e:
+            state.evaluate_script(script)
+        assert 'unexpected OP_ENDIF' in str(e.value)
+
+    @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
+    def test_require_minimal_if(self, state, op):
+        state.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
+        script = Script() << 2 << op << OP_ENDIF
+        with pytest.raises(MinimalIfError) as e:
+            state.evaluate_script(script)
+        assert 'top of stack not True or False' in str(e.value)
+        assert state.stack[-1] == b'\2'
+        state.reset()
+
+        script = Script() << bytes(1) << op << OP_ENDIF
+        with pytest.raises(MinimalIfError) as e:
+            state.evaluate_script(script)
+        assert 'top of stack not True or False' in str(e.value)
+        assert state.stack[-1] == b'\0'
+        state.reset()
+
+        script = Script() << b'\1\0' << op << OP_ENDIF
+        with pytest.raises(MinimalIfError) as e:
+            state.evaluate_script(script)
+        assert 'top of stack not True or False' in str(e.value)
+        assert state.stack[-1] == b'\1\0'
+        state.reset()
+
+        script = Script() << 0 << op << OP_ENDIF
+        state.evaluate_script(script)
+        state.reset()
+
+        script = Script() << 1 << op << OP_ENDIF
+        state.evaluate_script(script)
+
+    @pytest.mark.parametrize("push", (OP_1, OP_10, OP_1NEGATE, b'foo', b'\1\0', b'\0\1'))
+    def test_VERIFY(self, state, push):
+        self.require_stack(state, 1, OP_VERIFY)
+        script = Script() << push << OP_VERIFY
+        state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    @pytest.mark.parametrize("zero", zeroes)
+    def test_VERIFY_failed(self, state, zero):
+        script = Script() << zero << OP_VERIFY
+        with pytest.raises(VerifyFailed):
+            state.evaluate_script(script)
+        assert state.stack == [zero]
+        assert state.alt_stack == []
+
+    def test_VERIFY_no_overflow(self, state):
+        # cast_to_bool does not overflow
+        script = Script().push_many((70000, 70000, OP_MUL, OP_VERIFY))
+        state.evaluate_script(script)
+
+    def test_RETURN_immediate(self, state):
+        script = Script() << OP_RETURN
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_not_immediate(self, state):
+        script = Script() << OP_1 << OP_RETURN
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == [b'\1']
+        assert state.alt_stack == []
+
+    def test_RETURN_unbalanced_IF(self, state):
+        # Unabalanced ifs after a post-genesis top-level OP_RETURN are fine
+        script = Script() << OP_1 << OP_RETURN << OP_IF
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == [b'\1']
+        assert state.alt_stack == []
+
+    def test_RETURN_invalid_op(self, state):
+        # Invalid opcodes after a post-genesis top-level OP_RETURN are fine
+        script = Script() << OP_0 << OP_RETURN << OP_RESERVED
+        script = Script(script.to_bytes() + b'\0xff')
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == [b'']
+        assert state.alt_stack == []
+
+    def test_RETURN_unexecuted(self, state):
+        # Unexecuted OP_RETURN ignored pre- and post-genesis
+        script = Script() << OP_0 << OP_IF << OP_RETURN << OP_ENDIF
+        state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_invalid_grammar(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_IF
+        if state.is_utxo_after_genesis:
+            with pytest.raises(UnbalancedConditional):
+                state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_OP_RETURN_invalid_grammar(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RETURN << OP_IF
+        if state.is_utxo_after_genesis:
+            # The unabalanced conditional is ignored as the top-level OP_RETURN stops execution
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_invalid_opcode_executed(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << OP_RESERVED
+        if state.is_utxo_after_genesis:
+            # It's OK; only check IF grammar
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    def test_RETURN_executed_branch_invalid_opcode_unuexecuted(self, state):
+        script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ELSE << OP_RESERVED << OP_ENDIF
+        if state.is_utxo_after_genesis:
+            # It's OK as unexecuted
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(OpReturnError):
+                state.evaluate_script(script)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    @pytest.mark.parametrize('op', (OP_VERIF, OP_VERNOTIF))
+    def test_VERIF_executed(self, state, op):
+        # Unexecuted OP_RETURN ignored pre- and post-genesis
+        script = Script() << op
+        with pytest.raises(InvalidOpcode) as e:
+            state.evaluate_script(script)
+        assert f'invalid opcode {op.name}' in str(e.value)
+        assert state.stack == []
+        assert state.alt_stack == []
+
+    @pytest.mark.parametrize('op', (OP_VERIF, OP_VERNOTIF))
+    def test_VERIF_unexecuted(self, state, op):
+        script = Script() << OP_0 << OP_IF << op << OP_ENDIF
+        if state.is_utxo_after_genesis:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(InvalidOpcode) as e:
+                state.evaluate_script(script)
+            assert f'invalid opcode {op.name}' in str(e.value)
+        assert state.stack == []
+        assert state.alt_stack == []
 
 
 class TestStackOperations(TestEvaluateScriptBase):
