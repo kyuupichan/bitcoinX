@@ -35,7 +35,7 @@ from .errors import (
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
     InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
     InvalidPublicKeyCount, NullDummyError, UpgradeableNopError, LockTimeError, PushOnlyError,
-    CheckSigVerifyFailed, CheckMultiSigVerifyFailed, InvalidSignatureCount,
+    CheckSigVerifyFailed, CheckMultiSigVerifyFailed, InvalidSignatureCount, CleanStackError,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -1076,8 +1076,8 @@ class InterpreterState:
             if not self.stack or not cast_to_bool(self.stack[-1]):
                 return False
 
-        if self.flags & InterpreterFlags.REQUIRE_CLEANSTACK and self.stack:
-            raise CleanStackError('stack is not empty')
+        if self.flags & InterpreterFlags.REQUIRE_CLEANSTACK and len(self.stack) != 1:
+            raise CleanStackError('stack is not clean')
 
         return True
 

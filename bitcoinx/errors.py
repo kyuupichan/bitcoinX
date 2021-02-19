@@ -9,7 +9,7 @@
 
 __all__ = (
     'ScriptError', 'TruncatedScriptError', 'InterpreterError',
-    'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError',
+    'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError', 'CleanStackError',
     'ScriptTooLarge', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',

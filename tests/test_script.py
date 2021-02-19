@@ -1023,7 +1023,7 @@ def create_verify_states():
              InterpreterFlags.REQUIRE_PUSH_ONLY,
              InterpreterFlags.ENABLE_FORKID,
              InterpreterFlags.ENABLE_P2SH,
-             InterpreterFlags.REQUIRE_CLEANSTACK,
+             InterpreterFlags.REQUIRE_CLEANSTACK | InterpreterFlags.ENABLE_P2SH,
             ),
             (True, False), # is_consensus
             (True, False), # is_genesis_enabled
@@ -1548,6 +1548,24 @@ class TestVerifyScript(TestEvaluateScriptBase):
         script_pubkey = Script()
         if state.flags & InterpreterFlags.REQUIRE_PUSH_ONLY:
             with pytest.raises(PushOnlyError):
+                state.verify_script(script_sig, script_pubkey)
+        else:
+            assert state.verify_script(script_sig, script_pubkey) is result
+
+    @pytest.mark.parametrize('script_sig, script_pubkey, triggers, result', (
+        (Script(), Script(), False, False),
+        (Script() << OP_0, Script() << OP_DROP, False, False),
+        (Script() << OP_1 << OP_2, Script() << OP_DROP, False, True),
+        (Script() << OP_0 << OP_2, Script() << OP_DROP, False, False),
+        (Script() << OP_0 << OP_2 << OP_1, Script() << OP_DROP, True, True),
+        (Script() << OP_0 << OP_0, Script(), False, False),
+        (Script() << OP_1 << OP_2, Script(), True, True),
+        (Script() << OP_0 << OP_1 << OP_1, Script() << OP_2DROP, False, False),
+    ))
+    def test_cleanstack(self, verify_state, script_sig, script_pubkey, triggers, result):
+        state = verify_state
+        if state.flags & InterpreterFlags.REQUIRE_CLEANSTACK and triggers:
+            with pytest.raises(CleanStackError):
                 state.verify_script(script_sig, script_pubkey)
         else:
             assert state.verify_script(script_sig, script_pubkey) is result
