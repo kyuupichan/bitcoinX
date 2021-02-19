@@ -564,6 +564,31 @@ class TestScript:
         op = bytes.fromhex(op_hex)
         assert Script.op_to_asm_word(op, True) == word
 
+    @pytest.mark.parametrize("script,result", (
+        (Script() << OP_0, True),
+        (Script() << OP_0 << OP_15, True),
+        (Script() << OP_0 << OP_15 << OP_NOP, False),
+        (Script() << OP_RESERVED, True),
+        (Script(), True),
+        (Script() << b'foobar' << b'baz', True),
+        (Script() << OP_1 << b'foobar' << b'baz' << OP_1NEGATE, True),
+        # Truncated Script
+        (Script(b'\0\x01'), False),
+    ))
+    def test_is_push_only(self, script, result):
+        assert script.is_push_only() is result
+
+    @pytest.mark.parametrize("script,result", (
+        (Script(), False),
+        (Script() << OP_0, False),
+        (Script() << OP_HASH160 << bytes(20) << OP_EQUAL, True),
+        (Script() << OP_HASH256 << bytes(20) << OP_EQUAL, False),
+        (Script() << OP_HASH160 << bytes(19) << OP_EQUAL, False),
+        (Script() << OP_HASH160 << bytes(20) << OP_NUMEQUAL, False),
+    ))
+    def test_is_P2SH(self, script, result):
+        assert script.is_P2SH() is result
+
     def test_to_bytes(self):
         data = os.urandom(15)
         script = Script(data)
@@ -982,6 +1007,39 @@ numeric_states = create_numeric_states()
 
 @pytest.fixture(params=numeric_states)
 def numeric_state(request):
+    state = request.param
+    flags = state.flags
+    yield state
+    state.flags = flags
+    state.reset()
+
+
+def create_verify_states():
+    result = []
+
+    for policy, flags, is_consensus, is_genesis_enabled, is_utxo_after_genesis in product(
+            policies,
+            (0,
+             InterpreterFlags.REQUIRE_PUSH_ONLY,
+             InterpreterFlags.ENABLE_FORKID,
+             InterpreterFlags.ENABLE_P2SH,
+             InterpreterFlags.REQUIRE_CLEANSTACK,
+            ),
+            (True, False), # is_consensus
+            (True, False), # is_genesis_enabled
+            (True, False), # is_utxo_after_genesis
+    ):
+        result.append(InterpreterState(
+            policy, flags=flags, is_consensus=is_consensus, is_genesis_enabled=is_genesis_enabled,
+            is_utxo_after_genesis=is_utxo_after_genesis,
+        ))
+
+    return result
+
+verify_states = create_verify_states()
+
+@pytest.fixture(params=verify_states)
+def verify_state(request):
     state = request.param
     flags = state.flags
     yield state
@@ -1480,15 +1538,33 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         assert state.stack == []
         assert state.alt_stack == []
 
-    def test_CAT(self, state):
+
+class TestVerifyScript(TestEvaluateScriptBase):
+
+    @pytest.mark.parametrize('result', (True, False))
+    def test_sig_push_only(self, verify_state, result):
+        state = verify_state
+        script_sig = Script() << OP_0 << OP_DROP << int(result)
+        script_pubkey = Script()
+        if state.flags & InterpreterFlags.REQUIRE_PUSH_ONLY:
+            with pytest.raises(PushOnlyError):
+                state.verify_script(script_sig, script_pubkey)
+        else:
+            assert state.verify_script(script_sig, script_pubkey) is result
+
+
+class TestByteStringOperations(TestEvaluateScriptBase):
+
+    def test_CAT(self, numeric_state):
+        state = numeric_state
         self.require_stack(state, 2, OP_CAT)
         script = Script() << b'foo' << b'bar' << OP_CAT
         state.evaluate_script(script)
         assert state.stack == [b'foobar']
         assert state.alt_stack == []
 
-    def test_CAT_size_enforced(self, state):
-        self.require_stack(state, 2, OP_CAT)
+    def test_CAT_size_enforced(self, numeric_state):
+        state = numeric_state
 
         item = bytes(state.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
         script = Script() << item << b'' << OP_CAT
@@ -1611,6 +1687,19 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         # Stack contains the result even on failure
         assert len(state.stack) == 1
         assert state.stack[0].hex() == result
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("value,size", (
+        (b'', 0),
+        (b'\x00', 1),
+        (b'\x00\x80', 2),
+        (bytes(20), 20),
+   ))
+    def test_SIZE(self, state, value, size):
+        self.require_stack(state, 1, OP_SIZE)
+        script = Script() << value << OP_SIZE
+        state.evaluate_script(script)
+        assert state.stack == [value, int_to_item(len(value))]
         assert not state.alt_stack
 
 
@@ -2464,19 +2553,6 @@ class TestStackOperations(TestEvaluateScriptBase):
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script)
         assert state.stack == list(datas)   # All intact, just n is popped
-        assert not state.alt_stack
-
-    @pytest.mark.parametrize("value,size", (
-        (b'', 0),
-        (b'\x00', 1),
-        (b'\x00\x80', 2),
-        (bytes(20), 20),
-   ))
-    def test_SIZE(self, state, value, size):
-        self.require_stack(state, 1, OP_SIZE)
-        script = Script() << value << OP_SIZE
-        state.evaluate_script(script)
-        assert state.stack == [value, int_to_item(len(value))]
         assert not state.alt_stack
 
     def test_TOALTSTACK(self, state):
