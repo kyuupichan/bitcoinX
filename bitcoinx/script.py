@@ -949,7 +949,7 @@ class InterpreterState:
         # Numeric comparison
         if locktime > self.tx.locktime:
             raise LockTimeError(f'locktime {locktime:,d} not reached')
-        if self.tx.inputs[input_index].sequence == SEQUENCE_FINAL:
+        if self.tx.inputs[self.input_index].sequence == SEQUENCE_FINAL:
             raise LockTimeError('transaction input is final')
 
     def validate_sequence(self, sequence):
@@ -967,8 +967,9 @@ class InterpreterState:
         txin_seq &= mask
         if (sequence < SEQUENCE_LOCKTIME_TYPE_FLAG) ^ (txin_seq < SEQUENCE_LOCKTIME_TYPE_FLAG):
             raise LockTimeError('sequences are not comparable')
+        print(sequence, txin_seq)
         if sequence > txin_seq:
-            raise LockTimeError(f'masked sequence number {sequence} not reached')
+            raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
     def handle_upgradeable_nop(self, op):
         '''Raise on upgradeable nops if the flag is set.'''
