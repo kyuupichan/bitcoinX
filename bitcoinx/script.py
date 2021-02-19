@@ -25,7 +25,7 @@ import attr
 
 from .consts import (
     JSONFlags, LOCKTIME_THRESHOLD, SEQUENCE_FINAL, SEQUENCE_LOCKTIME_DISABLE_FLAG,
-    SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG,
+    SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG, UINT32_MAX, INT32_MAX,
 )
 from .errors import (
     ScriptError, TruncatedScriptError, InterpreterError,
@@ -35,7 +35,7 @@ from .errors import (
     VerifyFailed, OpReturnError, InvalidOpcode, InvalidSplit, ImpossibleEncoding,
     InvalidNumber, InvalidOperandSize, EqualVerifyFailed, InvalidSignature, NullFailError,
     InvalidPublicKeyCount, NullDummyError, UpgradeableNopError, LockTimeError, PushOnlyError,
-    CheckSigVerifyFailed, CheckMultiSigVerifyFailed,
+    CheckSigVerifyFailed, CheckMultiSigVerifyFailed, InvalidSignatureCount,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .misc import int_to_le_bytes, le_bytes_to_int
@@ -684,8 +684,6 @@ class Script:
         return template, items
 
 
-UINT32_MAX = 0xffffffff
-INT32_MAX = 0x7fffffff
 bool_items = [b'', b'\1']
 
 

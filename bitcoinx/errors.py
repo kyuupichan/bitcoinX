@@ -14,8 +14,9 @@ __all__ = (
     'InvalidPushSize', 'DisabledOpcode', 'UnbalancedConditional', 'InvalidStackOperation',
     'VerifyFailed', 'OpReturnError', 'InvalidOpcode', 'InvalidSplit', 'ImpossibleEncoding',
     'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'NullFailError',
-    'InvalidPublicKeyEncoding', 'InvalidSignature', 'NullDummyError',
+    'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
+    'InvalidSignatureCount',
 )
 
 

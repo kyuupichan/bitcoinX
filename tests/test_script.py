@@ -5,7 +5,7 @@ from itertools import product
 import pytest
 import random
 
-from bitcoinx.consts import JSONFlags
+from bitcoinx.consts import JSONFlags, UINT32_MAX, INT32_MAX
 from bitcoinx.errors import *
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from bitcoinx.script import *
@@ -2661,6 +2661,18 @@ def hybrid_encoding(pubkey):
     return pack_byte(short[0] + 4) + encoding[1:]
 
 
+def make_not_strict_DER(sig):
+    # Put an extra byte on the end
+    return bytes([sig[0], sig[1] + 1]) + sig[2:] + pack_byte(0)
+
+
+def make_not_low_S(sig):
+    compact_sig = der_signature_to_compact(sig)
+    s = be_bytes_to_int(compact_sig[32:])
+    compact_sig_high_S = compact_sig[:32] + int_to_be_bytes(CURVE_ORDER - s, 32)
+    return compact_signature_to_der(compact_sig_high_S)
+
+
 def checksig_scripts(state, sighash, op, kind):
     script_pubkey = Script() << op
 
@@ -2670,13 +2682,9 @@ def checksig_scripts(state, sighash, op, kind):
         state.input_index, state.value + (kind == 'bad_value'), script_pubkey, sighash=sighash)
     sig = privkey.sign(message_hash, hasher=None)
     if kind == 'not_strict_DER':
-        # Put an extra byte on the end
-        sig = bytes([sig[0], sig[1] + 1]) + sig[2:] + pack_byte(0)
+        sig = make_not_strict_DER(sig)
     elif kind == 'not_low_S':
-        compact_sig = der_signature_to_compact(sig)
-        s = be_bytes_to_int(compact_sig[32:])
-        compact_sig_high_S = compact_sig[:32] + int_to_be_bytes(CURVE_ORDER - s, 32)
-        sig = compact_signature_to_der(compact_sig_high_S)
+        sig = make_not_low_S(sig)
     sig += pack_byte(sighash)
     if kind == 'empty_sig':
         sig = b''
@@ -2691,31 +2699,76 @@ def checksig_scripts(state, sighash, op, kind):
     return script_sig, script_pubkey
 
 
-def checkmultisig_scripts(state, sighash, op, kind):
+def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
+    min_n = max(min_m, 0)
+
     # Let's test m of n multisig.  m, and or n, can be zero.
-    n = random.randrange(0, 8)
-    m = random.randrange(0, n + 1)
+    n = random.randrange(min_n, 10)
+    m = random.randrange(min_m, n + 1)
 
     privkeys = [PrivateKey.from_random() for _ in range(n)]
-    # Pubkey script pushes the public keys and then their count followed by OP_CHECKMULTISIG
-    script_pubkey = Script() << m
-    script_pubkey = script_pubkey.push_many(privkey.public_key.to_bytes()
-                                            for privkey in privkeys)
-    script_pubkey = script_pubkey.push_many((n, op))
 
     # Sign the transaction with the first m keys after a random shuffle. The script_sig
     # must begin with the dummy push.
-    keys_to_use = list(privkeys)[:m]
+    keys_to_use = list(privkeys)
     random.shuffle(keys_to_use)
+    keys_to_use = keys_to_use[:m]
+    indexes_used = [privkeys.index(key) for key in keys_to_use]
+
+    pubkey_encodings = [privkey.public_key.to_bytes() for privkey in privkeys]
+    if kind == 'bad_pubkey_encoding':
+        index = random.randrange(min(indexes_used), len(pubkey_encodings))
+        pubkey_encodings[index] = hybrid_encoding(privkeys[index].public_key)
+    elif kind == 'bad_pubkey_encoding_missed' and min(indexes_used, default=-1) > 0:
+        index = random.randrange(0, min(indexes_used))
+        pubkey_encodings[index] = hybrid_encoding(privkeys[index].public_key)
+    elif kind == 'invalid_pubkey':
+        index = random.choice(indexes_used)
+        pubkey_encodings[index] = b'\2' + bytes(32)
+    elif kind == 'invalid_pubkey_missed' and m < n:
+        index = random.choice(list(set(range(n)).difference(indexes_used)))
+        pubkey_encodings[index] = b'\2' + bytes(32)
+
+    # Pubkey script pushes the public keys and then their count followed by OP_CHECKMULTISIG
+    script_pubkey = Script() << m
+    script_pubkey = script_pubkey.push_many(pubkey_encodings)
+    script_pubkey = script_pubkey.push_many((n, op))
+
     message_hash = state.tx.signature_hash(
-        state.input_index, state.value, script_pubkey, sighash=sighash)
+        state.input_index, state.value + (kind == 'bad_value'), script_pubkey, sighash=sighash)
     # Sigs must be in order of the keys
-    sigs = [privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
+    sigs = [privkey.sign(message_hash, hasher=None)
             for privkey in privkeys if privkey in keys_to_use]
-    script_sig = Script() << OP_0
+
+    if sigs:
+        index = random.randrange(0, len(sigs))
+        sig = sigs[index]
+        if kind == 'not_strict_DER':
+            sigs[index] = make_not_strict_DER(sigs[index])
+        elif kind == 'not_low_S':
+            sigs[index] = make_not_low_S(sigs[index])
+        sigs = [sig + pack_byte(sighash) for sig in sigs]
+        if kind == 'empty_sig':
+            sigs[index] = b''
+        elif kind == 'all_empty_sig':
+            sigs = [b''] * len(sigs)
+        if kind == 'wrong_order':
+            assert m >= 2
+            while True:
+                other_index = random.randrange(0, len(sigs))
+                if other_index != index:
+                    break
+            sigs[index], sigs[other_index] = sigs[other_index], sigs[index]
+
+    if kind == 'no_dummy':
+        script_sig = Script()
+    elif kind == 'nonnull_dummy':
+        script_sig = Script() << b'\0'
+    else:
+        script_sig = Script() << OP_0
     script_sig = script_sig.push_many(sigs)
 
-    return script_sig, script_pubkey
+    return script_sig, script_pubkey, m, n
 
 
 class TestCrypto(TestEvaluateScriptBase):
@@ -2796,10 +2849,10 @@ class TestCrypto(TestEvaluateScriptBase):
                 state.evaluate_script(script_pubkey)
         assert state.stack == [b'']
 
-    def test_CHECKSIG_not_strict_DER(self, checksig_state):
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_not_strict_DER(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        op = OP_CHECKSIGVERIFY
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'not_strict_DER')
         state.evaluate_script(script_sig)
         if state.flags & (InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.REQUIRE_LOW_S
@@ -2811,10 +2864,10 @@ class TestCrypto(TestEvaluateScriptBase):
         else:
             state.evaluate_script(script_pubkey)
 
-    def test_CHECKSIG_not_low_S(self, checksig_state):
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_not_low_S(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        op = OP_CHECKSIGVERIFY
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'not_low_S')
         state.evaluate_script(script_sig)
         if state.flags & InterpreterFlags.REQUIRE_LOW_S:
@@ -2825,10 +2878,10 @@ class TestCrypto(TestEvaluateScriptBase):
         else:
             state.evaluate_script(script_pubkey)
 
-    def test_CHECKSIG_bad_sighash(self, checksig_state):
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_bad_sighash(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state, valid=False)
-        op = OP_CHECKSIGVERIFY
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'good')
         state.evaluate_script(script_sig)
         if state.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
@@ -2844,10 +2897,10 @@ class TestCrypto(TestEvaluateScriptBase):
         else:
             state.evaluate_script(script_pubkey)
 
-    def test_CHECKSIG_bad_pubkey_encoding(self, checksig_state):
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_bad_pubkey_encoding(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        op = OP_CHECKSIGVERIFY
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_pubkey_encoding')
         state.evaluate_script(script_sig)
         if state.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
@@ -2858,24 +2911,32 @@ class TestCrypto(TestEvaluateScriptBase):
         else:
             state.evaluate_script(script_pubkey)
 
-    def test_CHECKSIG_empty_sig(self, checksig_state):
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_empty_sig(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        op = OP_CHECKSIG
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'empty_sig')
         state.evaluate_script(script_sig)
-        # Empty sig should not raise any errors but just fail a signature check
-        state.evaluate_script(script_pubkey)
+        if op == OP_CHECKSIG:
+            # Empty sig should not raise any errors but just fail a signature check
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
         assert state.stack == [b'']
 
-    def test_CHECKSIG_invalid_pubkey(self, checksig_state):
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_invalid_pubkey(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        op = OP_CHECKSIG
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'invalid_pubkey')
         state.evaluate_script(script_sig)
-        # Invalid public key should not raise any errors but just fail a signature check
-        state.evaluate_script(script_pubkey)
+        if op == OP_CHECKSIG:
+            # Invalid public key should not raise any errors but just fail a signature check
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
         assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
@@ -2885,7 +2946,6 @@ class TestCrypto(TestEvaluateScriptBase):
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_value')
         state.evaluate_script(script_sig)
 
-        # Invalid public key should not raise any errors but just fail a signature check
         old_flags = state.flags
         try:
             state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
@@ -2911,7 +2971,7 @@ class TestCrypto(TestEvaluateScriptBase):
         state = checksig_state
         sighash = random_sighash(state)
 
-        script_sig, script_pubkey = checkmultisig_scripts(state, sighash, op, 'good')
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'good')
 
         # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
@@ -2923,16 +2983,338 @@ class TestCrypto(TestEvaluateScriptBase):
             assert not state.stack
         assert not state.alt_stack
 
-    #     # Now test with sigs in wrong order
-    #     if m >= 2:
-    #         state.reset()
-    #         script_sig = Script() << OP_0
-    #         script_sig = script_sig.push_many(reversed(sigs))
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_wrong_order(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
 
-    #         state.evaluate_script(script_sig)
-    #         if op == OP_CHECKMULTISIG:
-    #             state.evaluate_script(script_pubkey)
-    #         else:
-    #             with pytest.raises(CheckMultiSigVerifyFailed):
-    #                 state.evaluate_script(script_pubkey)
-    #         assert state.stack == [b'']
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op,
+                                                                'wrong_order', min_m=2)
+
+        # The sigs are good but in the wrong order
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKMULTISIG:
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckMultiSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
+        assert state.stack == [b'']
+
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_stack_size(self, checksig_state, op):
+        state = checksig_state
+        script = Script() << op
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+        state.reset()
+
+        script = Script() << OP_0 << op
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+        state.reset()
+
+        # This would be OK but there is no dummy
+        script = Script() << OP_0 << OP_0 << op
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+        state.reset()
+
+        # This is OK - no sigs, no pubkeys
+        script = Script() << OP_0 << OP_0 << OP_0 << op
+        state.evaluate_script(script)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_key_count(self, checksig_state, op):
+        # This test also ends up loosely testing excessive op count, invalid stack operations,
+        # minimal encoding and the 4-byte rule
+        state = checksig_state
+        script = Script() << OP_0 << OP_0 << OP_1NEGATE << op
+        with pytest.raises(InvalidPublicKeyCount) as e:
+            state.evaluate_script(script)
+        assert 'number of public keys, -1, in OP_CHECKMULTISIG lies outside' in str(e.value)
+        state.reset()
+
+        script = Script() << OP_0 << OP_0 << state.max_pubkeys_per_multisig << op
+        if state.max_pubkeys_per_multisig > INT32_MAX:
+            with pytest.raises(InvalidNumber) as e:
+                state.evaluate_script(script)
+            assert 'number of length 5 exceeds the limit of 4 bytes' in str(e.value)
+        else:
+            if state.max_pubkeys_per_multisig >= state.max_ops_per_script:
+                with pytest.raises(TooManyOps) as e:
+                    state.evaluate_script(script)
+                assert 'op count exceeds the limit of ' in str(e.value)
+            else:
+                with pytest.raises(InvalidStackOperation):
+                    state.evaluate_script(script)
+        state.reset()
+
+        script = Script() << OP_0 << OP_0 << state.max_pubkeys_per_multisig + 1 << op
+        if state.max_pubkeys_per_multisig > INT32_MAX:
+            with pytest.raises(InvalidNumber) as e:
+                state.evaluate_script(script)
+            assert 'number of length 5 exceeds the limit of 4 bytes' in str(e.value)
+        else:
+            with pytest.raises(InvalidPublicKeyCount) as e:
+                state.evaluate_script(script)
+        state.reset()
+
+        script = Script() << OP_0 << OP_0 << int_to_item(0, 5) << op
+        with pytest.raises(InvalidNumber) as e:
+            state.evaluate_script(script)
+        assert 'number of length 5 exceeds the limit of 4 bytes' in str(e.value)
+        state.reset()
+
+        script = Script() << OP_0 << OP_0 << int_to_item(0, 2) << op
+        if state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+        else:
+            state.evaluate_script(script)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_op_count(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+
+        script_sig, script_pubkey, _, n = checkmultisig_scripts(state, sighash, op, 'good')
+
+        # This should complete if the correct script is signed
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+
+        # 1 for the CHECKMULTISIG op, n for the number of keys
+        assert state.op_count == n + 1
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_sig_count(self, checksig_state, op):
+        # This test also ends up loosely testing excessive op count, invalid stack operations,
+        # minimal encoding and the 4-byte rule
+        state = checksig_state
+        script = Script() << OP_0 << OP_1NEGATE << OP_0 << op
+        with pytest.raises(InvalidSignatureCount) as e:
+            state.evaluate_script(script)
+        assert 'number of signatures, -1, in OP_CHECKMULTISIG lies outside' in str(e.value)
+        state.reset()
+
+        key_count = random.randrange(1, 10)
+        sig_count = key_count + 1
+        script = Script() << sig_count
+        script = script.push_many([OP_0] * key_count + [key_count, op])
+        with pytest.raises(InvalidSignatureCount) as e:
+            state.evaluate_script(script)
+        assert f'number of signatures, {sig_count}, in OP_CHECKMULTISIG lies ' in str(e.value)
+        state.reset()
+
+        script = Script() << int_to_item(0, 5) << OP_0 << op
+        with pytest.raises(InvalidNumber) as e:
+            state.evaluate_script(script)
+        assert 'number of length 5 exceeds the limit of 4 bytes' in str(e.value)
+        state.reset()
+
+        script = Script() << OP_0 << int_to_item(0, 2) << OP_0 << op
+        if state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+        else:
+            state.evaluate_script(script)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_sig_stack_depth(self, checksig_state, op):
+        # This test also ends up loosely testing excessive op count, invalid stack operations,
+        # minimal encoding and the 4-byte rule
+        state = checksig_state
+
+        key_count = random.randrange(2, 6)
+        sig_count = random.randrange(1, key_count + 1)
+        # Push one too few sigs
+        script = Script().push_many([OP_0] * (sig_count - 1) + [sig_count])
+        script = script.push_many([OP_0] * key_count + [key_count, op])
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_bad_sig(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'bad_value',
+                                                                min_m=1)
+
+        # This should complete if the correct script is signed
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKMULTISIG:
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckMultiSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
+        assert state.stack == [b'']
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_not_strict_DER(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'not_strict_DER', min_m=1)
+        state.evaluate_script(script_sig)
+        if state.flags & (InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.REQUIRE_LOW_S
+                          | InterpreterFlags.REQUIRE_STRICT_ENCODING):
+            with pytest.raises(InvalidSignature) as e:
+                state.evaluate_script(script_pubkey)
+            assert 'strict DER encoding' in str(e.value)
+            assert len(state.stack) == m + n + 3
+        else:
+            state.evaluate_script(script_pubkey)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_not_low_S(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'not_low_S', min_m=1)
+        state.evaluate_script(script_sig)
+        if state.flags & InterpreterFlags.REQUIRE_LOW_S:
+            with pytest.raises(InvalidSignature) as e:
+                state.evaluate_script(script_pubkey)
+            assert 'signature has high S value' in str(e.value)
+            assert len(state.stack) == m + n + 3
+        else:
+            state.evaluate_script(script_pubkey)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_bad_sighash(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state, valid=False)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'good', min_m=1)
+        state.evaluate_script(script_sig)
+        if state.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
+            with pytest.raises(InvalidSignature) as e:
+                state.evaluate_script(script_pubkey)
+            if not sighash.is_defined():
+                assert 'undefined sighash type' in str(e.value)
+            elif sighash.has_forkid():
+                assert 'sighash must not use FORKID' in str(e.value)
+            else:
+                assert 'sighash must use FORKID' in str(e.value)
+            assert len(state.stack) == m + n + 3
+        else:
+            state.evaluate_script(script_pubkey)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_bad_pubkey_encoding(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'bad_pubkey_encoding', min_m=1)
+        state.evaluate_script(script_sig)
+        # Only public keys actually used are checked
+        if state.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
+            with pytest.raises(InvalidPublicKeyEncoding) as e:
+                state.evaluate_script(script_pubkey)
+            assert 'invalid public key encoding' == str(e.value)
+            assert len(state.stack) == m + n + 3
+        else:
+            state.evaluate_script(script_pubkey)
+
+        # Bad encodings are only noticed if consumed...
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(
+            state, sighash, op, 'bad_pubkey_encoding_skipped')
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_empty_sig(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'empty_sig', min_m=1)
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKMULTISIG:
+            # Empty sig should not raise any errors but just fail a signature check
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckMultiSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
+        assert state.stack == [b'']
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_invalid_pubkey(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'invalid_pubkey', min_m=1)
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKMULTISIG:
+            # Invalid public key should not raise any errors but just fail a signature check
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckMultiSigVerifyFailed):
+                state.evaluate_script(script_pubkey)
+        assert state.stack == [b'']
+
+        state.reset()
+        # If the pubkey is not used, its invalid state is missed
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'invalid_pubkey_missed', min_m=1)
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_NULLFAIL(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'bad_value', min_m=1)
+
+        state.evaluate_script(script_sig)
+
+        old_flags = state.flags
+        try:
+            state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            assert len(state.stack) <= m + 1
+
+            # Now try with an empty sig
+            state.reset()
+            script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                    'all_empty_sig', min_m=1)
+            state.evaluate_script(script_sig)
+            if op == OP_CHECKMULTISIG:
+                state.evaluate_script(script_pubkey)
+            else:
+                with pytest.raises(CheckMultiSigVerifyFailed):
+                    state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
+        finally:
+            state.flags = old_flags
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_DUMMY(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+
+        # Test we need a dummy
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op, 'no_dummy')
+        state.evaluate_script(script_sig)
+        with pytest.raises(InvalidStackOperation):
+            state.evaluate_script(script_pubkey)
+        state.reset()
+
+        # Test non-null dummy
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'nonnull_dummy')
+        state.evaluate_script(script_sig)
+        # Fine with non-null dummy
+        state.evaluate_script(script_pubkey)
+        state.reset()
+
+        old_flags = state.flags
+        try:
+            state.flags |= InterpreterFlags.REQUIRE_NULLDUMMY
+            state.evaluate_script(script_sig)
+            with pytest.raises(NullDummyError):
+                state.evaluate_script(script_pubkey)
+        finally:
+            state.flags = old_flags
