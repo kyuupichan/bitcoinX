@@ -5,7 +5,10 @@ from itertools import product
 import pytest
 import random
 
-from bitcoinx.consts import JSONFlags, UINT32_MAX, INT32_MAX
+from bitcoinx.consts import (
+    JSONFlags, UINT32_MAX, INT32_MAX, SEQUENCE_FINAL, SEQUENCE_LOCKTIME_DISABLE_FLAG,
+    SEQUENCE_LOCKTIME_TYPE_FLAG,
+)
 from bitcoinx.errors import *
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from bitcoinx.script import *
@@ -984,6 +987,40 @@ def checksig_state(request):
     state.reset()
 
 
+def create_checklocktime_states():
+    tx = random_tx()
+    input_index = random.randrange(0, len(tx.inputs))
+    value = random_value()
+
+    result = []
+    for policy, flags, is_consensus, is_genesis_enabled in product(
+            policies,
+            (0,
+             InterpreterFlags.REQUIRE_MINIMAL_PUSH,
+            ),
+            (True, False), # is_consensus
+            (True, False), # is_genesis_enabled
+    ):
+        flags += (InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY
+                  | InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY)
+        result.append(InterpreterState(policy, flags=flags, is_consensus=is_consensus,
+                                       is_genesis_enabled=is_genesis_enabled,
+                                       is_utxo_after_genesis=False,
+                                       tx=tx, input_index=input_index, value=value))
+
+    return result
+
+checklocktime_states = create_checklocktime_states()
+
+@pytest.fixture(params=checklocktime_states)
+def checklocktime_state(request):
+    state = request.param
+    flags = state.flags
+    yield state
+    state.flags = flags
+    state.reset()
+
+
 def create_numeric_states():
     result = []
 
@@ -1606,6 +1643,125 @@ class TestVerifyScript(TestEvaluateScriptBase):
         with pytest.raises(PushOnlyError) as e:
             state.verify_script(script_sig, script_pubkey)
         assert 'P2SH script_sig is not pushdata only' == str(e.value)
+
+
+class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
+
+    def test_CLTV_negative(self, checklocktime_state):
+        state = checklocktime_state
+        self.require_stack(state, 1, OP_CHECKLOCKTIMEVERIFY)
+        script = Script() << OP_1NEGATE << OP_CHECKLOCKTIMEVERIFY
+        with pytest.raises(LockTimeError) as e:
+            state.evaluate_script(script)
+        assert f'locktime -1 is negative' in str(e.value)
+
+    def test_CLTV_number_length(self, checklocktime_state):
+        state = checklocktime_state
+        script = Script() << bytes(6) << OP_CHECKLOCKTIMEVERIFY
+        with pytest.raises(InvalidNumber) as e:
+            state.evaluate_script(script)
+
+    def test_CLTV_minimal(self, checklocktime_state):
+        state = checklocktime_state
+        state.tx.locktime = 1
+        state.tx.inputs[state.input_index].sequence = 5000
+        script = Script() << bytes(5) << OP_CHECKLOCKTIMEVERIFY
+        if state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+        else:
+            state.evaluate_script(script)
+        # Nothing is popped
+        assert len(state.stack) == 1
+
+    @pytest.mark.parametrize("locktime, tx_locktime, is_final, text", (
+        (499_000_000, 1_000_000_000, None, 'locktimes are not comparable'),
+        (1_000_000_000, 499_000_000, None, 'locktimes are not comparable'),
+        (1_234_567, 800_000, None, 'locktime 1,234,567 not reached'),
+        (800_000, 800_000, False, None),
+        (100_000, 800_000, False, None),
+        (800_000, 800_000, True, 'transaction input is final'),
+        (100_000, 800_000, True, 'transaction input is final'),
+    ))
+    def test_CLTV(self, checklocktime_state, locktime, tx_locktime, is_final, text):
+        state = checklocktime_state
+        state.tx.locktime = tx_locktime
+        state.tx.inputs[state.input_index].sequence = SEQUENCE_FINAL if is_final else 5000
+        script = Script() << locktime << OP_CHECKLOCKTIMEVERIFY
+        if text is None:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(LockTimeError) as e:
+                state.evaluate_script(script)
+            assert text in str(e.value)
+        assert len(state.stack) == 1
+
+    def test_CSV_negative(self, checklocktime_state):
+        state = checklocktime_state
+        self.require_stack(state, 1, OP_CHECKSEQUENCEVERIFY)
+        script = Script() << OP_1NEGATE << OP_CHECKSEQUENCEVERIFY
+        with pytest.raises(LockTimeError) as e:
+            state.evaluate_script(script)
+        assert f'sequence -1 is negative' in str(e.value)
+
+    def test_CSV_number_length(self, checklocktime_state):
+        state = checklocktime_state
+        script = Script() << bytes(6) << OP_CHECKSEQUENCEVERIFY
+        with pytest.raises(InvalidNumber) as e:
+            state.evaluate_script(script)
+
+    def test_CSV_minimal(self, checklocktime_state):
+        state = checklocktime_state
+        state.tx.version = 2
+        state.tx.inputs[state.input_index].sequence = 0
+        script = Script() << bytes(5) << OP_CHECKSEQUENCEVERIFY
+        if state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+        else:
+            state.evaluate_script(script)
+        # Nothing is popped
+        assert len(state.stack) == 1
+
+    def test_CSV_tx_version(self, checklocktime_state):
+        state = checklocktime_state
+        state.tx.version = random.randrange(-2, 2)
+        script = Script() << 0 << OP_CHECKSEQUENCEVERIFY
+        if state.tx.version >= 0:
+            with pytest.raises(LockTimeError) as e:
+                state.evaluate_script(script)
+            assert 'transaction version is under 2' in str(e.value)
+        else:
+            state.evaluate_script(script)
+        assert len(state.stack) == 1
+
+    @pytest.mark.parametrize("sequence, tx_sequence, text", (
+        (SEQUENCE_LOCKTIME_DISABLE_FLAG + 20, 0, None),
+        (SEQUENCE_LOCKTIME_DISABLE_FLAG + 20, 4_000_000_000, None),
+        (0, SEQUENCE_LOCKTIME_DISABLE_FLAG + 20, 'transaction index sequence is disabled'),
+        (500_000, SEQUENCE_LOCKTIME_DISABLE_FLAG + 20, 'transaction index sequence is disabled'),
+        (SEQUENCE_LOCKTIME_TYPE_FLAG, 60_000, 'sequences are not comparable'),
+        (60_000, SEQUENCE_LOCKTIME_TYPE_FLAG, 'sequences are not comparable'),
+        (50_000, 40_000, 'masked sequence number 50,000 not reached'),
+        (80_000, 10_000, 'masked sequence number 14,464 not reached'),
+        (40_000, 50_000, None),
+        (50_000, 50_000, None),
+        (SEQUENCE_LOCKTIME_TYPE_FLAG + 5_000,
+         SEQUENCE_LOCKTIME_TYPE_FLAG + 4_000, 'masked sequence number 4,199,304 not reached'),
+        (SEQUENCE_LOCKTIME_TYPE_FLAG + 5_000, SEQUENCE_LOCKTIME_TYPE_FLAG + 6_000, None),
+    ))
+    def test_CSV(self, checklocktime_state, sequence, tx_sequence, text):
+        state = checklocktime_state
+        state.tx.version = random.randrange(2, 8)
+        state.tx.inputs[state.input_index].sequence = tx_sequence
+        script = Script() << sequence << OP_CHECKSEQUENCEVERIFY
+        if text is None:
+            state.evaluate_script(script)
+        else:
+            with pytest.raises(LockTimeError) as e:
+                state.evaluate_script(script)
+            assert text in str(e.value)
+        assert len(state.stack) == 1
 
 
 class TestByteStringOperations(TestEvaluateScriptBase):
