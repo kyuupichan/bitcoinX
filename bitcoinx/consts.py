@@ -14,10 +14,11 @@ __all__ = (
 
 from enum import IntFlag
 
-from .packing import pack_varbytes
+from .packing import pack_varbytes, pack_byte
 
 
 ZERO = bytes(32)
+ONE = bytes(31) + pack_byte(1)
 UINT32_MAX = 0xffffffff
 INT32_MAX = 0x7fffffff
 

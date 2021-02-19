@@ -15,7 +15,7 @@ from bitcoinx import (
     int_to_be_bytes,
 )
 
-from .utils import random_tx, random_value
+from .utils import random_tx, random_value, read_tx
 
 
 def _zeroes():
@@ -1570,6 +1570,43 @@ class TestVerifyScript(TestEvaluateScriptBase):
         else:
             assert state.verify_script(script_sig, script_pubkey) is result
 
+    @pytest.mark.parametrize('succeed', (True, False))
+    def test_P2SH_spend(self, policy, succeed):
+        # funding transaction a0f1aaa2fb4582c89e0511df0374a5a2833bf95f7314f4a51b55b7b71e90ce0f
+        script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
+        input_index = 2
+        # A P2SH 1-of-2 multisig
+        spending_tx = read_tx('4d8eabfc.txn')
+
+        # Test success and failure by modifying an output
+        spending_tx.outputs[0].value += not succeed
+
+        state = InterpreterState(
+            policy, flags=InterpreterFlags.ENABLE_P2SH, is_consensus=True,
+            is_genesis_enabled=False, is_utxo_after_genesis=False, tx=spending_tx,
+            input_index=input_index, value=0,
+        )
+        script_sig = spending_tx.inputs[input_index].script_sig
+
+        assert state.verify_script(script_sig, script_pubkey) is succeed
+
+    def test_P2SH_push_only(self, policy):
+        script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
+        input_index = 2
+        # A P2SH 1-of-2 multisig
+        spending_tx = read_tx('4d8eabfc.txn')
+        state = InterpreterState(
+            policy, flags=InterpreterFlags.ENABLE_P2SH, is_consensus=True,
+            is_genesis_enabled=False, is_utxo_after_genesis=False, tx=spending_tx,
+            input_index=input_index, value=0,
+        )
+        # Prepend an OP_NOP
+        script_sig = Script(pack_byte(OP_NOP) + bytes(spending_tx.inputs[input_index].script_sig))
+
+        with pytest.raises(PushOnlyError) as e:
+            state.verify_script(script_sig, script_pubkey)
+        assert 'P2SH script_sig is not pushdata only' == str(e.value)
+
 
 class TestByteStringOperations(TestEvaluateScriptBase):
 
@@ -2903,8 +2940,10 @@ def checksig_scripts(state, sighash, op, kind):
 
     # Create a random private key and sign the transaction
     privkey = PrivateKey.from_random()
-    message_hash = state.tx.signature_hash(
-        state.input_index, state.value + (kind == 'bad_value'), script_pubkey, sighash=sighash)
+    message_hash = state.tx.signature_hash(state.input_index, state.value,
+                                           script_pubkey, sighash=sighash)
+    if kind == 'bad_hash':
+        message_hash = sha256(message_hash)
     sig = privkey.sign(message_hash, hasher=None)
     if kind == 'not_strict_DER':
         sig = make_not_strict_DER(sig)
@@ -2959,8 +2998,10 @@ def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
     script_pubkey = script_pubkey.push_many(pubkey_encodings)
     script_pubkey = script_pubkey.push_many((n, op))
 
-    message_hash = state.tx.signature_hash(
-        state.input_index, state.value + (kind == 'bad_value'), script_pubkey, sighash=sighash)
+    message_hash = state.tx.signature_hash(state.input_index, state.value,
+                                           script_pubkey, sighash=sighash)
+    if kind == 'bad_hash':
+        message_hash = sha256(message_hash)
     # Sigs must be in order of the keys
     sigs = [privkey.sign(message_hash, hasher=None)
             for privkey in privkeys if privkey in keys_to_use]
@@ -3063,7 +3104,7 @@ class TestCrypto(TestEvaluateScriptBase):
     def test_CHECKSIG_bad_sig(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_value')
+        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_hash')
 
         # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
@@ -3168,7 +3209,7 @@ class TestCrypto(TestEvaluateScriptBase):
     def test_CHECKSIG_NULLFAIL(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_value')
+        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_hash')
         state.evaluate_script(script_sig)
 
         state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
@@ -3359,7 +3400,7 @@ class TestCrypto(TestEvaluateScriptBase):
     def test_CHECKMULTISIG_bad_sig(self, checksig_state, op):
         state = checksig_state
         sighash = random_sighash(state)
-        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'bad_value',
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'bad_hash',
                                                                 min_m=1)
 
         # This should complete if the correct script is signed
@@ -3486,7 +3527,7 @@ class TestCrypto(TestEvaluateScriptBase):
         state = checksig_state
         sighash = random_sighash(state)
         script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
-                                                                'bad_value', min_m=1)
+                                                                'bad_hash', min_m=1)
 
         state.evaluate_script(script_sig)
         state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
