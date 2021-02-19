@@ -515,6 +515,23 @@ class Script:
         for op, data in self.ops_and_items():
             yield data if data is not None else op
 
+    def is_push_only(self):
+        '''Return True if the entire script only pushes data onto the stack.
+
+        Note OP_RESERVED is considered an opcode that pushes data on the stack, and that a
+        truncated script returns False.
+        '''
+        try:
+            return all(op <= OP_16 for op, data in self.ops_and_items())
+        except TruncatedScriptError:
+            return False
+
+    def is_P2SH(self):
+        '''Fast test for P2SH scripts.'''
+        script = self._script
+        return (len(script) == 23 and script[0] == OP_HASH160 and script[1] == 0x14
+                and script[22] == OP_EQUAL)
+
     def find_and_delete(self, subscript):
         '''Return a new script that has all instances of subscript removed.
 
