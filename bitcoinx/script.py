@@ -28,7 +28,7 @@ from .consts import (
     SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG, UINT32_MAX, INT32_MAX,
 )
 from .errors import (
-    ScriptError, TruncatedScriptError, InterpreterError,
+    ScriptError, TruncatedScriptError, InterpreterError, NumEqualVerifyFailed,
     StackSizeTooLarge, MinimalEncodingError, InvalidPublicKeyEncoding,
     ScriptTooLarge, TooManyOps, MinimalIfError, DivisionByZero, NegativeShiftCount,
     InvalidPushSize, DisabledOpcode, UnbalancedConditional, InvalidStackOperation,
@@ -1363,7 +1363,7 @@ def handle_NUMEQUALVERIFY(state):
     # (x1 x2 -- )
     handle_binary_numeric(state, operator.eq)
     if not cast_to_bool(state.stack[-1]):
-        raise NumEqualVerifyFailed()
+        raise NumEqualVerifyFailed('OP_NUMEQUALVERIFY failed')
     state.stack.pop()
 
 

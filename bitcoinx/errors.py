@@ -16,7 +16,7 @@ __all__ = (
     'InvalidNumber', 'InvalidOperandSize', 'EqualVerifyFailed', 'NullFailError',
     'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
-    'InvalidSignatureCount',
+    'NumEqualVerifyFailed', 'InvalidSignatureCount',
 )
 
 
