@@ -953,7 +953,39 @@ checksig_states = create_checksig_states()
 @pytest.fixture(params=checksig_states)
 def checksig_state(request):
     state = request.param
+    flags = state.flags
     yield state
+    state.flags = flags
+    state.reset()
+
+
+def create_numeric_states():
+    result = []
+
+    for policy, flags, is_consensus, is_genesis_enabled, is_utxo_after_genesis in product(
+            policies,
+            (0,
+             InterpreterFlags.REQUIRE_MINIMAL_PUSH,
+            ),
+            (True, False), # is_consensus
+            (True, False), # is_genesis_enabled
+            (True, False), # is_utxo_after_genesis
+    ):
+        result.append(InterpreterState(
+            policy, flags=flags, is_consensus=is_consensus, is_genesis_enabled=is_genesis_enabled,
+            is_utxo_after_genesis=is_utxo_after_genesis,
+        ))
+
+    return result
+
+numeric_states = create_numeric_states()
+
+@pytest.fixture(params=numeric_states)
+def numeric_state(request):
+    state = request.param
+    flags = state.flags
+    yield state
+    state.flags = flags
     state.reset()
 
 
@@ -1426,6 +1458,12 @@ class TestEvaluateScript(TestEvaluateScriptBase):
             state.evaluate_script(script)
         assert str(e.value) == f'encountered upgradeable NOP {op.name}'
 
+    def test_invalid_opcode(self, state):
+        script = Script(b'\xff')
+        with pytest.raises(InvalidOpcode) as e:
+            state.evaluate_script(script)
+        assert 'invalid opcode 255' in str(e.value)
+
     @pytest.mark.parametrize('op', reserved_ops)
     def test_reserved_executed(self, state, op):
         script = Script() << OP_0 << op
@@ -1575,145 +1613,244 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         assert state.stack[0].hex() == result
         assert not state.alt_stack
 
+
+class TestNumeric(TestEvaluateScriptBase):
+
     @pytest.mark.parametrize("opcode", (OP_1ADD, OP_1SUB, OP_NEGATE, OP_ABS, OP_NOT, OP_0NOTEQUAL))
-    def test_unary_numeric(self, state, opcode):
-        self.require_stack(state, 1, opcode)
+    def test_unary_numeric(self, numeric_state, opcode):
+        self.require_stack(numeric_state, 1, opcode)
 
-    @pytest.mark.parametrize("op", (OP_2MUL, OP_2DIV))
-    def test_disabled(self, state, op):
-        script = Script() << OP_0 << op
-        # Invalid in executed branch
-        with pytest.raises(DisabledOpcode) as e:
-            state.evaluate_script(script)
-        assert f'{op.name} is disabled' in str(e.value)
-
-        state.reset()
-        script = Script() << OP_0 << OP_IF << op << OP_ENDIF
-        # Valid in unexecuted branch if UTXO is after-genesis
-        if state.is_utxo_after_genesis:
-            state.evaluate_script(script)
-        else:
-            with pytest.raises(DisabledOpcode):
-                state.evaluate_script(script)
-
-    @pytest.mark.parametrize("value, result", (
-        (0, 1),
-        (-1, 0),
-        (127, 128),
-        (255, 256),
-        (bytes(2), 1),
-        (b'\0\x80', 1),
-        (b'\1\x80', 0),
+    @pytest.mark.parametrize("value, result, minimal", (
+        (0, 1, True),
+        (-1, 0, True,),
+        (127, 128, True),
+        (255, 256, True),
+        (bytes(2), 1, False),
+        (b'\0\x80', 1, False),
+        (b'\1\x80', 0, False),
     ))
-    def test_1ADD(self, state, value, result):
+    def test_1ADD(self, numeric_state, value, result, minimal):
+        state = numeric_state
         script = Script() << value << OP_1ADD
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 1
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("value, result", (
-        (0, -1),
-        (-1, -2),
-        (127, 126),
-        (255, 254),
-        (bytes(2), -1),
-        (b'\1\x00', 0),
-        (b'\1\x80', -2),
+    @pytest.mark.parametrize("value, result, minimal", (
+        (0, -1, True),
+        (-1, -2, True),
+        (127, 126, True),
+        (255, 254, True),
+        (bytes(2), -1, False),
+        (b'\1\x00', 0, False),
+        (b'\1\x80', -2, False),
     ))
-    def test_1SUB(self, state, value, result):
+    def test_1SUB(self, numeric_state, value, result, minimal):
+        state = numeric_state
         script = Script() << value << OP_1SUB
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 1
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("value, result", (
-        (0, 0),
-        (-1, 1),
-        (1, -1),
-        (127, -127),
-        (255, -255),
-        (bytes(2), 0),
-        (b'\1\x00', -1),
-        (b'\1\x80', 1),
+    @pytest.mark.parametrize("value, result, minimal", (
+        (0, 0, True),
+        (-1, 1, True),
+        (1, -1, True),
+        (127, -127, True),
+        (255, -255, True),
+        (bytes(2), 0, False),
+        (b'\1\x00', -1, False),
+        (b'\1\x80', 1, False),
     ))
-    def test_NEGATE(self, state, value, result):
+    def test_NEGATE(self, numeric_state, value, result, minimal):
+        state = numeric_state
         script = Script() << value << OP_NEGATE
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 1
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("value, result", (
-        (0, 0),
-        (-1, 1),
-        (1, 1),
-        (127, 127),
-        (255, 255),
-        (bytes(2), 0),
-        (b'\x80', 0),
-        (b'\x81', 1),
+    @pytest.mark.parametrize("value, result, minimal", (
+        (0, 0, True),
+        (-1, 1, True),
+        (1, 1, True),
+        (127, 127, True),
+        (255, 255, True),
+        (bytes(2), 0, False),
+        (b'\x80', 0, False),
+        (b'\x81', 1, True),
     ))
-    def test_ABS(self, state, value, result):
+    def test_ABS(self, numeric_state, value, result, minimal):
+        state = numeric_state
         script = Script() << value << OP_ABS
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 1
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("value, result", (
-        (0, 1),
-        (-1, 0),
-        (1, 0),
-        (127, 0),
-        (255, 0),
-        (bytes(2), 1),
-        (b'\x80', 1),
-        (b'\x81', 0),
+    @pytest.mark.parametrize("value, result, minimal", (
+        (0, 1, True),
+        (-1, 0, True),
+        (1, 0, True),
+        (127, 0, True),
+        (255, 0, True),
+        (bytes(2), 1, False),
+        (b'\x80', 1, False),
+        (b'\x81', 0, True),
     ))
-    def test_NOT(self, state, value, result):
+    def test_NOT(self, numeric_state, value, result, minimal):
+        state = numeric_state
         script = Script() << value << OP_NOT
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 1
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
-    @pytest.mark.parametrize("value, result", (
-        (0, 0),
-        (-1, 1),
-        (1, 1),
-        (127, 1),
-        (255, 1),
-        (bytes(2), 0),
-        (b'\x80', 0),
-        (b'\x81', 1),
+    @pytest.mark.parametrize("value, result, minimal", (
+        (0, 0, True),
+        (-1, 1, True),
+        (1, 1, True),
+        (127, 1, True),
+        (255, 1, True),
+        (bytes(2), 0, False),
+        (b'\x80', 0, False),
+        (b'\x81', 1, True),
     ))
-    def test_0NOTEQUAL(self, state, value, result):
+    def test_0NOTEQUAL(self, numeric_state, value, result, minimal):
+        state = numeric_state
         script = Script() << value << OP_0NOTEQUAL
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 1
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
         assert not state.alt_stack
 
     @pytest.mark.parametrize("opcode", (
         OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_BOOLAND, OP_BOOLOR, OP_NUMEQUAL,
         OP_NUMEQUALVERIFY, OP_NUMNOTEQUAL, OP_LESSTHAN, OP_GREATERTHAN,
         OP_LESSTHANOREQUAL, OP_GREATERTHANOREQUAL, OP_MIN, OP_MAX))
-    def test_binary_numeric_stack(self, state, opcode):
-        self.require_stack(state, 2, opcode)
+    def test_binary_numeric_stack(self, numeric_state, opcode):
+        self.require_stack(numeric_state, 2, opcode)
 
-    @pytest.mark.parametrize("opcodes,result", (
-        ((OP_3, OP_5, OP_ADD), 8),
-        ((OP_1NEGATE, OP_5, OP_ADD), 4),
-        ((-5, -6, OP_ADD), -11),
-        ((b'\0', b'\x80', OP_ADD), 0),
-        ((b'\0', b'\x81', OP_SUB), 1),
-        ((b'', -1, OP_SUB), 1),
-        ((OP_3, OP_5, OP_SUB), -2),
-        ((OP_3, OP_5, OP_MUL), 15),
-        ((255, OP_0, OP_MUL), 0),
-        ((-15, -2, OP_MUL), 30),
-        ((12, 13, OP_MUL), 156),
+    @pytest.mark.parametrize("opcodes,result, minimal", (
+        ((OP_3, OP_5, OP_ADD), 8, True),
+        ((OP_1NEGATE, OP_5, OP_ADD), 4, True),
+        ((-5, -6, OP_ADD), -11, True),
+        ((b'\1', b'\x80', OP_ADD), 1, False),
+        ((b'\x80', b'\1', OP_ADD), 1, False),
+        ((b'', -1, OP_SUB), 1, True),
+        ((OP_3, OP_5, OP_SUB), -2, True),
+        ((b'\0', b'\x81', OP_SUB), 1, False),
+        ((b'\x81', b'\0', OP_SUB), -1, False),
+        ((OP_3, OP_5, OP_MUL), 15, True),
+        ((255, OP_0, OP_MUL), 0, True),
+        ((12, 13, OP_MUL), 156, True),
+        ((-15, b'\2\0', OP_MUL), -30, False),
+        ((b'\2\0', 12, OP_MUL), 24, False),
+        ((12, 5, OP_DIV), 2, True),
+        ((-12, b'\5\0', OP_DIV), -2, False),
+        ((b'\x0c\0', -5, OP_DIV), -2, False),
+        ((13, 5, OP_MOD), 3, True),
+        ((-13, b'\5\0', OP_MOD), -3, False),
+        ((b'\x0d\0', -5, OP_MOD), 3, False),
+        ((-1, 0, OP_BOOLAND), 0, True),
+        ((-13, b'\5\0', OP_BOOLAND), 1, False),
+        ((b'\0', 1, OP_BOOLAND), 0, False),
+        ((-1, 0, OP_BOOLOR), 1, True),
+        ((-13, b'\5\0', OP_BOOLOR), 1, False),
+        ((b'\0', 0, OP_BOOLOR), 0, False),
+        ((2, 2, OP_NUMEQUAL), 1, True),
+        ((2, 3, OP_NUMEQUAL), 0, True),
+        ((0, b'\0', OP_NUMEQUAL), 1, False),
+        ((b'\1\x80', -1, OP_NUMEQUAL), 1, False),
+        ((2, 2, OP_NUMNOTEQUAL), 0, True),
+        ((2, 3, OP_NUMNOTEQUAL), 1, True),
+        ((0, b'\0', OP_NUMNOTEQUAL), 0, False),
+        ((b'\1\x80', -1, OP_NUMNOTEQUAL), 0, False),
+        ((1, 1, OP_LESSTHAN), 0, True),
+        ((1, -1, OP_LESSTHAN), 0, True),
+        ((-1, b'\1\0', OP_LESSTHAN), 1, False),
+        ((b'\1\x80', -1, OP_LESSTHAN), 0, False),
+        ((1, 1, OP_GREATERTHAN), 0, True),
+        ((1, -1, OP_GREATERTHAN), 1, True),
+        ((-1, b'\1\0', OP_GREATERTHAN), 0, False),
+        ((b'\1\x80', -1, OP_GREATERTHAN), 0, False),
+        ((1, 1, OP_LESSTHANOREQUAL), 1, True),
+        ((1, -1, OP_LESSTHANOREQUAL), 0, True),
+        ((-1, b'\1\0', OP_LESSTHANOREQUAL), 1, False),
+        ((b'\1\x80', -1, OP_LESSTHANOREQUAL), 1, False),
+        ((1, 1, OP_GREATERTHANOREQUAL), 1, True),
+        ((1, -1, OP_GREATERTHANOREQUAL), 1, True),
+        ((-1, b'\1\0', OP_GREATERTHANOREQUAL), 0, False),
+        ((b'\1\x80', -1, OP_GREATERTHANOREQUAL), 1, False),
+        ((1, 1, OP_MIN), 1, True),
+        ((2, -1, OP_MIN), -1, True),
+        ((-1, b'\1\0', OP_MIN), -1, False),
+        ((b'\1\x80', -2, OP_MIN), -2, False),
+        ((1, 1, OP_MAX), 1, True),
+        ((2, -1, OP_MAX), 2, True),
+        ((-1, b'\1\0', OP_MAX), 1, False),
+        ((b'\1\x80', -2, OP_MAX), -1, False),
     ))
-    def test_binary_numeric(self, state, opcodes, result):
+    def test_binary_numeric(self, numeric_state, opcodes, result, minimal):
+        state = numeric_state
         script = Script().push_many(opcodes)
-        state.evaluate_script(script)
-        assert state.stack == [int_to_item(result)]
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 2
+        else:
+            state.evaluate_script(script)
+            assert state.stack == [int_to_item(result)]
+        assert not state.alt_stack
+
+    @pytest.mark.parametrize("opcodes,result, minimal", (
+        ((2, 2), True, True),
+        ((2, 3), False, True),
+        ((0, b'\0'), True, False),
+        ((b'\1\x80', -1), True, False),
+    ))
+    def test_NUMEQUALVERIFY(self, numeric_state, opcodes, result, minimal):
+        state = numeric_state
+        script = Script().push_many(opcodes)
+        script <<= OP_NUMEQUALVERIFY
+        if not minimal and state.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                state.evaluate_script(script)
+            assert len(state.stack) == 2
+        elif result:
+            state.evaluate_script(script)
+            assert not state.stack
+        else:
+            with pytest.raises(NumEqualVerifyFailed) as e:
+                state.evaluate_script(script)
+            assert 'OP_NUMEQUALVERIFY failed' in str(e.value)
+            assert state.stack == [b'']
         assert not state.alt_stack
 
     @pytest.mark.parametrize("a,b,mul", (
@@ -1863,12 +2000,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         script = Script() << x << low << high << OP_WITHIN
         state.evaluate_script(script)
         assert state.stack == [int_to_item(result)]
-
-    def test_invalid_opcode(self, state):
-        script = Script(b'\xff')
-        with pytest.raises(InvalidOpcode) as e:
-            state.evaluate_script(script)
-        assert 'invalid opcode 255' in str(e.value)
 
 
 class TestControlOperations(TestEvaluateScriptBase):
@@ -2946,25 +3077,21 @@ class TestCrypto(TestEvaluateScriptBase):
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_value')
         state.evaluate_script(script_sig)
 
-        old_flags = state.flags
-        try:
-            state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
-            with pytest.raises(NullFailError):
-                state.evaluate_script(script_pubkey)
-            assert len(state.stack) == 2
+        state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
+        with pytest.raises(NullFailError):
+            state.evaluate_script(script_pubkey)
+        assert len(state.stack) == 2
 
-            # Now try with an empty sig
-            state.reset()
-            script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'empty_sig')
-            state.evaluate_script(script_sig)
-            if op == OP_CHECKSIG:
+        # Now try with an empty sig
+        state.reset()
+        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'empty_sig')
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKSIG:
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-            else:
-                with pytest.raises(CheckSigVerifyFailed):
-                    state.evaluate_script(script_pubkey)
-            assert state.stack == [b'']
-        finally:
-            state.flags = old_flags
+        assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_good(self, checksig_state, op):
@@ -3268,27 +3395,22 @@ class TestCrypto(TestEvaluateScriptBase):
                                                                 'bad_value', min_m=1)
 
         state.evaluate_script(script_sig)
+        state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
+        with pytest.raises(NullFailError):
+            state.evaluate_script(script_pubkey)
+        assert len(state.stack) <= m + 1
 
-        old_flags = state.flags
-        try:
-            state.flags |= InterpreterFlags.REQUIRE_NULLFAIL
-            with pytest.raises(NullFailError):
+        # Now try with an empty sig
+        state.reset()
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+                                                                'all_empty_sig', min_m=1)
+        state.evaluate_script(script_sig)
+        if op == OP_CHECKMULTISIG:
+            state.evaluate_script(script_pubkey)
+        else:
+            with pytest.raises(CheckMultiSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-            assert len(state.stack) <= m + 1
-
-            # Now try with an empty sig
-            state.reset()
-            script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
-                                                                    'all_empty_sig', min_m=1)
-            state.evaluate_script(script_sig)
-            if op == OP_CHECKMULTISIG:
-                state.evaluate_script(script_pubkey)
-            else:
-                with pytest.raises(CheckMultiSigVerifyFailed):
-                    state.evaluate_script(script_pubkey)
-            assert state.stack == [b'']
-        finally:
-            state.flags = old_flags
+        assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_DUMMY(self, checksig_state, op):
