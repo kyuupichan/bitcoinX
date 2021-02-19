@@ -14,11 +14,11 @@ import attr
 import datetime
 from io import BytesIO
 
-from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, SEQUENCE_FINAL
+from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
-    read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list,
+    read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list, pack_varint
 )
 from .script import Script
 from .signature import SigHash
@@ -76,10 +76,85 @@ class Tx:
         preimage = b''.join(txout.to_bytes() for txout in self.outputs)
         return double_sha256(preimage)
 
+    def _forkid_preimage(self, input_index, value, script, sighash):
+        '''Return the post-fork preimage that needs to be signed for the given input, script, and
+        sighash type.  Value is the value of the output being spent, which is committed to.
+        '''
+        txin = self.inputs[input_index]
+        hash_prevouts = hash_sequence = hash_outputs = ZERO
+
+        sighash_not_single_none = sighash.base not in (SigHash.SINGLE, SigHash.NONE)
+        if not sighash.anyone_can_pay:
+            hash_prevouts = self._hash_prevouts()
+            if sighash_not_single_none:
+                hash_sequence = self._hash_sequence()
+        if sighash_not_single_none:
+            hash_outputs = self._hash_outputs()
+        elif (sighash.base == SigHash.SINGLE and input_index < len(self.outputs)):
+            hash_outputs = double_sha256(self.outputs[input_index].to_bytes())
+
+        return b''.join((
+            pack_le_int32(self.version),
+            hash_prevouts,
+            hash_sequence,
+            txin.to_bytes_for_signature(value, script),
+            hash_outputs,
+            pack_le_uint32(self.locktime),
+            pack_le_uint32(sighash),
+        ))
+
+    def _original_preimage(self, input_index, script, sighash):
+        '''Return the pre-fork preimage that needs to be signed for the given input, script, and
+        sighash type.
+        '''
+        sighash_single_none = sighash.base in (SigHash.SINGLE, SigHash.NONE)
+
+        # Invalid SIGHASH_SINGLE?
+        if sighash.base == SigHash.SINGLE and input_index >= len(self.outputs):
+            return ONE
+
+        def serialize_input(n):
+            if sighash.anyone_can_pay:
+                n = input_index
+            tx_input = self.inputs[n]
+            sequence = 0 if n != input_index and sighash_single_none else tx_input.sequence
+            return b''.join((
+                tx_input.prevout_bytes(),
+                pack_varbytes(bytes(script) if n == input_index else b''),
+                pack_le_uint32(sequence),
+            ))
+
+        def serialize_output(n):
+            if sighash.base == SigHash.SINGLE and n != input_index:
+                return TxOutput(-1, Script()).to_bytes()
+            else:
+                return self.outputs[n].to_bytes()
+
+        n_inputs = 1 if sighash.anyone_can_pay else len(self.inputs)
+        inputs = b''.join(serialize_input(n) for n in range(n_inputs))
+
+        if sighash.base == SigHash.NONE:
+            n_outputs = 0
+        elif sighash.base == SigHash.SINGLE:
+            n_outputs = input_index + 1
+        else:
+            n_outputs = len(self.outputs)
+        outputs = b''.join(serialize_output(n) for n in range(n_outputs))
+
+        return b''.join((
+            pack_le_int32(self.version),
+            pack_varint(n_inputs),
+            inputs,
+            pack_varint(n_outputs),
+            outputs,
+            pack_le_uint32(self.locktime),
+            pack_le_uint32(sighash),
+        ))
+
     def signature_hash(self, input_index, value, script, *, sighash=None):
         '''Return the hash that needs to be signed for the given input, script, and sighash type.
         Value is the value of the output being spent, which is committed to as part of the
-        signature.
+        signature post-fork.
 
         scrpipt is a subset of the output's script_pubkey that is being signed.  This
         starts at its beginning, or from the byte beyond the most recent OP_CODESEPARATOR,
@@ -94,28 +169,10 @@ class Tx:
         if not isinstance(sighash, SigHash):
             raise TypeError('sighash must be a SigHash instance')
 
-        txin = self.inputs[input_index]
-        hash_prevouts = hash_sequence = hash_outputs = ZERO
-
-        sighash_not_single_none = sighash.base not in (SigHash.SINGLE, SigHash.NONE)
-        if not sighash.anyone_can_pay:
-            hash_prevouts = self._hash_prevouts()
-            if sighash_not_single_none:
-                hash_sequence = self._hash_sequence()
-        if sighash_not_single_none:
-            hash_outputs = self._hash_outputs()
-        elif (sighash.base == SigHash.SINGLE and input_index < len(self.outputs)):
-            hash_outputs = double_sha256(self.outputs[input_index].to_bytes())
-
-        preimage = b''.join((
-            pack_le_int32(self.version),
-            hash_prevouts,
-            hash_sequence,
-            txin.to_bytes_for_signature(value, script),
-            hash_outputs,
-            pack_le_uint32(self.locktime),
-            pack_le_uint32(sighash),
-        ))
+        if sighash.has_forkid():
+            preimage = self._forkid_preimage(input_index, value, script, sighash)
+        else:
+            preimage = self._original_preimage(input_index, script, sighash)
 
         return double_sha256(preimage)
 

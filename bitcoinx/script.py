@@ -939,6 +939,7 @@ class InterpreterState:
         der_sig, sighash = Signature.normalize_der_signature(sig_bytes)
         message_hash = self.tx.signature_hash(self.input_index, self.value,
                                               script_code, sighash=sighash)
+
         return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
 
     def validate_locktime(self, locktime):
@@ -1060,7 +1061,6 @@ class InterpreterState:
         if is_P2SH:
             stack_copy = self.stack.copy()
         self.evaluate_script(script_pubkey)
-
         if not self.stack or not cast_to_bool(self.stack[-1]):
             return False
 
@@ -1069,8 +1069,6 @@ class InterpreterState:
             if not script_sig.is_push_only():
                 raise PushOnlyError('P2SH script_sig is not pushdata only')
             self.stack = stack_copy    # pylint:disable=W0201
-            # Cannot be empty
-            assert self.stack
             pubkey_script = Script(self.stack.pop())
             self.evaluate_script(pubkey_script)
             if not self.stack or not cast_to_bool(self.stack[-1]):

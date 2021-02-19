@@ -1,6 +1,4 @@
 from io import BytesIO
-import json
-import os
 import random
 
 import pytest
@@ -11,17 +9,7 @@ from bitcoinx import (
 from bitcoinx.tx import *
 from bitcoinx.tx import LOCKTIME_THRESHOLD
 
-
-data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
-
-
-def read_tx_hex(filename):
-    with open(os.path.join(data_dir, filename)) as f:
-        return f.read().strip()
-
-
-def read_tx(filename):
-    return Tx.from_hex(read_tx_hex(filename))
+from .utils import read_tx, read_tx_hex, read_signature_hashes, read_json_tx
 
 
 def test_tx_read():
@@ -63,20 +51,7 @@ def test_repr():
     )
 
 
-def read_signature_hashes(filename):
-    with open(os.path.join(data_dir, filename)) as f:
-        contents = f.read().strip()
-    return [bytes.fromhex(line) for line in contents.splitlines()]
-
-
 tx_testcases = ['503fd37f.txn']
-
-
-def read_json_tx(filename):
-    with open(os.path.join(data_dir, filename)) as f:
-        d = json.loads(f.read())
-    return (Tx.from_hex(d['tx_hex']), d['input_values'],
-            [bytes.fromhex(pk_hex) for pk_hex in d['input_pk_scripts']])
 
 
 @pytest.mark.parametrize("filename", tx_testcases)
@@ -87,9 +62,10 @@ def test_signature_hash(filename):
     n = 0
     for input_index, (value, pk_script, txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
         for sighash in range(256):
-            signature_hash = tx.signature_hash(input_index, value, pk_script,
-                                               sighash=SigHash(sighash))
-            assert signature_hash == correct_hashes[n]
+            sighash = SigHash(sighash)
+            if sighash.has_forkid():
+                signature_hash = tx.signature_hash(input_index, value, pk_script, sighash=sighash)
+                assert signature_hash == correct_hashes[n]
             n += 1
 
 
