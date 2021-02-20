@@ -1,13 +1,12 @@
-from os import urandom
 import random
 
 import pytest
 
 from bitcoinx import (
-    int_to_be_bytes, Script, SigHash, double_sha256, SEQUENCE_FINAL, TxInput, TxOutput, Tx,
-    pack_le_uint32,
-    OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR
+    int_to_be_bytes, Script, SigHash, double_sha256, TxOutput, pack_le_uint32, OP_CODESEPARATOR,
 )
+
+from .utils import random_tx, random_script
 
 
 ONE = int_to_be_bytes(1, size=32)
@@ -40,7 +39,7 @@ def ref_sighash(script_code, tx, input_index, hash_type):
         if input_index >= len(tx.outputs):
             return ONE
         tx_output = tx.outputs[input_index]
-        tx.outputs = [TxOutput(-1, Script()) for _ in range(input_index)]
+        tx.outputs = [TxOutput.null() for _ in range(input_index)]
         tx.outputs.append(tx_output)
         # Let the others update at will:
         for n, tx_in in enumerate(tx.inputs):
@@ -56,48 +55,13 @@ def ref_sighash(script_code, tx, input_index, hash_type):
     return double_sha256(preimage)
 
 
-random_ops = [OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF,
-              OP_VERIF, OP_RETURN, OP_CODESEPARATOR]
-
-
-def random_script():
-    result = Script()
-    for _ in range(random.randrange(0, 10)):
-        result <<= random.choice(random_ops)
-    return result
-
-
-def random_bool():
-    return random.random() >= 0.5
-
-
-def random_input():
-    sequence = SEQUENCE_FINAL if random_bool() else random.randrange(0, SEQUENCE_FINAL)
-    return TxInput(urandom(32), random.randrange(0, 4), random_script(), sequence)
-
-
-def random_output():
-    return TxOutput(random.randrange(0, 100_000_000), random_script())
-
-
-def random_transaction(is_single):
-    version = random.randrange(- (1 << 31), 1 << 31)
-    locktime = 0 if random_bool() else random.randrange(0, 1 << 32)
-    n_inputs = random.randrange(1, 5)
-    n_outputs = n_inputs + random.randrange(-1, 1) if is_single else random.randrange(1, 5)
-    inputs = [random_input() for _ in range(n_inputs)]
-    outputs = [random_output() for _ in range(n_outputs)]
-
-    return Tx(version, inputs, outputs, locktime)
-
-
 @pytest.mark.parametrize('execution_count', range(1000))
 def test_sighash(execution_count):
     '''Tests the original Satoshi signature_hash on random transactions.'''
     hash_type = random.randrange(0, 1 << 32)
     sighash_type = SigHash(hash_type)
 
-    tx = random_transaction((hash_type & 0x1f) == SigHash.SINGLE)
+    tx = random_tx((hash_type & 0x1f) == SigHash.SINGLE)
     script_code = random_script()
     input_index = random.randrange(0, len(tx.inputs))
 
