@@ -22,7 +22,7 @@ from bitcoinx.work import (
 
 
 @attr.s(slots=True)
-class Header(object):
+class Header:
     version = attr.ib()
     prev_hash = attr.ib()
     merkle_root = attr.ib()
@@ -57,7 +57,7 @@ class Header(object):
                 f'height={self.height})')
 
 
-class Coin(object):
+class Coin:
 
     def __init__(self, name, genesis_header, required_bits, P2PKH_verbyte, P2SH_verbyte,
                  WIF_byte, xpub_verbytes, xprv_verbytes, cashaddr_prefix):
