@@ -20,7 +20,7 @@ from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
     read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list, pack_varint
 )
-from .script import Script
+from .script import Script, OP_CODESEPARATOR
 from .signature import SigHash
 
 
@@ -76,7 +76,7 @@ class Tx:
         preimage = b''.join(txout.to_bytes() for txout in self.outputs)
         return double_sha256(preimage)
 
-    def _forkid_signature_hash(self, input_index, value, script, sighash):
+    def _forkid_signature_hash(self, input_index, value, script_code, sighash):
         '''Return the post-fork preimage that needs to be signed for the given input, script, and
         sighash type.  Value is the value of the output being spent, which is committed to.
         '''
@@ -97,7 +97,7 @@ class Tx:
             pack_le_int32(self.version),
             hash_prevouts,
             hash_sequence,
-            txin.to_bytes_for_signature(value, script),
+            txin.to_bytes_for_signature(value, script_code),
             hash_outputs,
             pack_le_uint32(self.locktime),
             pack_le_uint32(sighash),
@@ -105,13 +105,11 @@ class Tx:
 
         return double_sha256(preimage)
 
-    def _original_signature_hash(self, input_index, script, sighash):
+    def _original_signature_hash(self, input_index, script_code, sighash):
         '''Return the pre-fork preimage that needs to be signed for the given input, script, and
         sighash type.
         '''
         assert input_index < len(self.inputs)
-
-        sighash_single_none = sighash.base in (SigHash.SINGLE, SigHash.NONE)
 
         if sighash.base == SigHash.SINGLE and input_index >= len(self.outputs):
             return ONE
@@ -120,43 +118,50 @@ class Tx:
             if sighash.anyone_can_pay:
                 n = input_index
             tx_input = self.inputs[n]
-            sequence = 0 if n != input_index and sighash_single_none else tx_input.sequence
+            if n != input_index and sighash.base in (SigHash.SINGLE, SigHash.NONE):
+                sequence = 0
+            else:
+                sequence = tx_input.sequence
+            if n == input_index:
+                script = script_code.find_and_delete(Script() << OP_CODESEPARATOR)
+            else:
+                script = b''
+
             return b''.join((
                 tx_input.prevout_bytes(),
-                pack_varbytes(bytes(script) if n == input_index else b''),
+                pack_varbytes(bytes(script)),
                 pack_le_uint32(sequence),
             ))
 
         def serialize_output(n):
             if sighash.base == SigHash.SINGLE and n != input_index:
-                return TxOutput(-1, Script()).to_bytes()
+                return TxOutput.NULL_SERIALIZATION
             else:
                 return self.outputs[n].to_bytes()
 
-        n_inputs = 1 if sighash.anyone_can_pay else len(self.inputs)
-        inputs = b''.join(serialize_input(n) for n in range(n_inputs))
+        if sighash.anyone_can_pay:
+            input_args = [0]
+        else:
+            input_args = list(range(len(self.inputs)))
 
         if sighash.base == SigHash.NONE:
-            n_outputs = 0
+            output_args = []
         elif sighash.base == SigHash.SINGLE:
-            n_outputs = input_index + 1
+            output_args = list(range(input_index + 1))
         else:
-            n_outputs = len(self.outputs)
-        outputs = b''.join(serialize_output(n) for n in range(n_outputs))
+            output_args = list(range(len(self.outputs)))
 
         preimage = b''.join((
             pack_le_int32(self.version),
-            pack_varint(n_inputs),
-            inputs,
-            pack_varint(n_outputs),
-            outputs,
+            pack_list(input_args, serialize_input),
+            pack_list(output_args, serialize_output),
             pack_le_uint32(self.locktime),
             pack_le_uint32(sighash),
         ))
 
         return double_sha256(preimage)
 
-    def signature_hash(self, input_index, value, script, *, sighash=None):
+    def signature_hash(self, input_index, value, script_code, *, sighash=None):
         '''Return the hash that needs to be signed for the given input, script, and sighash type.
         Value is the value of the output being spent, which is committed to as part of the
         signature post-fork.
@@ -175,9 +180,9 @@ class Tx:
             raise TypeError('sighash must be a SigHash instance')
 
         if sighash.has_forkid():
-            return self._forkid_signature_hash(input_index, value, script, sighash)
+            return self._forkid_signature_hash(input_index, value, script_code, sighash)
 
-        return self._original_signature_hash(input_index, script, sighash)
+        return self._original_signature_hash(input_index, script_code, sighash)
 
     def are_inputs_final(self):
         '''Return True if all inputs are final.'''
@@ -380,6 +385,9 @@ class TxOutput:
         return (
             f'TxOutput(value={self.value}, script_pubkey="{self.script_pubkey}")'
         )
+
+
+TxOutput.NULL_SERIALIZATION = TxOutput.null().to_bytes()
 
 
 def locktime_description(locktime):

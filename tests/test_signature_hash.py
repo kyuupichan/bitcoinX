@@ -19,7 +19,7 @@ def ref_sighash(script_code, tx, input_index, hash_type):
 
     # In case concatenating two scripts ends up with two codeseparators, or an
     # extra one at the end, this prevents all those possible incompatibilities.
-    script_code.find_and_delete(Script() << OP_CODESEPARATOR)
+    script_code = script_code.find_and_delete(Script() << OP_CODESEPARATOR)
 
     # Blank out other inputs' signatures
     empty_script = Script()
