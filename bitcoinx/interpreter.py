@@ -292,7 +292,7 @@ class InterpreterState:
         # Split out the DER signature and the sighash
         der_sig, sighash = Signature.normalize_der_signature(sig_bytes)
         message_hash = self.tx.signature_hash(self.input_index, self.value,
-                                              script_code, sighash=sighash)
+                                              script_code, sighash)
 
         return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
 

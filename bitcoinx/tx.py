@@ -161,14 +161,14 @@ class Tx:
 
         return double_sha256(preimage)
 
-    def signature_hash(self, input_index, value, script_code, *, sighash=None):
+    def signature_hash(self, input_index, value, script_code, sighash):
         '''Return the hash that needs to be signed for the given input, script, and sighash type.
         Value is the value of the output being spent, which is committed to as part of the
         signature post-fork.
 
-        scrpipt is a subset of the output's script_pubkey that is being signed.  This
-        starts at its beginning, or from the byte beyond the most recent OP_CODESEPARATOR,
-        and ends at the end of the output script.
+        scrpipt is a subset of the output's script_pubkey that is being signed; it can be
+        raw bytes or a Script object.  This starts at its beginning, or from the byte
+        beyond the most recent OP_CODESEPARATOR, and ends at the end of the output script.
         '''
         if not 0 <= input_index < len(self.inputs):
             raise IndexError(f'invalid input index: {input_index}')

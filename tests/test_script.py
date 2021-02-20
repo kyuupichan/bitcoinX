@@ -2989,7 +2989,7 @@ def checksig_scripts(state, sighash, op, kind):
     # Create a random private key and sign the transaction
     privkey = PrivateKey.from_random()
     message_hash = state.tx.signature_hash(state.input_index, state.value,
-                                           script_pubkey, sighash=sighash)
+                                           script_pubkey, sighash)
     if kind == 'bad_hash':
         message_hash = sha256(message_hash)
     sig = privkey.sign(message_hash, hasher=None)
@@ -3053,7 +3053,7 @@ def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
     script_pubkey = Script().push_many(pubkey_parts + extra_no_sigs)
 
     message_hash = state.tx.signature_hash(state.input_index, state.value,
-                                           script_pubkey, sighash=sighash)
+                                           script_pubkey, sighash)
     if kind == 'bad_hash':
         message_hash = sha256(message_hash)
     # Sigs must be in order of the keys
@@ -3134,9 +3134,8 @@ class TestCrypto(TestEvaluateScriptBase):
 
         # Create a random private key and sign the transaction
         privkey = PrivateKey.from_random()
-        message_hash = state.tx.signature_hash(state.input_index,
-                                               state.value,
-                                               script_code, sighash=sighash)
+        message_hash = state.tx.signature_hash(state.input_index, state.value,
+                                               script_code, sighash)
         sig = privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
         script_sig = Script() << sig << privkey.public_key.to_bytes()
 
