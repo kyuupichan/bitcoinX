@@ -123,7 +123,7 @@ class Tx:
             else:
                 sequence = tx_input.sequence
             if n == input_index:
-                script = script_code.find_and_delete(Script() << Ops.OP_CODESEPARATOR)
+                script = Script(script_code).find_and_delete(Script() << Ops.OP_CODESEPARATOR)
             else:
                 script = b''
 

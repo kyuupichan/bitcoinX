@@ -1432,7 +1432,9 @@ class TestEvaluateScript(TestEvaluateScriptBase):
     def test_validate_item_size(self, state):
         # No limits after genesis
         if state.is_utxo_after_genesis:
+            # Avoid blowing up on other rules
             state.max_script_size = 10_000_010
+            state.stack.size_limit = 10_000_100
             script = Script() << bytes(10_000_000)
             state.evaluate_script(script)
         else:
@@ -1459,6 +1461,42 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         script = Script() << OP_1 << OP_IF << OP_NOP << OP_ENDIF
         with pytest.raises(TooManyOps):
             state.evaluate_script(script)
+
+    def test_stack_memory_usage_limit(self):
+        item = bytes(100)
+        count = 20
+        overhead = 32
+        limit = count * (overhead + len(item))
+
+        policy = InterpreterPolicy(1_000_000, 2048, 100_000, 1_000, limit)
+        # Apply the policy limit
+        state = InterpreterState(policy, is_utxo_after_genesis=True, is_consensus=False)
+        script = Script().push_many([item] * count)
+        # Should work fine
+        state.evaluate_script(script)
+        assert state.stack.combined_size() == state.stack.size_limit
+
+        # Test the alt-stack is counted
+        state = InterpreterState(policy, is_utxo_after_genesis=True, is_consensus=False)
+        script = Script().push_many([item] * (count - 1) + [OP_TOALTSTACK, OP_DUP])
+        # Should work fine
+        state.evaluate_script(script)
+        assert state.stack.combined_size() == state.stack.size_limit
+
+        # Reduce the limit by 1
+        policy = InterpreterPolicy(1_000_000, 2048, 100_000, 1_000, limit - 1)
+        state = InterpreterState(policy, is_utxo_after_genesis=True, is_consensus=False)
+        script = Script().push_many([item] * count)
+        with pytest.raises(StackMemoryUsageError):
+            state.evaluate_script(script)
+        assert state.stack.combined_size() == state.stack.size_limit - (len(item) + overhead - 1)
+
+        # Test the alt-stack is counted
+        state = InterpreterState(policy, is_utxo_after_genesis=True, is_consensus=False)
+        script = Script().push_many([item] * (count - 1) + [OP_TOALTSTACK, OP_DUP])
+        with pytest.raises(StackMemoryUsageError):
+            state.evaluate_script(script)
+        assert state.stack.combined_size() == state.stack.size_limit - (len(item) + overhead - 1)
 
     @pytest.mark.parametrize("op", (OP_2MUL, OP_2DIV))
     def test_disabled_opcodes(self, state, op):
@@ -3097,8 +3135,8 @@ class TestCrypto(TestEvaluateScriptBase):
         # Create a random private key and sign the transaction
         privkey = PrivateKey.from_random()
         message_hash = state.tx.signature_hash(state.input_index,
-                                                        state.value,
-                                                        script_code, sighash=sighash)
+                                               state.value,
+                                               script_code, sighash=sighash)
         sig = privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
         script_sig = Script() << sig << privkey.public_key.to_bytes()
 

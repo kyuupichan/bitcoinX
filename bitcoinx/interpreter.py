@@ -35,6 +35,7 @@ from .errors import (
     CheckSigVerifyFailed, CheckMultiSigVerifyFailed, InvalidSignatureCount, CleanStackError,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
+from .limited_stack import LimitedStack
 from .misc import cachedproperty
 # pylint:disable=E0611
 from .script import (
@@ -45,6 +46,7 @@ from .signature import Signature, SigHash
 
 
 bool_items = [b'', b'\1']
+
 
 def cast_to_bool(item):
     '''Cast an item to a Python boolean True or False.
@@ -69,12 +71,12 @@ class InterpreterPolicy:
     '''Policy rules fixed over the node session.'''
 
     def __init__(self, max_script_size, max_script_num_length, max_ops_per_script,
-                 max_pubkeys_per_multisig, max_stack_memory_size):
+                 max_pubkeys_per_multisig, max_stack_memory_usage):
         self.max_script_size = max_script_size
         self.max_script_num_length = max_script_num_length
         self.max_ops_per_script = max_ops_per_script
         self.max_pubkeys_per_multisig = max_pubkeys_per_multisig
-        self.max_stack_memory_size = max_stack_memory_size
+        self.max_stack_memory_usage = max_stack_memory_usage
 
 
 class InterpreterFlags(IntEnum):
@@ -157,10 +159,8 @@ class InterpreterState:
 
     def reset(self):
         # These are updated by the interpreter whilst running
-        # self.stack = LimitedStack(self.max_stack_memory_usage, None)
-        # self.alt_stack = LimitedStack(0, self.stack)
-        self.stack = []
-        self.alt_stack = []
+        self.stack = LimitedStack(self.max_stack_memory_usage)
+        self.alt_stack = self.stack.make_child_stack()
         self.conditions = []
         self.execute = False
         self.iterator = None
@@ -321,7 +321,6 @@ class InterpreterState:
         txin_seq &= mask
         if (sequence < SEQUENCE_LOCKTIME_TYPE_FLAG) ^ (txin_seq < SEQUENCE_LOCKTIME_TYPE_FLAG):
             raise LockTimeError('sequences are not comparable')
-        print(sequence, txin_seq)
         if sequence > txin_seq:
             raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
@@ -421,10 +420,9 @@ class InterpreterState:
 
         is_P2SH = (self.flags & InterpreterFlags.ENABLE_P2SH) and script_pubkey.is_P2SH()
 
-        # FIXME: set stack limits
         self.evaluate_script(script_sig)
         if is_P2SH:
-            stack_copy = self.stack.copy()
+            stack_copy = self.stack.make_copy()
         self.evaluate_script(script_pubkey)
         if not self.stack or not cast_to_bool(self.stack[-1]):
             return False
@@ -433,7 +431,7 @@ class InterpreterState:
         if is_P2SH:
             if not script_sig.is_push_only():
                 raise PushOnlyError('P2SH script_sig is not pushdata only')
-            self.stack = stack_copy    # pylint:disable=W0201
+            self.stack.restore_copy(stack_copy)
             pubkey_script = Script(self.stack.pop())
             self.evaluate_script(pubkey_script)
             if not self.stack or not cast_to_bool(self.stack[-1]):
