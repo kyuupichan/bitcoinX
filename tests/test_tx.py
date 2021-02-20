@@ -64,7 +64,7 @@ def test_signature_hash(filename):
         for sighash in range(256):
             sighash = SigHash(sighash)
             if sighash.has_forkid():
-                signature_hash = tx.signature_hash(input_index, value, pk_script, sighash=sighash)
+                signature_hash = tx.signature_hash(input_index, value, pk_script, sighash)
                 assert signature_hash == correct_hashes[n]
             n += 1
 
@@ -79,9 +79,9 @@ def test_signature_hash_bad():
     with pytest.raises(ValueError):
         tx.signature_hash(0, -1, b'')
     with pytest.raises(TypeError):
-        tx.signature_hash(0, 0, b'', sighash=1)
+        tx.signature_hash(0, 0, b'', 1)
     tx.signature_hash(0, 0, b'')
-    tx.signature_hash(1, 0, b'', sighash=SigHash(1))
+    tx.signature_hash(1, 0, b'', SigHash(1))
 
 
 @pytest.mark.parametrize("filename", tx_testcases)
@@ -91,8 +91,7 @@ def test_signatures(filename):
     for input_index, (value, pk_script, txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
         signature, pubkey = txin.script_sig.ops()
         pubkey = PublicKey.from_bytes(pubkey)
-        signature_hash = tx.signature_hash(input_index, value, pk_script,
-                                           sighash=SigHash(signature[-1]))
+        signature_hash = tx.signature_hash(input_index, value, pk_script, SigHash(signature[-1]))
         assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
 
 
