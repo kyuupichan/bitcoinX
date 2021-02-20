@@ -38,12 +38,11 @@ from .errors import (
     CheckSigVerifyFailed, CheckMultiSigVerifyFailed, InvalidSignatureCount, CleanStackError,
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
-from .misc import int_to_le_bytes, le_bytes_to_int
+from .misc import int_to_le_bytes, le_bytes_to_int, cachedproperty
 from .packing import (
     pack_byte, pack_le_uint16, pack_le_uint32, unpack_le_uint16, unpack_le_uint32,
 )
 from .signature import Signature, SigHash
-from .util import cachedproperty
 
 
 class Ops(IntEnum):

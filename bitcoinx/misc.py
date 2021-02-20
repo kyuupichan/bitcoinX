@@ -12,6 +12,7 @@ __all__ = (
     'int_to_be_bytes', 'int_to_le_bytes', 'CONTEXT'
 )
 
+import mmap
 from functools import partial
 from os import path
 
@@ -49,3 +50,33 @@ def chunks(items, size):
 def data_file_path(*parts):
     '''Return the path to a file in the data/ directory.'''
     return path.join(package_dir, "data", *parts)
+
+
+#
+# Internal utilities
+#
+
+def map_file(file_name, new_size=None):
+    '''Map an existing file into memory.  If new_size is specified the
+    file is truncated or extended to that size.
+
+    Returns a Python mmap object.
+    '''
+    with open(file_name, 'rb+') as f:
+        if new_size is not None:
+            f.truncate(new_size)
+        return mmap.mmap(f.fileno(), 0)
+
+
+# Method decorator.  To be used for calculations that will always deliver the same result.
+# The method cannot take any arguments and should be accessed as an attribute.
+class cachedproperty:
+
+    def __init__(self, f):
+        self.f = f
+
+    def __get__(self, obj, type_):
+        obj = obj or type_
+        value = self.f(obj)
+        setattr(obj, self.f.__name__, value)
+        return value

@@ -18,7 +18,7 @@ from struct import Struct
 
 from bitcoinx.hashes import hash_to_hex_str
 from bitcoinx.packing import pack_le_uint32, unpack_le_uint32
-from bitcoinx.util import map_file
+from bitcoinx.misc import map_file
 
 
 empty_header = bytes(80)
