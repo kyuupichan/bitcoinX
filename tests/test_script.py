@@ -3092,7 +3092,10 @@ def make_not_low_S(sig):
 
 
 def checksig_scripts(state, sighash, op, kind):
-    script_pubkey = Script() << op
+    if kind == 'insert_sig':
+        script_pubkey = Script() << OP_DROP << op
+    else:
+        script_pubkey = Script() << op
 
     # Create a random private key and sign the transaction
     privkey = PrivateKey.from_random()
@@ -3115,6 +3118,9 @@ def checksig_scripts(state, sighash, op, kind):
     else:
         pubkey_encoding = privkey.public_key.to_bytes()
     script_sig = Script() << sig << pubkey_encoding
+
+    if kind == 'insert_sig':
+        script_pubkey = Script() << sig << script_pubkey
 
     return script_sig, script_pubkey
 
@@ -3150,9 +3156,12 @@ def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
         pubkey_encodings[index] = b'\2' + bytes(32)
 
     # Pubkey script pushes the public keys and then their count followed by OP_CHECKMULTISIG
-    script_pubkey = Script() << m
-    script_pubkey = script_pubkey.push_many(pubkey_encodings)
-    script_pubkey = script_pubkey.push_many((n, op))
+    pubkey_parts = [m] + pubkey_encodings + [n, op]
+    extra_no_sigs = []
+    if kind == 'insert_sig' and m > 0:
+        insert_sig_count = random.randrange(1, 6)
+        extra_no_sigs = [OP_DROP] * insert_sig_count
+    script_pubkey = Script().push_many(pubkey_parts + extra_no_sigs)
 
     message_hash = state.tx.signature_hash(state.input_index, state.value,
                                            script_pubkey, sighash=sighash)
@@ -3189,6 +3198,13 @@ def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
     else:
         script_sig = Script() << OP_0
     script_sig = script_sig.push_many(sigs)
+
+    if kind == 'insert_sig' and m > 0:
+        extra_with_sigs = []
+        for _ in range(insert_sig_count):
+            extra_with_sigs.append(random.choice(sigs))
+            extra_with_sigs.append(OP_DROP)
+        script_pubkey = Script().push_many(pubkey_parts + extra_with_sigs)
 
     return script_sig, script_pubkey, m, n
 
@@ -3270,6 +3286,22 @@ class TestCrypto(TestEvaluateScriptBase):
             with pytest.raises(CheckSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
         assert state.stack == [b'']
+
+    @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
+    def test_CHECKSIG_find_and_delete(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        # find_and_delete of sigs is not done with forkid
+        if sighash.has_forkid():
+            return
+        # Insert the sig in the pubkey to check it's removed
+        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'insert_sig')
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+        if op == OP_CHECKSIG:
+            assert state.stack == [b'\1']
+        else:
+            assert not state.stack
 
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_not_strict_DER(self, checksig_state, op):
@@ -3567,6 +3599,22 @@ class TestCrypto(TestEvaluateScriptBase):
             with pytest.raises(CheckMultiSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
         assert state.stack == [b'']
+
+    @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
+    def test_CHECKMULTISIG_find_and_delete(self, checksig_state, op):
+        state = checksig_state
+        sighash = random_sighash(state)
+        # find_and_delete of sigs is not done with forkid
+        if sighash.has_forkid():
+            return
+        # Insert sigs in the pubkey to check they're removed
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'insert_sig')
+        state.evaluate_script(script_sig)
+        state.evaluate_script(script_pubkey)
+        if op == OP_CHECKMULTISIG:
+            assert state.stack == [b'\1']
+        else:
+            assert not state.stack
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_not_strict_DER(self, checksig_state, op):
