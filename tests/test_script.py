@@ -18,7 +18,7 @@ from bitcoinx import (
     int_to_be_bytes,
 )
 
-from .utils import random_tx, random_value, read_tx
+from .utils import random_tx, read_tx, random_value
 
 
 def _zeroes():
@@ -951,7 +951,7 @@ def policy(request):
 
 
 def create_checksig_states():
-    tx = random_tx()
+    tx = random_tx(False)
     input_index = random.randrange(0, len(tx.inputs))
     value = random_value()
 
@@ -988,7 +988,7 @@ def checksig_state(request):
 
 
 def create_checklocktime_states():
-    tx = random_tx()
+    tx = random_tx(False)
     input_index = random.randrange(0, len(tx.inputs))
     value = random_value()
 

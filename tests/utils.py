@@ -1,39 +1,51 @@
 from os import urandom, path
 import json
-import random
+from random import randrange, choice, random
 
 
-from bitcoinx import Tx, TxInput, TxOutput
+from bitcoinx import (
+    Tx, TxInput, TxOutput, Script, SEQUENCE_FINAL,
+    OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR
+)
 
 
 data_dir = path.join(path.dirname(path.realpath(__file__)), 'data')
 
 
-def random_input():
-    prev_hash = urandom(32)
-    prev_idx = random.randrange(0, 6)
-    script_sig = urandom(50)
-    sequence = random.choice([0xffffffff, 0, 5_000])
-    return TxInput(prev_hash, prev_idx, script_sig, sequence)
+random_ops = [OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF,
+              OP_VERIF, OP_RETURN, OP_CODESEPARATOR]
 
 
 def random_value():
-    return random.randrange(0, 1_000_000_000)
+    '''Random value of a TxOutput.'''
+    return randrange(0, 100_000_000)
+
+
+def random_script():
+    ops = [choice(random_ops) for _ in range(randrange(0, 10))]
+    return Script().push_many(ops)
+
+
+def random_bool():
+    return random() >= 0.5
+
+
+def random_input():
+    sequence = SEQUENCE_FINAL if random_bool() else randrange(0, SEQUENCE_FINAL)
+    return TxInput(urandom(32), randrange(0, 4), random_script(), sequence)
 
 
 def random_output():
-    value = random_value()
-    script_pubkey = urandom(25)
-    return TxOutput(value, script_pubkey)
+    return TxOutput(random_value(), random_script())
 
 
-def random_tx():
-    version = random.randrange(0, 4)
-    ninputs = random.randrange(1, 5)
-    inputs = [random_input() for _ in range(ninputs)]
-    noutputs = random.randrange(1, 5)
-    outputs = [random_output() for _ in range(noutputs)]
-    locktime = random.choice([0, 100_000, 700_000, 1_000_000_000, 3_000_000_000])
+def random_tx(is_single):
+    version = randrange(- (1 << 31), 1 << 31)
+    locktime = 0 if random_bool() else randrange(0, 1 << 32)
+    n_inputs = randrange(1, 5)
+    n_outputs = n_inputs + randrange(-1, 1) if is_single else randrange(1, 5)
+    inputs = [random_input() for _ in range(n_inputs)]
+    outputs = [random_output() for _ in range(n_outputs)]
 
     return Tx(version, inputs, outputs, locktime)
 

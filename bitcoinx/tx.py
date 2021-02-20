@@ -340,6 +340,10 @@ class TxOutput:
             Script(read_varbytes(read)),   # script_pubkey
         )
 
+    @classmethod
+    def null(cls):
+        return cls(-1, Script())
+
     def to_bytes(self):
         return b''.join((
             pack_le_int64(self.value),
