@@ -18,9 +18,9 @@ from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
 from .hashes import hash_to_hex_str, double_sha256
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
-    read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list, pack_varint
+    read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list
 )
-from .script import Script, OP_CODESEPARATOR
+from .script import Script, Ops
 from .signature import SigHash
 
 
@@ -123,7 +123,7 @@ class Tx:
             else:
                 sequence = tx_input.sequence
             if n == input_index:
-                script = script_code.find_and_delete(Script() << OP_CODESEPARATOR)
+                script = script_code.find_and_delete(Script() << Ops.OP_CODESEPARATOR)
             else:
                 script = b''
 

@@ -17,6 +17,7 @@ __all__ = (
     'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
     'NumEqualVerifyFailed', 'InvalidSignatureCount', 'PushOnlyError', 'LockTimeError',
+    'StackMemoryUsageError',
 )
 
 
@@ -145,6 +146,10 @@ class CleanStackError(InterpreterError):
 
 class LockTimeError(InterpreterError):
     '''Raised for various failures of OP_CHECKLOCKTIMEVERIFY and OP_CHECKSEQUENCEVERIFY.'''
+
+
+class StackMemoryUsageError(InterpreterError):
+    '''Raised when stack memory usage gets too large.'''
 
 
 class VerifyFailed(InterpreterError):
