@@ -11,6 +11,7 @@ from bitcoinx.consts import (
 )
 from bitcoinx.errors import *
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
+from bitcoinx.interpreter import *
 from bitcoinx.script import *
 from bitcoinx import (
     pack_varint, PrivateKey, pack_byte, Bitcoin, BitcoinTestnet, varint_len, SigHash,
@@ -940,8 +941,8 @@ def test_find_and_delete(script, delete, expected):
 
 
 policies = [
-    InterpreterPolicy(100_000, 512, 20_000, 100),
-    InterpreterPolicy(1_000_000, 2048, 100_000, 1_000),
+    InterpreterPolicy(100_000, 512, 20_000, 100, 1_000_000),
+    InterpreterPolicy(1_000_000, 2048, 100_000, 1_000, 10_000_000),
 ]
 
 
