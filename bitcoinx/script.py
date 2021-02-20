@@ -543,11 +543,10 @@ class Script:
         if isinstance(op, bytes):
             if len(op) <= 4:
                 return str(item_to_int(op))
-            # Print signatures as strings showing the sighash text.  Without sighash byte
-            # normalized DER-encoded signatures are between 8 and 72 bytes
-            if decode_sighash and op[0] == 0x30 and 9 <= len(op) <= 73:
+            # Print signatures as strings showing the sighash text.
+            if decode_sighash and op[0] == 0x30:
                 try:
-                    return Signature(op).to_string()
+                    return Signature.to_string(op)
                 except InvalidSignature:
                     pass
             return op.hex()

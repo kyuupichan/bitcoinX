@@ -42,7 +42,7 @@ from .script import (
     Script, ScriptIterator, Ops, OP_16, OP_IF, OP_ENDIF, OP_RETURN,
     int_to_item, item_to_int, minimal_push_opcode, is_item_minimally_encoded, minimal_encoding,
 )
-from .signature import Signature, SigHash
+from .signature import Signature, SigHash, SigEncoding
 
 
 bool_items = [b'', b'\1']
@@ -233,13 +233,14 @@ class InterpreterState:
         if not sig_bytes:
             return
 
-        if (self.flags & (InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.REQUIRE_LOW_S
-                          | InterpreterFlags.REQUIRE_STRICT_ENCODING)
-                and not Signature.is_strict_der_encoding(sig_bytes)):
-            raise InvalidSignature('signature does not follow strict DER encoding')
+        if self.flags & (InterpreterFlags.REQUIRE_STRICT_DER | InterpreterFlags.REQUIRE_LOW_S
+                         | InterpreterFlags.REQUIRE_STRICT_ENCODING):
+            kind = Signature.analyze_encoding(sig_bytes)
+            if not kind & SigEncoding.STRICT_DER:
+                raise InvalidSignature('signature does not follow strict DER encoding')
 
-        if self.flags & InterpreterFlags.REQUIRE_LOW_S and not Signature.is_low_S(sig_bytes):
-            raise InvalidSignature('signature has high S value')
+            if self.flags & InterpreterFlags.REQUIRE_LOW_S and not kind & SigEncoding.LOW_S:
+                raise InvalidSignature('signature has high S value')
 
         if self.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
             sighash = SigHash.from_sig_bytes(sig_bytes)
@@ -289,10 +290,9 @@ class InterpreterState:
         except ValueError:
             return False
 
-        # Split out the DER signature and the sighash
-        der_sig, sighash = Signature.normalize_der_signature(sig_bytes)
-        message_hash = self.tx.signature_hash(self.input_index, self.value,
-                                              script_code, sighash)
+        # Split out to a normalized DER signature and the sighash
+        der_sig, sighash = Signature.split_and_normalize(sig_bytes)
+        message_hash = self.tx.signature_hash(self.input_index, self.value, script_code, sighash)
 
         return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
 

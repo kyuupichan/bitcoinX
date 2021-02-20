@@ -73,14 +73,14 @@ def test_signature_hash_bad():
     tx, _, _ = read_json_tx('503fd37f.txn')
 
     with pytest.raises(IndexError):
-        tx.signature_hash(-1, 5, b'')
+        tx.signature_hash(-1, 5, b'', SigHash.ALL)
     with pytest.raises(IndexError):
-        tx.signature_hash(2, 5, b'')
+        tx.signature_hash(2, 5, b'', SigHash.ALL)
     with pytest.raises(ValueError):
-        tx.signature_hash(0, -1, b'')
+        tx.signature_hash(0, -1, b'', SigHash.ALL)
     with pytest.raises(TypeError):
         tx.signature_hash(0, 0, b'', 1)
-    tx.signature_hash(0, 0, b'')
+    tx.signature_hash(0, 0, b'', SigHash.NONE)
     tx.signature_hash(1, 0, b'', SigHash(1))
 
 
