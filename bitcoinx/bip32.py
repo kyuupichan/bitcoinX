@@ -30,7 +30,7 @@ PART_REGEX = re.compile("([0-9]+)'?$")
 
 
 @attr.s(slots=True, frozen=True, repr=False)
-class BIP32Derivation(object):
+class BIP32Derivation:
     '''Metadata about a BIP32 derivation.'''
     chain_code = attr.ib()
     n = attr.ib()

@@ -68,7 +68,7 @@ def create_chain(headers_obj, count, prior=None, good_bits=None):
     return new_headers, chain
 
 
-class TestChain(object):
+class TestChain:
 
     def test_chain(self):
         N = 10
@@ -148,7 +148,7 @@ class TestChain(object):
         assert chain._header_indices[-1] == bsv_checkpoint.height
 
 
-class TestHeaderStorage(object):
+class TestHeaderStorage:
 
     def test_new(self, tmpdir):
         hs = create_or_open_storage(tmpdir)
@@ -257,7 +257,7 @@ class TestHeaderStorage(object):
             assert f.read(8) == bytes([8, 0, 0, 0, 2, 0, 0, 0])
 
 
-class TestHeaders(object):
+class TestHeaders:
 
     def test_constructor(self, tmpdir):
         headers = create_headers(tmpdir)

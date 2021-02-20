@@ -63,7 +63,7 @@ class _BadHeadersFile(Exception):
     pass
 
 
-class Chain(object):
+class Chain:
     '''A dumb object representing a chain of headers back to the genesis block (implemented
     through parent chains).
 
@@ -146,7 +146,7 @@ class Chain(object):
         return f'tip={self.tip} log2_work={round(self.log2_work(), 8)}'
 
 
-class _HeaderStorage(object):
+class _HeaderStorage:
     '''Implementation of raw header storage for flat files.
 
     Block headers are looked up by index, which in general is not equal to its height.
@@ -262,7 +262,7 @@ class _HeaderStorage(object):
         return self.mmap.flush()
 
 
-class Headers(object):
+class Headers:
     '''A collection of block headers, including a checkpoint header, arranged into chains.
     Each header header belongs to precisely one chain.  Each chain has a parent chain
     which it forked from, except one chain whose parent is None.

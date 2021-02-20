@@ -173,7 +173,7 @@ class TestBIP32PublicKey:
         assert repr(mpubkey) == f'BIP32PublicKey("{MXPUB}")'
 
 
-class TestPrivKey(object):
+class TestPrivKey:
 
     def test_from_to_extended_key_string(self):
         d = mprivkey.derivation()
