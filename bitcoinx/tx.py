@@ -76,7 +76,7 @@ class Tx:
         preimage = b''.join(txout.to_bytes() for txout in self.outputs)
         return double_sha256(preimage)
 
-    def _forkid_preimage(self, input_index, value, script, sighash):
+    def _forkid_signature_hash(self, input_index, value, script, sighash):
         '''Return the post-fork preimage that needs to be signed for the given input, script, and
         sighash type.  Value is the value of the output being spent, which is committed to.
         '''
@@ -93,7 +93,7 @@ class Tx:
         elif (sighash.base == SigHash.SINGLE and input_index < len(self.outputs)):
             hash_outputs = double_sha256(self.outputs[input_index].to_bytes())
 
-        return b''.join((
+        preimage = b''.join((
             pack_le_int32(self.version),
             hash_prevouts,
             hash_sequence,
@@ -103,13 +103,16 @@ class Tx:
             pack_le_uint32(sighash),
         ))
 
-    def _original_preimage(self, input_index, script, sighash):
+        return double_sha256(preimage)
+
+    def _original_signature_hash(self, input_index, script, sighash):
         '''Return the pre-fork preimage that needs to be signed for the given input, script, and
         sighash type.
         '''
+        assert input_index < len(self.inputs)
+
         sighash_single_none = sighash.base in (SigHash.SINGLE, SigHash.NONE)
 
-        # Invalid SIGHASH_SINGLE?
         if sighash.base == SigHash.SINGLE and input_index >= len(self.outputs):
             return ONE
 
@@ -141,7 +144,7 @@ class Tx:
             n_outputs = len(self.outputs)
         outputs = b''.join(serialize_output(n) for n in range(n_outputs))
 
-        return b''.join((
+        preimage = b''.join((
             pack_le_int32(self.version),
             pack_varint(n_inputs),
             inputs,
@@ -150,6 +153,8 @@ class Tx:
             pack_le_uint32(self.locktime),
             pack_le_uint32(sighash),
         ))
+
+        return double_sha256(preimage)
 
     def signature_hash(self, input_index, value, script, *, sighash=None):
         '''Return the hash that needs to be signed for the given input, script, and sighash type.
@@ -170,11 +175,9 @@ class Tx:
             raise TypeError('sighash must be a SigHash instance')
 
         if sighash.has_forkid():
-            preimage = self._forkid_preimage(input_index, value, script, sighash)
-        else:
-            preimage = self._original_preimage(input_index, script, sighash)
+            return self._forkid_signature_hash(input_index, value, script, sighash)
 
-        return double_sha256(preimage)
+        return self._original_signature_hash(input_index, script, sighash)
 
     def are_inputs_final(self):
         '''Return True if all inputs are final.'''
