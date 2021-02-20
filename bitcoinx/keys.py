@@ -23,13 +23,12 @@ from .coin import Bitcoin, Coin
 from .consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
 from .errors import InvalidSignature
 from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
-from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT
+from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT, cachedproperty
 from .packing import pack_byte, pack_varbytes
 from .signature import (
     sign_der, sign_recoverable, verify_der_signature, verify_recoverable_signature,
     public_key_from_recoverable_signature, to_message_signature, to_recoverable_signature,
 )
-from .util import cachedproperty
 
 EC_COMPRESSED = lib.SECP256K1_EC_COMPRESSED
 EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED

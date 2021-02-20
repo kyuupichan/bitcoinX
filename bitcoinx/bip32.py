@@ -22,8 +22,8 @@ from .base58 import base58_decode_check, base58_encode_check
 from .coin import Bitcoin, Coin
 from .hashes import hmac_sha512_halves, hash160
 from .keys import PrivateKey, PublicKey
+from .misc import cachedproperty
 from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
-from .util import cachedproperty
 
 HARDENED = 1 << 31
 PART_REGEX = re.compile("([0-9]+)'?$")
