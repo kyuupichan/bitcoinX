@@ -8,11 +8,13 @@
 '''Signatures of various kinds.'''
 
 __all__ = (
-    'Signature', 'SigHash', 'der_signature_to_compact', 'compact_signature_to_der',
+    'Signature', 'SigHash', 'SigEncoding',
+    'der_signature_to_compact', 'compact_signature_to_der',
 )
 
 from base64 import b64decode
 from binascii import Error as binascii_Error
+from enum import IntEnum
 
 from electrumsv_secp256k1 import ffi, lib
 from .consts import CURVE_ORDER, HALF_CURVE_ORDER
@@ -25,7 +27,6 @@ CDATA_SIG_LENGTH = 64
 # This is for the ECDSA signature without the sighash suffix
 MIN_SIG_LENGTH = 8
 MAX_SIG_LENGTH = 72
-MISSING_SIG_BYTES = b'\xff'
 
 
 def _cdata_recsig(recoverable_sig):
@@ -150,6 +151,11 @@ def to_message_signature(recoverable_sig, compressed):
     return pack_byte(leading_byte) + recoverable_sig[:64]
 
 
+class SigEncoding(IntEnum):
+    STRICT_DER = 1 << 0
+    LOW_S = 1 << 1
+
+
 class SigHash(int):
 
     @property
@@ -190,84 +196,21 @@ class SigHash(int):
 
 
 class Signature:
-    '''A bitcoin DER signature, as raw bytes.'''
-
-    DER_SIG_ZEROES = bytes.fromhex('3006020100020100')
-
-    def __init__(self, raw):
-        '''Raw is a der-encoded signature plus a single sighash byte, or MISSING_SIG_BYTES.
-
-        Raises InvalidSignature.'''
-        if raw != MISSING_SIG_BYTES:
-            # Validate the DER encoding
-            der_signature_to_compact(raw[:-1])
-        self._raw = raw
-
-    def __eq__(self, other):
-        '''A signature equals anything buffer-like with the same bytes representation.'''
-        return (isinstance(other, (bytes, bytearray, memoryview))
-                or hasattr(other, '__bytes__')) and self._raw == bytes(other)
-
-    def __hash__(self):
-        return hash(self._raw)
+    '''Utility functions for handling bitcoin and DER signatures.'''
 
     @classmethod
-    def from_hex(cls, hex_str):
-        '''Instantiate from a hexadecimal string.'''
-        return cls(bytes.fromhex(hex_str))
+    def parse_lax_to_r_s(cls, der_sig, force_low_S=True):
+        '''Converts a lossely-enforced DER signature to a pair (r, s).
 
-    def to_hex(self):
-        '''Return the script signature as a hexadecimal string.'''
-        return self._raw.hex()
+        Implementation of ecdsa_signature_parse_der_lax() from bitcoin-sv/src/pubkey.cpp.
 
-    @classmethod
-    def from_der_sig(cls, der_sig, sighash):
-        return cls(der_sig + pack_byte(sighash))
-
-    def __bytes__(self):
-        return self._raw
-
-    def to_bytes(self):
-        return self._raw
-
-    def is_present(self):
-        return self._raw != MISSING_SIG_BYTES
-
-    def to_compact(self):
-        '''The 32-byte r and s values concatenated.'''
-        return der_signature_to_compact(self.der_signature)
-
-    def r_value(self):
-        '''The r value as an integer.'''
-        return be_bytes_to_int(self.to_compact()[:32])
-
-    def s_value(self):
-        '''The s value as an integer.'''
-        return be_bytes_to_int(self.to_compact()[32:])
-
-    def to_string(self):
-        '''The signature as an ASM string.'''
-        return self._raw[:-1].hex() + '[' + SigHash(self._raw[-1]).to_string() + ']'
-
-    @property
-    def der_signature(self):
-        if self._raw == MISSING_SIG_BYTES:
-            raise InvalidSignature('signature is missing')
-        return self._raw[:-1]
-
-    @property
-    def sighash(self):
-        if self._raw == MISSING_SIG_BYTES:
-            raise InvalidSignature('signature is missing')
-        return SigHash(self._raw[-1])
-
-    @classmethod
-    def parse_der_lax(cls, sig):
-        '''Implementation of ecdsa_signature_parse_der_lax() from bitcoin-sv/src/pubkey.cpp'''
+        Raises InvalidSignature if the signature format is invalid.  Returns a pair of
+        zeroes if the R or S values overflow.  Forces S to be low if force_low_S is True.
+        '''
         def read_byte(pos):
-            if pos >= len(sig):
+            if pos >= len(der_sig):
                 raise SyntaxError
-            return sig[pos]
+            return der_sig[pos]
 
         def require_byte(value, pos):
             if read_byte(pos) != value:
@@ -275,9 +218,9 @@ class Signature:
             return pos + 1
 
         def _read_be_integer(n, pos):
-            if pos + n > len(sig):
+            if pos + n > len(der_sig):
                 raise SyntaxError
-            return be_bytes_to_int(sig[pos: pos + n]), pos + n
+            return be_bytes_to_int(der_sig[pos: pos + n]), pos + n
 
         def read_length(pos):
             length = read_byte(pos)
@@ -300,19 +243,49 @@ class Signature:
         except SyntaxError:
             raise InvalidSignature('invalid lax DER encoding') from None
 
-        # Force low S.
-        if CURVE_ORDER > s > HALF_CURVE_ORDER:
-            s = CURVE_ORDER - s
+        if 0 <= r < CURVE_ORDER and 0 <= s < CURVE_ORDER:
+            if force_low_S and s > HALF_CURVE_ORDER:
+                s = CURVE_ORDER - s
+            return r, s
 
-        try:
-            compact_sig = int_to_be_bytes(r, size=32) + int_to_be_bytes(s, size=32)
-        except OverflowError:
-            return cls.DER_SIG_ZEROES
-
-        return compact_signature_to_der(compact_sig, raise_on_overflow=False)
+        return 0, 0
 
     @classmethod
-    def normalize_der_signature(cls, sig):
+    def parse_lax_to_compact(cls, der_sig, force_low_S=True):
+        r, s = cls.parse_lax_to_r_s(der_sig, force_low_S)
+        return int_to_be_bytes(r, size=32) + int_to_be_bytes(s, size=32)
+
+    @classmethod
+    def parse_lax_to_der(cls, der_sig, force_low_S=True):
+        compact = cls.parse_lax_to_compact(der_sig, force_low_S)
+        return compact_signature_to_der(compact)
+
+    @classmethod
+    def r_value(cls, der_sig):
+        '''The r value as an integer.'''
+        r, _ = cls.parse_lax_to_r_s(der_sig)
+        return r
+
+    @classmethod
+    def s_value(cls, der_sig, force_low_S=True):
+        '''The s value as an integer.'''
+        _, s = cls.parse_lax_to_r_s(der_sig, force_low_S)
+        return s
+
+    @classmethod
+    def to_string(cls, sig_bytes):
+        '''The signature as an ASM string.  Raises InvalidSignature if invalid.'''
+        der_sig = sig_bytes[:-1]
+        # Check validity
+        cls.parse_lax_to_r_s(der_sig)
+        return der_sig.hex() + '[' + cls.sighash(sig_bytes).to_string() + ']'
+
+    @classmethod
+    def sighash(cls, sig_bytes):
+        return SigHash.from_sig_bytes(sig_bytes)
+
+    @classmethod
+    def split_and_normalize(cls, sig_bytes):
         '''Given a bitcoin signature taken from script (including the trailing sighash byte),
         return a normalized DER signature and a SigHash object.
 
@@ -320,70 +293,68 @@ class Signature:
         Acceptable encodings are rather lax to account for on-chain signatures accepted
         in earlier times by OpenSSL.
         '''
-        return cls.parse_der_lax(sig), SigHash(sig[-1])
+        return cls.parse_lax_to_der(sig_bytes[:-1]), cls.sighash(sig_bytes)
 
     @classmethod
-    def is_strict_der_encoding(cls, sig):
-        '''Enforce stricter standard for DER encoding than libsecp256k.  Other requirements are
-        tested by libsecp256k1 in the call der_signature_to_compact().  R and S are
-        positive 32-bit numbers.  They are encoded as big-endian numbers with a sign-bit.
+    def analyze_encoding(cls, sig_bytes):
+        '''Analyzes the encoding of the signature (including sighash byte) returning a
+        SigEncoding enum.
+
+        Enforces stricter standard for DER encoding than libsecp256k.  In DER, r and s are
+        positive 32-bit numbers encoded as big-endian numbers with a sign-bit.
 
         0x30 LEN 0x02 RLEN R 0x02 SLEN S SIGHASH.
         '''
         # Valid size range (including sighash byte)
-        if not 9 <= len(sig) <= 73:
-            return False
+        if not 9 <= len(sig_bytes) <= 73:
+            return 0
 
         # Must be compound
-        if sig[0] != 0x30:
-            return False
+        if sig_bytes[0] != 0x30:
+            return 0
         # Length must cover everything
-        if sig[1] != len(sig) - 3:
-            return False
+        if sig_bytes[1] != len(sig_bytes) - 3:
+            return 0
 
         # Validate lengths
-        lenR = sig[3]
-        if 5 + lenR >= len(sig):
-            return False
-        lenS = sig[5 + lenR]
-        if lenR + lenS + 7 != len(sig):
-            return False
+        lenR = sig_bytes[3]
+        if 5 + lenR >= len(sig_bytes):
+            return 0
+        lenS = sig_bytes[5 + lenR]
+        if lenR + lenS + 7 != len(sig_bytes):
+            return 0
 
         # R must be an integer
-        if sig[2] != 0x02:
-            return False
+        if sig_bytes[2] != 0x02:
+            return 0
         # R cannot have length 0
         if not lenR:
-            return False
+            return 0
         # R cannot be negative
-        if sig[4] & 0x80:
-            return False
+        if sig_bytes[4] & 0x80:
+            return 0
         # Leading zero only if otherwise negative
-        if lenR > 1 and sig[4] == 0x00 and not sig[5] & 0x80:
-            return False
+        if lenR > 1 and sig_bytes[4] == 0x00 and not sig_bytes[5] & 0x80:
+            return 0
 
         # S must be an integer
-        if sig[lenR + 4] != 0x02:
-            return False
+        if sig_bytes[lenR + 4] != 0x02:
+            return 0
         # S cannot have length 0
         if not lenS:
-            return False
+            return 0
         # S cannot be negative
-        if sig[lenR + 6] & 0x80:
-            return False
+        if sig_bytes[lenR + 6] & 0x80:
+            return 0
         # Leading zero only if otherwise negative
-        if lenS > 1 and sig[lenR + 6] == 0x00 and not sig[lenR + 7] & 0x80:
-            return False
+        if lenS > 1 and sig_bytes[lenR + 6] == 0x00 and not sig_bytes[lenR + 7] & 0x80:
+            return 0
 
-        return True
-
-    @classmethod
-    def is_low_S(cls, sig):
-        '''Return True if S is low.  sig must have passed is_strict_der_encoding().'''
-        lenR = sig[3]
-        lenS = sig[5 + lenR]
-        S = be_bytes_to_int(sig[6 + lenR:6 + lenR + lenS])
-        return S <= HALF_CURVE_ORDER
+        result = SigEncoding.STRICT_DER
+        s = be_bytes_to_int(sig_bytes[6 + lenR:6 + lenR + lenS])
+        if s <= HALF_CURVE_ORDER:
+            result |= SigEncoding.LOW_S
+        return result
 
 
 # Sighash values
@@ -392,5 +363,3 @@ SigHash.NONE = SigHash(0x02)
 SigHash.SINGLE = SigHash(0x03)
 SigHash.FORKID = SigHash(0x40)
 SigHash.ANYONE_CAN_PAY = SigHash(0x80)
-
-Signature.MISSING = Signature(MISSING_SIG_BYTES)
