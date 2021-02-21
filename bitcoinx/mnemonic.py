@@ -227,10 +227,6 @@ class ElectrumMnemonic:
         return hmac.hex().startswith(prefix)
 
     @classmethod
-    def normalize_new(cls, mnemonic):
-        return ' '.join(mnemonic.lower().split())
-
-    @classmethod
     def normalize_old(cls, mnemonic):
         return ' '.join(mnemonic.lower().split())
 

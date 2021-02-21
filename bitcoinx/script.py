@@ -163,7 +163,7 @@ class Ops(IntEnum):
     OP_NOP10 = 0xb9
 
 
-# pylint:disable=E0602
+# pylint:disable=E0602,E1101
 
 globals().update(Ops.__members__)
 __all__ += tuple(Ops.__members__.keys())

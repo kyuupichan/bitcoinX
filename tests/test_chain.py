@@ -269,6 +269,10 @@ class TestHeaders:
         assert chain.tip.prev_hash == bytes(32)
         assert chain.work == chain.tip.work()
 
+    def test_flush(self, tmpdir):
+        headers = create_headers(tmpdir)
+        headers.flush()
+
     def test_lookup(self, tmpdir):
         headers = create_headers(tmpdir, bsv_checkpoint)
         assert len(headers) == bsv_checkpoint.height + 1
@@ -286,6 +290,11 @@ class TestHeaders:
         assert chain.header_index(0) == 0
         with pytest.raises(MissingHeader):
             headers.lookup(header.prev_hash)
+
+        # Lookup fake header but which triggers a loop because of a fake match
+        fake_hash = bytes(headers._short_hashes[:4])
+        with pytest.raises(MissingHeader):
+            headers.lookup(fake_hash)
 
     def test_set_one(self, tmpdir):
         headers = create_headers(tmpdir, bsv_checkpoint)

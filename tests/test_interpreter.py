@@ -65,6 +65,7 @@ def old_limits(request):
     InterpreterFlags.REQUIRE_STRICT_DER,
     InterpreterFlags.REQUIRE_LOW_S,
     InterpreterFlags.REQUIRE_STRICT_ENCODING,
+    InterpreterFlags.REQUIRE_MINIMAL_PUSH,
     InterpreterFlags.ENABLE_FORKID,
 ))
 def checksig_state(request, limits):
@@ -380,8 +381,8 @@ reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
 
 
 def value_bytes(x):
-    if isinstance(x, bytes):
-        return x
+    #if isinstance(x, bytes):
+    #    return x
     if isinstance(x, str):
         return bytes.fromhex(x)
     return int_to_item(x)
@@ -472,7 +473,7 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         script = Script() << OP_0 << OP_IF << OP_RESERVED << OP_ENDIF
         state.evaluate_script(script)
 
-    def test_max_ops_per_script_op_reserved(self, state):
+    def test_max_ops_per_script_bad(self, state):
         state.limits.ops_per_script = 2
         script = Script() << OP_1 << OP_IF << OP_NOP << OP_ENDIF
         with pytest.raises(TooManyOps):
@@ -2402,13 +2403,8 @@ class TestCrypto(TestEvaluateScriptBase):
                 state.evaluate_script(script)
             assert 'number of length 5 bytes exceeds the limit of 4 bytes' in str(e.value)
         else:
-            if state.limits.pubkeys_per_multisig >= state.limits.ops_per_script:
-                with pytest.raises(TooManyOps) as e:
-                    state.evaluate_script(script)
-                assert 'op count exceeds the limit of ' in str(e.value)
-            else:
-                with pytest.raises(InvalidStackOperation):
-                    state.evaluate_script(script)
+            with pytest.raises(InvalidStackOperation):
+                state.evaluate_script(script)
         state.reset()
 
         script = Script() << OP_0 << OP_0 << state.limits.pubkeys_per_multisig + 1 << op
@@ -2596,7 +2592,7 @@ class TestCrypto(TestEvaluateScriptBase):
 
         # Bad encodings are only noticed if consumed...
         script_sig, script_pubkey, m, n = checkmultisig_scripts(
-            state, sighash, op, 'bad_pubkey_encoding_skipped')
+            state, sighash, op, 'bad_pubkey_encoding_missed')
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
 
@@ -2865,11 +2861,6 @@ class TestByteStringOperations(TestEvaluateScriptBase):
         # A minimally-encoded result of the max length is good
         result = b'\6' * state.limits.script_num_length
         script = Script() << result + b'\0' << OP_BIN2NUM
-        if len(script) > state.limits.script_size:
-            with pytest.raises(ScriptTooLarge):
-                state.evaluate_script(script)
-            # No point in testing again
-            return
         state.evaluate_script(script)
         assert state.stack == [result]
 
