@@ -43,6 +43,7 @@ def test_der_signature_to_compact_no_overflow():
 largest = int_to_be_bytes(CURVE_ORDER)
 der_zeroes = bytes.fromhex('3006020100020100')
 
+
 @pytest.mark.parametrize("raises, value", (
     (raises, value) for raises in (True, False) for value in (
         largest + bytes(32), bytes(32) + largest, largest * 2

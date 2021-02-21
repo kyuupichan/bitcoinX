@@ -50,6 +50,7 @@ class TestBIP32Derivation:
             '4c02c611a04ec1619ae4b"), n=0, depth=0, parent_fingerprint=bytes.fromhex("00000000"))'
         )
 
+
 class TestBIP32PublicKey:
 
     def test_from_to_extended_key_string(self):
@@ -190,9 +191,11 @@ class TestPrivKey:
         assert isinstance(p, BIP32PrivateKey)
 
         values = [bytes(range(64)), bytes(64)]
+
         def source(size):
             assert size == 64
             return values.pop()
+
         p = BIP32PrivateKey.from_random(source=source)
         assert p.to_extended_key_string() == (
             'xprv9s21ZrQH143K2NukZg6wLLhBGTfK6twkq4qMuqCpX2uq3udoAx4'
@@ -465,6 +468,7 @@ derivation_tests = (
     ("m/2147483647/2", [0x07fffffff, 2]),
     ("m/2147483647'/255'", [0xffffffff, 0x800000ff]),
 )
+
 
 @pytest.mark.parametrize("chain_str,derivation", derivation_tests)
 def test_bip32_decompose_chain_string(chain_str, derivation):

@@ -364,23 +364,24 @@ class TestTxInput:
             }
         ),
         # A P2PK signature
-        ('c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd37040000000048473044022'
-         '04e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07'
-         'de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff',
-         {
-             'hash': 'c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704',
-             'idx': 0,
-             'script': {
-                 'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8'
-                 'cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09[ALL]',
-                 'hex': '47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5f'
-                 'b8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901'
-             },
-             'sequence': 4294967295,
-         },
+        (
+            'c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd37040000000048473044022'
+            '04e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07'
+            'de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff',
+            {
+                'hash': 'c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704',
+                'idx': 0,
+                'script': {
+                    'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8'
+                    'cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09[ALL]',
+                    'hex': '47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5f'
+                    'b8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901'
+                },
+                'sequence': 4294967295,
+            },
         ),
     ), ids=['genesis', "coinbase", "p2pk"])
-    def test_to_json(self, script,json):
+    def test_to_json(self, script, json):
         assert TxInput.from_hex(script).to_json(0, 0) == json
         assert TxInput.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT, 0) == json
         assert TxInput.from_hex(script).to_json(JSONFlags.ENUMERATE_INPUTS, None) == json
@@ -443,7 +444,7 @@ class TestTxOutput:
             },
         ),
     ), ids=['p2pk', 'p2pkh'])
-    def test_to_json(self, script,coin,json,extra):
+    def test_to_json(self, script, coin, json, extra):
         assert TxOutput.from_hex(script).to_json(0, coin) == json
         assert TxOutput.from_hex(script).to_json(JSONFlags.ENUMERATE_OUTPUTS, coin) == json
         n = random.randrange(0, 100)

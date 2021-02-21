@@ -18,9 +18,11 @@ cases = [
      b'\xb7\xe2\xbdh(\x82\xa8\xbd\xfc\x10\x03\x00\xdc\xcbX\xb7\xe62\x18>'),
 ]
 
+
 def test_hash_funcs():
     for func, case, result in cases:
         assert func(case) == result
+
 
 def test_hash_to_hex_str():
     assert hash_to_hex_str(b'1234567890abcd') == '6463626130393837363534333231'

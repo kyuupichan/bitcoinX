@@ -11,9 +11,9 @@ from .utils import random_tx, random_script
 
 ONE = int_to_be_bytes(1, size=32)
 
+
 # My Python translation of the code in bitcoin-sv/src/test/sighash_tests.cpp that represents
 # the original reference signature_hash() code
-
 def ref_sighash(script_code, tx, input_index, hash_type):
     assert input_index < len(tx.inputs)
 

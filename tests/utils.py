@@ -15,6 +15,7 @@ data_dir = path.join(path.dirname(path.realpath(__file__)), 'data')
 random_ops = [OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF,
               OP_VERIF, OP_RETURN, OP_CODESEPARATOR]
 
+
 def _zeroes():
     # Yields a zero and negative zero
     for size in range(10):

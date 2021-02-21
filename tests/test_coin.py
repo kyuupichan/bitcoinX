@@ -5,6 +5,7 @@ from bitcoinx import (
 )
 from bitcoinx.coin import *
 
+
 header_400k = (
     b'\x04\x00\x00\x009\xfa\x82\x18Hx\x1f\x02z.m\xfa\xbb\xf6\xbd\xa9 \xd9'
     b'\xaea\xb64\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\xec\xaeSj0@B\xe3'
@@ -12,9 +13,9 @@ header_400k = (
     b'\xe8\xb0\xcc*\xcfV\x9f\xb9\x06\x18\x06e,\''
 )
 
-@pytest.mark.parametrize("raw_header,header_hash,version,prev_hash,"
-                         "merkle_root,timestamp,bits,nonce", (
-    (
+
+@pytest.mark.parametrize(
+    "raw_header,header_hash,version,prev_hash,merkle_root,timestamp,bits,nonce", ((
         Bitcoin.genesis_header,
         '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f',
         1,
@@ -23,8 +24,7 @@ header_400k = (
         1231006505,
         486604799,
         2083236893
-    ),
-    (
+    ), (
         header_400k,
         '000000000000000004ec466ce4732fe6f1ed1cddc2ed4b328fff5224276e3f6f',
         4,
@@ -34,7 +34,7 @@ header_400k = (
         403093919,
         657220870
     ),
-))
+    ))
 def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
                  timestamp, bits, nonce):
     header_hash = hex_str_to_hash(header_hash)

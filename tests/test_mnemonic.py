@@ -9,6 +9,7 @@ from bitcoinx.mnemonic import *
 
 english_wordlist = Wordlists.bip39_wordlist('english.txt')
 
+
 def bip39_test_vectors():
     with open('tests/data/bip39_vectors.json') as f:
         text = f.read()
@@ -42,8 +43,8 @@ class TestBIP39Mnemonic:
         ('cat dog', 'cat dog'),
         (' 　cat 　dog  ', 'cat dog'),
         ('　やきとり　きぎ　', 'やきとり きき\u3099'),
-        (' élève ', 'e\u0301le\u0300ve' ),
-        ('e\u0301le\u0300ve', 'e\u0301le\u0300ve' ),
+        (' élève ', 'e\u0301le\u0300ve'),
+        ('e\u0301le\u0300ve', 'e\u0301le\u0300ve'),
     ))
     def test_normalize(self, text, answer):
         assert BIP39Mnemonic.normalize(text) == answer
@@ -108,11 +109,11 @@ class TestBIP39Mnemonic:
 
 class TestElectrumMnemonic:
 
-    @pytest.mark.parametrize("bits, prefix, execution_count",
-                             ((bits, prefix, n)
-                              for bits in (132, 264)
-                              for prefix in ('01', '02')
-                              for n in range(10))
+    @pytest.mark.parametrize("bits, prefix, execution_count", (
+        (bits, prefix, n)
+        for bits in (132, 264)
+        for prefix in ('01', '02')
+        for n in range(10))
     )
     def test_generate_new(self, bits, prefix, execution_count):
         mnemonic = ElectrumMnemonic.generate_new(english_wordlist, prefix=prefix, bits=bits)
@@ -128,10 +129,10 @@ class TestElectrumMnemonic:
             ElectrumMnemonic.generate_new(['bar'] * 2000)
         assert 'too short' in str(e.value)
 
-    @pytest.mark.parametrize("word_count, execution_count",
-                             ((word_count, n)
-                              for word_count in (12, 24)
-                              for n in range(10))
+    @pytest.mark.parametrize("word_count, execution_count", (
+        (word_count, n)
+        for word_count in (12, 24)
+        for n in range(10))
     )
     def test_generate_old_seed(self, word_count, execution_count):
         hex_seed = ElectrumMnemonic.generate_old_seed(word_count=word_count)
@@ -145,7 +146,6 @@ class TestElectrumMnemonic:
             ElectrumMnemonic.generate_old_seed(word_count=20)
         assert 'word count' in str(e.value)
 
-
     @pytest.mark.parametrize("hex_seed,result", (
         ('43e79bb152d4256c9a6818ee8c34228c', True),
         ('43e79bb152d4256c9a6818ee8c34228cde', False),
@@ -154,7 +154,6 @@ class TestElectrumMnemonic:
     ))
     def test_is_valid_old_hex(self, hex_seed, result):
         assert ElectrumMnemonic.is_valid_old(hex_seed) is result
-
 
     @pytest.mark.parametrize("n", (5, 11, 13, 16, 20, 23, 25))
     def test_old_to_hex_seed_bad(self, n):

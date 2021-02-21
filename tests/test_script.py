@@ -699,19 +699,28 @@ class TestScript:
     (b'\x82', bytes([1, 0x82])),
     (b'\xff', bytes([1, 0xff])),
     (b'abcd', bytes([4]) + b'abcd'),
-    (b'a' * 75, bytes([75]) + b'a' * 75),
-    (b'a' * 76, bytes([OP_PUSHDATA1, 76]) + b'a' * 76),
-    (b'a' * 255, bytes([OP_PUSHDATA1, 255]) + b'a' * 255),
-    (b'a' * 256, bytes([OP_PUSHDATA2, 0, 1]) + b'a' * 256),
-    (b'a' * 260, bytes([OP_PUSHDATA2, 4, 1]) + b'a' * 260),
-    (b'a' * 65535, bytes([OP_PUSHDATA2, 0xff, 0xff]) + b'a' * 65535),
-    (b'a' * 65536, bytes([OP_PUSHDATA4, 0, 0, 1, 0]) + b'a' * 65536),
-    (b'a' * 65541, bytes([OP_PUSHDATA4, 5, 0, 1, 0]) + b'a' * 65541),
 ))
 def test_push_item(item, answer):
     # Also tests push_and_drop_item
     assert push_item(item) == answer
     assert push_and_drop_item(item) == answer + bytes([OP_DROP])
+
+
+# Split out test to avoid long items on Windows where pytest has issues
+@pytest.mark.parametrize("count, answer_prefix", (
+    (75, bytes([75])),
+    (76, bytes([OP_PUSHDATA1, 76])),
+    (255, bytes([OP_PUSHDATA1, 255])),
+    (256, bytes([OP_PUSHDATA2, 0, 1])),
+    (260, bytes([OP_PUSHDATA2, 4, 1])),
+    (65535, bytes([OP_PUSHDATA2, 0xff, 0xff])),
+    (65536, bytes([OP_PUSHDATA4, 0, 0, 1, 0])),
+    (65541, bytes([OP_PUSHDATA4, 5, 0, 1, 0])),
+))
+def test_push_item_long(count, answer_prefix):
+    item = b'a' * count
+    answer = answer_prefix + item
+    assert push_item(item) == answer
 
 
 @pytest.mark.parametrize("items,answer", (
@@ -790,12 +799,15 @@ def test_int_to_item_size(value, size, encoding):
     (bytes([OP_RESERVED, OP_DUP, OP_NOP, OP_15, OP_HASH160, OP_1NEGATE]) + push_item(b'BitcoinSV'),
      [OP_RESERVED, OP_DUP, OP_NOP, b'\x0f', OP_HASH160, b'\x81', b'BitcoinSV']),
     (b'', []),
-    (push_item(b'a' * 80), [b'a' * 80]),
-    (push_item(b'a' * 256), [b'a' * 256]),
-    (push_item(b'a' * 65536), [b'a' * 65536]),
 ))
 def test_script_ops(script, ops):
     assert list(Script(script).ops()) == ops
+
+
+@pytest.mark.parametrize("count", (80, 256, 65536))
+def test_script_ops_long(count):
+    script = push_item(b'a' * count)
+    assert list(Script(script).ops()) == [b'a' * count]
 
 
 @pytest.mark.parametrize("script,pairs", (
@@ -807,14 +819,9 @@ def test_script_ops_and_items(script, pairs):
     assert list(Script(script).ops_and_items()) == pairs
 
 
-@pytest.mark.parametrize("script", (
-    push_item(bytes(2))[:-1],
-    push_item(bytes(76))[:-1],
-    push_item(bytes(80))[:-1],
-    push_item(bytes(256))[:-1],
-    push_item(bytes(65536))[:-1],
-))
-def test_script_ops_truncated(script):
+@pytest.mark.parametrize("count", (2, 76, 80, 256, 65536))
+def test_script_ops_truncated(count):
+    script = push_item(bytes(count))[:-1]
     with pytest.raises(TruncatedScriptError):
         list(Script(script).ops())
 
