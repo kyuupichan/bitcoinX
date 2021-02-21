@@ -6,6 +6,7 @@ from .coin import *
 from .consts import *
 from .errors import *
 from .hashes import *
+from .interpreter import *
 from .keys import *
 from .misc import *
 from .mnemonic import *
@@ -27,6 +28,7 @@ __all__ = sum((
     consts.__all__,
     errors.__all__,
     hashes.__all__,
+    interpreter.__all__,
     keys.__all__,
     misc.__all__,
     mnemonic.__all__,

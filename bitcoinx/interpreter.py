@@ -203,6 +203,18 @@ class InterpreterFlags(IntEnum):
     # If true verify_script() requires a clean stack on exit
     REQUIRE_CLEANSTACK = 1 << 13
 
+    # New blocks must comply with these flags (but old blocks may not)
+    MANDATORY_SCRIPT_VERIFY_FLAGS = (
+        REQUIRE_STRICT_ENCODING | REQUIRE_LOW_S | REQUIRE_NULLFAIL | ENABLE_FORKID | ENABLE_P2SH
+    )
+
+    # Standard transactions must comply with these flags
+    STANDARD_VERIFY_FLAGS = (
+        MANDATORY_SCRIPT_VERIFY_FLAGS | REQUIRE_STRICT_DER | REQUIRE_MINIMAL_PUSH
+        | REQUIRE_NULLDUMMY | REJECT_UPGRADEABLE_NOPS | REQUIRE_CLEANSTACK
+        | ENABLE_CHECKLOCKTIMEVERIFY | ENABLE_CHECKSEQUENCEVERIFY
+    )
+
     @classmethod
     def sanitize(cls, flags, is_utxo_after_genesis):
         '''Return sanitized flags .'''
