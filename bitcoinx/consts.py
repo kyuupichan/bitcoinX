@@ -21,6 +21,7 @@ ZERO = bytes(32)
 ONE = bytes(31) + pack_byte(1)
 UINT32_MAX = 0xffffffff
 INT32_MAX = 0x7fffffff
+UINT64_MAX = 0xffffffffffffffff
 INT64_MAX = 0x7fffffffffffffff
 
 LOCKTIME_THRESHOLD = 500_000_000

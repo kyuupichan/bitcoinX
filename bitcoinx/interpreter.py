@@ -8,8 +8,8 @@
 '''Bitcoin script interpreter.'''
 
 __all__ = (
-    'InterpreterError', 'InterpreterPolicy', 'InterpreterState', 'InterpreterFlags',
-    'cast_to_bool',
+    'InterpreterError', 'InterpreterPolicy', 'InterpreterLimits', 'InterpreterState',
+    'InterpreterFlags',
 )
 
 
@@ -21,7 +21,7 @@ import attr
 
 from .consts import (
     LOCKTIME_THRESHOLD, SEQUENCE_FINAL, SEQUENCE_LOCKTIME_DISABLE_FLAG,
-    SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG, UINT32_MAX, INT32_MAX,
+    SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG, UINT32_MAX, UINT64_MAX, INT32_MAX,
 )
 from .consts import INT64_MAX
 from .errors import (
@@ -36,27 +36,16 @@ from .errors import (
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .limited_stack import LimitedStack
-from .misc import cachedproperty
 # pylint:disable=E0611
 from .script import (
     Script, ScriptIterator, Ops, OP_16, OP_IF, OP_ENDIF, OP_RETURN,
     int_to_item, item_to_int, minimal_push_opcode, is_item_minimally_encoded, minimal_encoding,
+    cast_to_bool
 )
 from .signature import Signature, SigHash, SigEncoding
 
 
 bool_items = [b'', b'\1']
-
-
-def cast_to_bool(item):
-    '''Cast an item to a Python boolean True or False.
-
-    Because the item is not converted to an integer, no restriction is placed on its size.
-    '''
-    if not item:
-        return False
-    # Take care of negative zeroes
-    return item[-1] not in {0, 0x80} or any(item[n] for n in range(0, len(item) - 1))
 
 
 @attr.s(slots=True)
@@ -67,16 +56,121 @@ class Condition:
     seen_else = attr.ib()    # True or False
 
 
+@attr.s(slots=True)
 class InterpreterPolicy:
-    '''Policy rules fixed over the node session.'''
+    '''Miner policy rules.
 
-    def __init__(self, max_script_size, max_script_num_length, max_ops_per_script,
-                 max_pubkeys_per_multisig, max_stack_memory_usage):
-        self.max_script_size = max_script_size
-        self.max_script_num_length = max_script_num_length
-        self.max_ops_per_script = max_ops_per_script
-        self.max_pubkeys_per_multisig = max_pubkeys_per_multisig
-        self.max_stack_memory_usage = max_stack_memory_usage
+    Generally fixed over the node session and apply to non-consensus post-genesis
+    transactions for e.g. mempool acceptance.
+
+    Consensus rules determine what is accepted in a block and are looser.
+    '''
+    # In bytes, e.g. 10_000_000
+    max_script_size = attr.ib()
+    # In bytes, e.g. 256
+    max_script_num_length = attr.ib()
+    # In bytes, e.g. 10_000_000
+    max_stack_memory_usage = attr.ib()
+    # e.g. 1_000_000
+    max_ops_per_script = attr.ib()
+    # e.g. 64
+    max_pubkeys_per_multisig = attr.ib()
+
+
+@attr.s(slots=True)
+class InterpreterLimits:
+    '''Limits to apply to a particular invocation of the interpreter.  Use the from_policy()
+    method to initialize appropriately for a given miner policy and context.'''
+
+    # Class constants
+    MAX_SCRIPT_SIZE_BEFORE_GENESIS = 10_000
+    MAX_SCRIPT_SIZE_AFTER_GENESIS = UINT32_MAX    # limited by P2P message size
+    MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS = 4
+    MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS = 750_000
+    MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS = 520
+    MAX_STACK_ELEMENTS_BEFORE_GENESIS = 1_000
+    MAX_STACK_MEMORY_USAGE_AFTER_GENESIS = INT64_MAX
+    MAX_OPS_PER_SCRIPT_BEFORE_GENESIS = 500
+    MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT32_MAX
+    MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS = 20
+    MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS = UINT32_MAX
+
+    # Attributes
+    script_size = attr.ib()
+    script_num_length = attr.ib()
+    stack_memory_usage = attr.ib()
+    ops_per_script = attr.ib()
+    pubkeys_per_multisig = attr.ib()
+    item_size = attr.ib()
+    is_utxo_after_genesis = attr.ib()
+
+    @classmethod
+    def max_script_size_rule(cls, policy, is_genesis_enabled, is_consensus):
+        '''Implements the max script size rule.'''
+        if is_genesis_enabled:
+            if is_consensus:
+                return cls.MAX_SCRIPT_SIZE_AFTER_GENESIS
+            return policy.max_script_size
+        return cls.MAX_SCRIPT_SIZE_BEFORE_GENESIS
+
+    @classmethod
+    def max_script_num_length_rule(cls, policy, is_utxo_after_genesis, is_consensus):
+        '''Implements the max script memory usage rule.'''
+        if is_utxo_after_genesis:
+            if is_consensus:
+                return cls.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
+            return policy.max_script_num_length
+        return cls.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
+
+    @classmethod
+    def max_stack_memory_usage_rule(cls, policy, is_utxo_after_genesis, is_consensus):
+        '''Implements the max script memory usage rule.'''
+        if is_utxo_after_genesis:
+            if is_consensus:
+                return cls.MAX_STACK_MEMORY_USAGE_AFTER_GENESIS
+            return policy.max_stack_memory_usage
+        # Before genesis other stricter limitations applied so this can be infinite
+        return INT64_MAX
+
+    @classmethod
+    def max_ops_per_script_rule(cls, policy, is_genesis_enabled, is_consensus):
+        '''Implements the max script size rule.'''
+        if is_genesis_enabled:
+            if is_consensus:
+                return cls.MAX_OPS_PER_SCRIPT_AFTER_GENESIS
+            return policy.max_ops_per_script
+        return cls.MAX_OPS_PER_SCRIPT_BEFORE_GENESIS
+
+    @classmethod
+    def max_pubkeys_per_multisig_rule(cls, policy, is_utxo_after_genesis, is_consensus):
+        '''Implements the rule re maximum public keys in an OP_CHECKMULTISIG[VERIFY].'''
+        if is_utxo_after_genesis:
+            if is_consensus:
+                return cls.MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS
+            return policy.max_pubkeys_per_multisig
+        return cls.MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
+
+    @classmethod
+    def max_item_size_rule(cls, is_utxo_after_genesis):
+        # No limit for post-genesis UTXOs
+        if is_utxo_after_genesis:
+            return UINT64_MAX
+        else:
+            return cls.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
+
+    @classmethod
+    def from_policy(cls, policy, is_genesis_enabled, is_utxo_after_genesis, is_consensus):
+        if is_utxo_after_genesis and not is_genesis_enabled:
+            raise ValueError('cannot have a UTXO after genesis if genesis is not enabled')
+        return cls(
+            cls.max_script_size_rule(policy, is_genesis_enabled, is_consensus),
+            cls.max_script_num_length_rule(policy, is_utxo_after_genesis, is_consensus),
+            cls.max_stack_memory_usage_rule(policy, is_utxo_after_genesis, is_consensus),
+            cls.max_ops_per_script_rule(policy, is_genesis_enabled, is_consensus),
+            cls.max_pubkeys_per_multisig_rule(policy, is_utxo_after_genesis, is_consensus),
+            cls.max_item_size_rule(is_utxo_after_genesis),
+            is_utxo_after_genesis,
+        )
 
 
 class InterpreterFlags(IntEnum):
@@ -132,26 +226,9 @@ class InterpreterState:
     '''Things that vary per evaluation, typically because they're a function of the
     transaction input.'''
 
-    MAX_SCRIPT_SIZE_BEFORE_GENESIS = 10_000
-    MAX_SCRIPT_SIZE_AFTER_GENESIS = UINT32_MAX    # limited by P2P message size
-    MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS = 4
-    MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS = 750_000
-    MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS = 520
-    MAX_STACK_ELEMENTS_BEFORE_GENESIS = 1_000
-    MAX_STACK_MEMORY_USAGE_AFTER_GENESIS = INT64_MAX
-    MAX_OPS_PER_SCRIPT_BEFORE_GENESIS = 500
-    MAX_OPS_PER_SCRIPT_AFTER_GENESIS = UINT32_MAX
-    MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS = 20
-    MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS = UINT32_MAX
-
-    def __init__(self, policy, *, flags=0, is_consensus=False, is_genesis_enabled=True,
-                 is_utxo_after_genesis=True, tx=None, input_index=-1, value=-1):
-        # These inputs must not be changed after construction because of caching
-        self.policy = policy
-        self.flags = InterpreterFlags.sanitize(flags, is_utxo_after_genesis)
-        self.is_consensus = is_consensus
-        self.is_genesis_enabled = is_genesis_enabled
-        self.is_utxo_after_genesis = is_utxo_after_genesis
+    def __init__(self, limits, *, flags=0, tx=None, input_index=-1, value=-1):
+        self.limits = limits
+        self.flags = InterpreterFlags.sanitize(flags, limits.is_utxo_after_genesis)
         self.tx = tx
         self.input_index = input_index
         self.value = value
@@ -159,7 +236,7 @@ class InterpreterState:
 
     def reset(self):
         # These are updated by the interpreter whilst running
-        self.stack = LimitedStack(self.max_stack_memory_usage)
+        self.stack = LimitedStack(self.limits.stack_memory_usage)
         self.alt_stack = self.stack.make_child_stack()
         self.conditions = []
         self.execute = False
@@ -170,8 +247,8 @@ class InterpreterState:
 
     def bump_op_count(self, bump):
         self.op_count += bump
-        if self.op_count > self.max_ops_per_script:
-            raise TooManyOps(f'op count exceeds the limit of {self.max_ops_per_script:,d}')
+        if self.op_count > self.limits.ops_per_script:
+            raise TooManyOps(f'op count exceeds the limit of {self.limits.ops_per_script:,d}')
 
     def require_stack_depth(self, depth):
         if len(self.stack) < depth:
@@ -182,33 +259,35 @@ class InterpreterState:
         if not self.alt_stack:
             raise InvalidStackOperation('alt stack is empty')
 
+    def validate_item_size(self, size):
+        '''Enforces the limit on stack item size.'''
+        if size > self.limits.item_size:
+            raise InvalidPushSize(f'item length {size:,d} exceeds the limit '
+                                  f'of {self.limits.item_size:,d} bytes')
+
     def validate_minimal_push_opcode(self, op, item):
         if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             expected_op = minimal_push_opcode(item)
             if op != expected_op:
                 raise MinimalEncodingError(f'item not pushed with minimal opcode {expected_op}')
 
-    def validate_item_size(self, size):
-        # No limit for post-genesis UTXOs.
-        if not self.is_utxo_after_genesis:
-            limit = self.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
-            if size > limit:
-                raise InvalidPushSize(f'item length {size:,d} exceeds the limit '
-                                      f'of {limit:,d} bytes')
-
     def validate_stack_size(self):
-        if self.is_utxo_after_genesis:
+        '''Enforces the limits on combined stack size.
+
+        For post-genesis UTXOs the limit is instead on stack memory usage.
+        '''
+        if self.limits.is_utxo_after_genesis:
             return
         stack_size = len(self.stack) + len(self.alt_stack)
-        limit = self.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+        limit = InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
         if stack_size > limit:
-            raise StackSizeTooLarge(f'stack size exceeds the limit of {limit:,d} items')
+            raise StackSizeTooLarge(f'combined stack size exceeds the limit of {limit:,d} items')
 
     def validate_number_length(self, size, *, limit=None):
         if limit is None:
-            limit = self.max_script_num_length
+            limit = self.limits.script_num_length
         if size > limit:
-            raise InvalidNumber(f'number of length {size:,d} exceeds the limit '
+            raise InvalidNumber(f'number of length {size:,d} bytes exceeds the limit '
                                 f'of {limit:,d} bytes')
 
     def to_number(self, item, *, length_limit=None):
@@ -221,9 +300,9 @@ class InterpreterState:
         return item_to_int(item)
 
     def validate_pubkey_count(self, count):
-        limit = self.max_pubkeys_per_multisig
+        limit = self.limits.pubkeys_per_multisig
         if not 0 <= count <= limit:
-            raise InvalidPublicKeyCount(f'number of public keys, {count:,d}, in OP_CHECKMULTISIG '
+            raise InvalidPublicKeyCount(f'number of public keys, {count:,d}, in multi-sig check '
                                         f'lies outside range 0 <= count <= {limit:d}')
 
     def validate_signature(self, sig_bytes):
@@ -329,52 +408,11 @@ class InterpreterState:
         if self.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
             raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
 
-    @cachedproperty
-    def max_stack_memory_usage(self):
-        if self.is_utxo_after_genesis:
-            if self.is_consensus:
-                return self.MAX_STACK_MEMORY_USAGE_AFTER_GENESIS
-            return self.policy.max_stack_memory_usage
-        # Before genesis stricter limitations applied so can be infinite
-        return INT64_MAX
-
-    @cachedproperty
-    def max_ops_per_script(self):
-        if self.is_genesis_enabled:
-            if self.is_consensus:
-                return self.MAX_OPS_PER_SCRIPT_AFTER_GENESIS
-            return self.policy.max_ops_per_script
-        return self.MAX_OPS_PER_SCRIPT_BEFORE_GENESIS
-
-    @cachedproperty
-    def max_script_size(self):
-        if self.is_genesis_enabled:
-            if self.is_consensus:
-                return self.MAX_SCRIPT_SIZE_AFTER_GENESIS
-            return self.policy.max_script_size
-        return self.MAX_SCRIPT_SIZE_BEFORE_GENESIS
-
-    @cachedproperty
-    def max_script_num_length(self):
-        if self.is_utxo_after_genesis:
-            if self.is_consensus:
-                return self.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
-            return self.policy.max_script_num_length
-        return self.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
-
-    @cachedproperty
-    def max_pubkeys_per_multisig(self):
-        if self.is_utxo_after_genesis:
-            if self.is_consensus:
-                return self.MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS
-            return self.policy.max_pubkeys_per_multisig
-        return self.MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
-
     def evaluate_script(self, script):
         '''Evaluate a script and update state.'''
-        if len(script) > self.max_script_size:
+        if len(script) > self.limits.script_size:
             raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
-                                 f'{self.max_script_size:,d} bytes')
+                                 f'{self.limits.script_size:,d} bytes')
 
         # pylint:disable=W0201
         self.op_count = 0
@@ -396,7 +434,7 @@ class InterpreterState:
             # Some op codes are disabled.  For pre-genesis UTXOs these were an error in
             # unevaluated branches; for post-genesis UTXOs only if evaluated.
             if op in {Ops.OP_2MUL, Ops.OP_2DIV} and (self.execute or
-                                                     not self.is_utxo_after_genesis):
+                                                     not self.limits.is_utxo_after_genesis):
                 raise DisabledOpcode(f'{Ops(op).name} is disabled')
 
             if self.execute and item is not None:
@@ -468,7 +506,7 @@ def handle_IF(state, op):
 def handle_ELSE(state):
     top_condition = state.conditions[-1] if state.conditions else None
     # Only one ELSE is allowed per condition block after genesis
-    if not top_condition or (top_condition.seen_else and state.is_utxo_after_genesis):
+    if not top_condition or (top_condition.seen_else and state.limits.is_utxo_after_genesis):
         raise UnbalancedConditional('unexpected OP_ELSE')
     top_condition.execute = not top_condition.execute
     top_condition.seen_else = True
@@ -483,7 +521,7 @@ def handle_ENDIF(state):
 
 def handle_VERIF(state, op):
     # Post-genesis UTXOs permit OP_VERIF and OP_NOTVERIF in unexecuted branches
-    if state.is_utxo_after_genesis and not state.execute:
+    if state.limits.is_utxo_after_genesis and not state.execute:
         return
     invalid_opcode(state, op)
 
@@ -497,7 +535,7 @@ def handle_VERIFY(state):
 
 
 def handle_RETURN(state):
-    if state.is_utxo_after_genesis:
+    if state.limits.is_utxo_after_genesis:
         if state.conditions:
             # Check for invalid grammar if OP_RETURN in an if statement after genesis
             state.non_top_level_return_after_genesis = True
