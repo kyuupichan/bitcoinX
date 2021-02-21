@@ -12,7 +12,7 @@ __all__ = (
     'Ops', 'Script', 'ScriptError', 'TruncatedScriptError',
     'push_item', 'push_int', 'push_and_drop_item', 'push_and_drop_items',
     'item_to_int', 'int_to_item', 'is_item_minimally_encoded', 'minimal_push_opcode',
-    'classify_output_script',
+    'classify_output_script', 'cast_to_bool',
 )
 
 import re
@@ -292,6 +292,17 @@ def minimal_push_opcode(item):
     if dlen <= 0xffffffff:
         return OP_PUSHDATA4
     raise ValueError('item is too large')
+
+
+def cast_to_bool(item):
+    '''Cast an item to a Python boolean True or False.
+
+    Because the item is not converted to an integer, no restriction is placed on its size.
+    '''
+    if not item:
+        return False
+    # Take care of negative zeroes
+    return item[-1] not in {0, 0x80} or any(item[n] for n in range(0, len(item) - 1))
 
 
 def _to_bytes(item):

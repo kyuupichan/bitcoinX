@@ -15,6 +15,16 @@ data_dir = path.join(path.dirname(path.realpath(__file__)), 'data')
 random_ops = [OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF,
               OP_VERIF, OP_RETURN, OP_CODESEPARATOR]
 
+def _zeroes():
+    # Yields a zero and negative zero
+    for size in range(10):
+        yield bytes(size)
+        yield bytes(size) + b'\x80'
+
+
+zeroes = list(_zeroes())
+non_zeroes = [b'\1', b'\x81', b'\1\0', b'\0\1', b'\0\x81']
+
 
 def random_value():
     '''Random value of a TxOutput.'''
