@@ -11,15 +11,6 @@ from bitcoinx import PrivateKey, pack_byte, Bitcoin, BitcoinTestnet
 from .utils import zeroes, non_zeroes
 
 
-# Workaround pytest bug: "ValueError: the environment variable is longer than 32767 bytes"
-# https://github.com/pytest-dev/pytest/issues/2951
-last_id = -1
-def parameter_id(v):
-    global last_id
-    last_id += 1
-    return last_id
-
-
 def test_op_exports():
     assert OP_0 == 0
     assert OP_FALSE is OP_0
@@ -433,29 +424,31 @@ class TestScript:
 
     @pytest.mark.parametrize("script,coin,json,extra", (
         # A P2PK output
-        ('410494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223cd89719'
-         '4a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aaac', Bitcoin,
-         {
-             'asm': '0494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223c'
-             'd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aa OP_CHECKSIG',
-         },
-         {
-             'type': 'pubkey',
-             'pubkey': '0494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb919'
-             '1223cd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aa',
-             'address': '1FvzCLoTPGANNjWoUo6jUGuAG3wg1w4YjR',
-         },
+        (
+            '410494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223cd89719'
+            '4a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aaac', Bitcoin,
+            {
+                'asm': '0494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223c'
+                'd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aa OP_CHECKSIG',
+            },
+            {
+                'type': 'pubkey',
+                'pubkey': '0494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb919'
+                '1223cd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aa',
+                'address': '1FvzCLoTPGANNjWoUo6jUGuAG3wg1w4YjR',
+            },
         ),
         # A P2PK signature
-        ('47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220'
-         '181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901', Bitcoin,
-         {
-             'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb'
-             '8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901',
-         },
-         {
-             'type': 'unknown',
-         },
+        (
+            '47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220'
+            '181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901', Bitcoin,
+            {
+                'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb'
+                '8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901',
+            },
+            {
+                'type': 'unknown',
+            },
         ),
         # A P2PKH output
         (
@@ -518,8 +511,8 @@ class TestScript:
                 'type': 'op_return',
             },
         ),
-    ), ids = ['p2pk', 'p2pk-testnet', 'p2pk_sig', 'p2pkh_output', 'p2pkh_sig',
-              'op_return', 'erroneous'])
+    ), ids=['p2pk', 'p2pk-testnet', 'p2pk_sig', 'p2pkh_output', 'p2pkh_sig',
+            'op_return', 'erroneous'])
     def test_to_json(self, script, coin, json, extra):
         json['hex'] = script
         assert Script.from_hex(script).to_json(0, False, coin) == json
@@ -705,16 +698,16 @@ class TestScript:
     (b'\x81', pack_byte(OP_1NEGATE)),
     (b'\x82', bytes([1, 0x82])),
     (b'\xff', bytes([1, 0xff])),
-    (b'abcd', bytes([4]) +  b'abcd'),
-    (b'a' * 75, bytes([75]) +  b'a' * 75),
-    (b'a' * 76, bytes([OP_PUSHDATA1, 76]) +  b'a' * 76),
-    (b'a' * 255, bytes([OP_PUSHDATA1, 255]) +  b'a' * 255),
-    (b'a' * 256, bytes([OP_PUSHDATA2, 0, 1]) +  b'a' * 256),
-    (b'a' * 260, bytes([OP_PUSHDATA2, 4, 1]) +  b'a' * 260),
-    (b'a' * 65535, bytes([OP_PUSHDATA2, 0xff, 0xff]) +  b'a' * 65535),
-    (b'a' * 65536, bytes([OP_PUSHDATA4, 0, 0, 1, 0]) +  b'a' * 65536),
-    (b'a' * 65541, bytes([OP_PUSHDATA4, 5, 0, 1, 0]) +  b'a' * 65541),
-), ids=parameter_id)
+    (b'abcd', bytes([4]) + b'abcd'),
+    (b'a' * 75, bytes([75]) + b'a' * 75),
+    (b'a' * 76, bytes([OP_PUSHDATA1, 76]) + b'a' * 76),
+    (b'a' * 255, bytes([OP_PUSHDATA1, 255]) + b'a' * 255),
+    (b'a' * 256, bytes([OP_PUSHDATA2, 0, 1]) + b'a' * 256),
+    (b'a' * 260, bytes([OP_PUSHDATA2, 4, 1]) + b'a' * 260),
+    (b'a' * 65535, bytes([OP_PUSHDATA2, 0xff, 0xff]) + b'a' * 65535),
+    (b'a' * 65536, bytes([OP_PUSHDATA4, 0, 0, 1, 0]) + b'a' * 65536),
+    (b'a' * 65541, bytes([OP_PUSHDATA4, 5, 0, 1, 0]) + b'a' * 65541),
+))
 def test_push_item(item, answer):
     # Also tests push_and_drop_item
     assert push_item(item) == answer
@@ -725,7 +718,7 @@ def test_push_item(item, answer):
     ([b''], pack_byte(OP_0) + pack_byte(OP_DROP)),
     ([b'', b''], pack_byte(OP_0) * 2 + pack_byte(OP_2DROP)),
     ([b'', b'\x04', b''], bytes((OP_0, OP_4, OP_0, OP_2DROP, OP_DROP))),
-), ids=parameter_id)
+))
 def test_push_and_drop_items(items, answer):
     assert push_and_drop_items(items) == answer
 
@@ -741,7 +734,7 @@ def test_push_and_drop_items(items, answer):
     (15, pack_byte(OP_15)),
     (16, pack_byte(OP_16)),
     (17, bytes([1, 17])),
-), ids=parameter_id)
+))
 def test_push_int(value, encoding):
     assert push_int(value) == encoding
 
@@ -764,7 +757,7 @@ def test_push_int(value, encoding):
     (256, b'\x00\x01', True),
     (32767, b'\xff\x7f', True),
     (32768, b'\x00\x80\x00', True),
-), ids=parameter_id)
+))
 def test_item_to_int(value, encoding, is_minimal):
     assert item_to_int(encoding) == value
     assert (int_to_item(value) == encoding) is is_minimal
@@ -800,7 +793,7 @@ def test_int_to_item_size(value, size, encoding):
     (push_item(b'a' * 80), [b'a' * 80]),
     (push_item(b'a' * 256), [b'a' * 256]),
     (push_item(b'a' * 65536), [b'a' * 65536]),
-), ids=parameter_id)
+))
 def test_script_ops(script, ops):
     assert list(Script(script).ops()) == ops
 
@@ -820,7 +813,7 @@ def test_script_ops_and_items(script, pairs):
     push_item(bytes(80))[:-1],
     push_item(bytes(256))[:-1],
     push_item(bytes(65536))[:-1],
-), ids=parameter_id)
+))
 def test_script_ops_truncated(script):
     with pytest.raises(TruncatedScriptError):
         list(Script(script).ops())
@@ -829,7 +822,7 @@ def test_script_ops_truncated(script):
 @pytest.mark.parametrize("script", (
     'hello',
     [b''],
-), ids=parameter_id)
+))
 def test_script_ops_type_error(script):
     with pytest.raises(TypeError):
         list(Script(script).ops())
@@ -856,22 +849,28 @@ def test_script_ops_type_error(script):
     (b'\x10', OP_16),
     (b'\x11', 1),
     (b'\x81', OP_1NEGATE),
-    (bytes(75), 75),
-    (bytes(76), OP_PUSHDATA1),
-    (bytes(255), OP_PUSHDATA1),
-    (bytes(256), OP_PUSHDATA2),
-    (bytes(65535), OP_PUSHDATA2),
-    (bytes(65536), OP_PUSHDATA4),
-    # 32 should work but sometimes memory issues
-    (bytes((1 << 28) - 1), OP_PUSHDATA4),
-), ids=parameter_id)
+))
 def test_minimal_push_opcode(item, op):
+    assert minimal_push_opcode(item) == op
+
+
+@pytest.mark.parametrize("length,op", (
+    (75, 75),
+    (76, OP_PUSHDATA1),
+    (255, OP_PUSHDATA1),
+    (256, OP_PUSHDATA2),
+    (65535, OP_PUSHDATA2),
+    (65536, OP_PUSHDATA4),
+    ((1 << 32) - 1, OP_PUSHDATA4),
+))
+def test_minimal_push_zero(length, op):
+    item = bytes(length)
     assert minimal_push_opcode(item) == op
 
 
 def test_minimal_push_opcode_too_large():
     with pytest.raises(ValueError):
-        minimal_push_opcode(bytes(1<<32))
+        minimal_push_opcode(bytes(1 << 32))
 
 
 @pytest.mark.parametrize("zero", zeroes)
@@ -910,6 +909,7 @@ find_and_delete_tests = [
     (Script() << OP_0 << OP_1 << OP_1 << OP_1 << OP_1 << OP_1, Script() << OP_1 << OP_1,
      Script() << OP_0 << OP_1),
 ]
+
 
 @pytest.mark.parametrize("script,delete,expected", find_and_delete_tests,
                          ids=[str(n) for n in range(len(find_and_delete_tests))])
