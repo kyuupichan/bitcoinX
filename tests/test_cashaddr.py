@@ -40,12 +40,12 @@ VALID_SCRIPT_ADDRESSES = [
 ]
 
 VALID_HASHES = [
-    bytes([ 118, 160, 64,  83, 189, 160, 168, 139, 218, 81,
-            119, 184, 106, 21, 195, 178, 159, 85,  152, 115 ]),
-    bytes([ 203, 72, 18, 50, 41,  156, 213, 116, 49,  81,
-            172, 75, 45, 99, 174, 25,  142, 123, 176, 169 ]),
-    bytes([ 1,   31, 40,  228, 115, 201, 95, 64,  19,  215,
-            213, 62, 197, 251, 195, 180, 45, 248, 237, 16 ]),
+    bytes([118, 160, 64,  83, 189, 160, 168, 139, 218, 81,
+           119, 184, 106, 21, 195, 178, 159, 85,  152, 115]),
+    bytes([203, 72, 18, 50, 41,  156, 213, 116, 49,  81,
+           172, 75, 45, 99, 174, 25,  142, 123, 176, 169]),
+    bytes([1,   31, 40,  228, 115, 201, 95, 64,  19,  215,
+           213, 62, 197, 251, 195, 180, 45, 248, 237, 16]),
 ]
 
 
@@ -124,9 +124,11 @@ class TestCashAddrAddress:
                 cashaddr.decode(addr)
 
     def test_address_case(self):
-        prefix, _kind, _hash160 = cashaddr.decode("bitcoincash:ppm2qsznhks23z7629mms6s4cwef74vcwvn0h829pq")
+        prefix, _kind, _hash160 = cashaddr.decode(
+            "bitcoincash:ppm2qsznhks23z7629mms6s4cwef74vcwvn0h829pq")
         assert prefix == "bitcoincash"
-        prefix, _kind, _hash160 = cashaddr.decode("BITCOINCASH:PPM2QSZNHKS23Z7629MMS6S4CWEF74VCWVN0H829PQ")
+        prefix, _kind, _hash160 = cashaddr.decode(
+            "BITCOINCASH:PPM2QSZNHKS23Z7629MMS6S4CWEF74VCWVN0H829PQ")
         assert prefix == "BITCOINCASH"
         with pytest.raises(ValueError):
             cashaddr.decode("bitcoincash:PPM2QSZNHKS23Z7629MMS6S4CWEF74VCWVN0H829PQ")

@@ -32,15 +32,14 @@ class TestAddress:
         assert Address.from_string('1111111111111111111114oLvT2', Bitcoin).to_string() == \
             '1111111111111111111114oLvT2'
         assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', BitcoinTestnet) \
-            .to_string() == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
-        assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX',
-                                   BitcoinScalingTestnet).to_string() == \
-                                   'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+                      .to_string() == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
+        assert Address.from_string(
+            'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX',
+            BitcoinScalingTestnet).to_string() == 'mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX'
         with pytest.raises(ValueError):
             Address.from_string('1111111111111111111114oLvT2', BitcoinTestnet)
         with pytest.raises(ValueError):
             Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', Bitcoin)
-
 
     def test_from_string_bad(self):
         # Too short
@@ -267,9 +266,9 @@ p2sh_multisig_scriptsig = (
 
 class TestP2MultiSig_Output:
 
-    @pytest.mark.parametrize("threshold, count",
-                             [(m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)]
-    )
+    @pytest.mark.parametrize("threshold, count", [
+        (m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)
+    ])
     def test_to_script_bytes(self, threshold, count):
         output = P2MultiSig_Output(MS_PUBKEYS[:count], threshold)
         assert output.public_key_count() == count
@@ -306,9 +305,9 @@ class TestP2MultiSig_Output:
         with pytest.raises(ValueError):
             P2MultiSig_Output(MS_PUBKEYS, len(MS_PUBKEYS) + 1)
 
-    @pytest.mark.parametrize("threshold, count",
-                             [(m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)]
-    )
+    @pytest.mark.parametrize("threshold, count", [
+        (m + 1, n + 1) for n in range(len(MS_PUBKEYS)) for m in range(n)
+    ])
     def test_from_template(self, threshold, count):
         good_output = P2MultiSig_Output(MS_PUBKEYS[:count], threshold)
         public_keys = [public_key.to_bytes() for public_key in MS_PUBKEYS[:count]]
@@ -329,9 +328,12 @@ class TestP2MultiSig_Output:
         with pytest.raises(ValueError):
             script = P2MultiSig_Output.from_template(pack_byte(1), *public_keys, pack_byte(3))
 
+
 MS_SIGS = [bytes.fromhex(sig_hex) for sig_hex in (
-    '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
-    '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976d102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
+    '30450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07'
+    'b022030a2a45a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41',
+    '3045022100928b6b9b5e0d063fff02d74a7fcc2fcc2ea5a9a1d4cf4e241302979fe0b976'
+    'd102203f4aeac2959cf4f91742720c0c77b66c488334d56e45486aecf46599af1f204941',
 )]
 
 

@@ -47,6 +47,7 @@ def create_interpreter_limits():
     flags_s = (
         0,
         InterpreterFlags.REQUIRE_MINIMAL_PUSH,
+        InterpreterFlags.REQUIRE_MINIMAL_IF,
     )
     return [InterpreterLimits.from_policy(policy, flags, *args)
             for policy in policies
@@ -59,17 +60,17 @@ all_interpreter_limits = create_interpreter_limits()
 
 @pytest.fixture(params=all_interpreter_limits)
 def limits(request):
-    yield copy.copy(request.param)
+    yield request.param
 
 
 @pytest.fixture(params=[lim for lim in all_interpreter_limits if not lim.is_utxo_after_genesis])
 def old_limits(request):
-    yield copy.copy(request.param)
+    yield request.param
 
 
 @pytest.fixture
 def state(limits):
-    yield InterpreterState(limits)
+    yield InterpreterState(copy.copy(limits))
 
 
 def add_flags(old, extra_flags):
@@ -390,7 +391,6 @@ class TestInterpreterState:
             assert state.to_number(number) == 1
 
 
-
 reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
 
 
@@ -566,26 +566,20 @@ class TestEvaluateScript(TestEvaluateScriptBase):
             with pytest.raises(OpReturnError):
                 state.evaluate_script(script)
 
-    @pytest.mark.parametrize("flags", (0, InterpreterFlags.REQUIRE_MINIMAL_PUSH,
-                                       InterpreterFlags.REQUIRE_MINIMAL_IF))
-    def test_minimal_push_executed(self, state, flags):
-        state.limits.flags = flags
+    def test_minimal_push_executed(self, state):
         # This is all fine
         script = Script() << OP_0 << OP_1 << OP_16 << b'foo' << bytes(300)
         state.evaluate_script(script)
         state.reset()
 
         script = Script(bytes([1, 5]))
-        if flags == InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
                 state.evaluate_script(script)
         else:
             state.evaluate_script(script)
 
-    @pytest.mark.parametrize("flags", (0, InterpreterFlags.REQUIRE_MINIMAL_PUSH,
-                                       InterpreterFlags.REQUIRE_MINIMAL_IF))
-    def test_minimal_push_unexecuted(self, state, flags):
-        state.limits.flags = flags
+    def test_minimal_push_unexecuted(self, state):
         # Not executed, not a problem
         script = Script(bytes([OP_0, OP_IF, 1, 5, OP_ENDIF]))
         state.evaluate_script(script)
@@ -614,7 +608,7 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         state.evaluate_script(script)
 
         # Reject with flags
-        state.limits.flags = InterpreterFlags.REJECT_UPGRADEABLE_NOPS
+        state.limits = add_flags(state.limits, InterpreterFlags.REJECT_UPGRADEABLE_NOPS)
         with pytest.raises(UpgradeableNopError) as e:
             state.evaluate_script(script)
         assert str(e.value) == f'encountered upgradeable NOP {op.name}'
@@ -1231,7 +1225,7 @@ class TestControlOperations(TestEvaluateScriptBase):
         script = Script() << OP_NOP
         # No effect regardless of flags; it's not an upgradeable NOP
         state.evaluate_script(script)
-        state.limits.flags += InterpreterFlags.REJECT_UPGRADEABLE_NOPS
+        state.limits = add_flags(state.limits, InterpreterFlags.REJECT_UPGRADEABLE_NOPS)
         state.evaluate_script(script)
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
@@ -1243,7 +1237,7 @@ class TestControlOperations(TestEvaluateScriptBase):
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_IF_unbalanced_inner(self, state, op):
-        script = Script() << OP_2 << OP_2 << op << OP_IF << OP_ENDIF
+        script = Script() << OP_0 << OP_1 << op << OP_IF << OP_ENDIF
         with pytest.raises(UnbalancedConditional) as e:
             state.evaluate_script(script)
         assert f'unterminated {op.name} at end of script' in str(e.value)
@@ -1306,27 +1300,27 @@ class TestControlOperations(TestEvaluateScriptBase):
 
     @pytest.mark.parametrize('op', (OP_IF, OP_NOTIF))
     def test_require_minimal_if(self, state, op):
-        state.limits.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
-        script = Script() << 2 << op << OP_ENDIF
-        with pytest.raises(MinimalIfError) as e:
-            state.evaluate_script(script)
-        assert 'top of stack not True or False' in str(e.value)
-        assert state.stack[-1] == b'\2'
-        state.reset()
+        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_IF:
+            script = Script() << 2 << op << OP_ENDIF
+            with pytest.raises(MinimalIfError) as e:
+                state.evaluate_script(script)
+            assert 'top of stack not True or False' in str(e.value)
+            assert state.stack[-1] == b'\2'
+            state.reset()
 
-        script = Script() << bytes(1) << op << OP_ENDIF
-        with pytest.raises(MinimalIfError) as e:
-            state.evaluate_script(script)
-        assert 'top of stack not True or False' in str(e.value)
-        assert state.stack[-1] == b'\0'
-        state.reset()
+            script = Script() << bytes(1) << op << OP_ENDIF
+            with pytest.raises(MinimalIfError) as e:
+                state.evaluate_script(script)
+            assert 'top of stack not True or False' in str(e.value)
+            assert state.stack[-1] == b'\0'
+            state.reset()
 
-        script = Script() << b'\1\0' << op << OP_ENDIF
-        with pytest.raises(MinimalIfError) as e:
-            state.evaluate_script(script)
-        assert 'top of stack not True or False' in str(e.value)
-        assert state.stack[-1] == b'\1\0'
-        state.reset()
+            script = Script() << b'\1\0' << op << OP_ENDIF
+            with pytest.raises(MinimalIfError) as e:
+                state.evaluate_script(script)
+            assert 'top of stack not True or False' in str(e.value)
+            assert state.stack[-1] == b'\1\0'
+            state.reset()
 
         script = Script() << 0 << op << OP_ENDIF
         state.evaluate_script(script)
@@ -1567,8 +1561,7 @@ class TestStackOperations(TestEvaluateScriptBase):
         assert not state.alt_stack
 
     def test_IPDUP_no_minimal_if(self, state):
-        # Has no effect
-        state.limits.flags |= InterpreterFlags.REQUIRE_MINIMAL_IF
+        # Has no effect even if MINIMAL_IF
         script = Script() << 2 << OP_IFDUP
         state.evaluate_script(script)
         assert state.stack == [b'\2'] * 2
@@ -2313,7 +2306,7 @@ class TestCrypto(TestEvaluateScriptBase):
         script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_hash')
         state.evaluate_script(script_sig)
 
-        state.limits.flags |= InterpreterFlags.REQUIRE_NULLFAIL
+        state.limits = add_flags(state.limits, InterpreterFlags.REQUIRE_NULLFAIL)
         with pytest.raises(NullFailError):
             state.evaluate_script(script_pubkey)
         assert len(state.stack) == 2
@@ -2642,7 +2635,7 @@ class TestCrypto(TestEvaluateScriptBase):
                                                                 'bad_hash', min_m=1)
 
         state.evaluate_script(script_sig)
-        state.limits.flags |= InterpreterFlags.REQUIRE_NULLFAIL
+        state.limits = add_flags(state.limits, InterpreterFlags.REQUIRE_NULLFAIL)
         with pytest.raises(NullFailError):
             state.evaluate_script(script_pubkey)
         assert len(state.stack) <= m + 1
@@ -2679,7 +2672,7 @@ class TestCrypto(TestEvaluateScriptBase):
         state.evaluate_script(script_pubkey)
         state.reset()
 
-        state.limits.flags |= InterpreterFlags.REQUIRE_NULLDUMMY
+        state.limits = add_flags(state.limits, InterpreterFlags.REQUIRE_NULLDUMMY)
         state.evaluate_script(script_sig)
         with pytest.raises(NullDummyError):
             state.evaluate_script(script_pubkey)

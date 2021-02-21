@@ -137,14 +137,13 @@ class TestChain:
         assert fork.common_chain_and_height(base) == (base, common_height)
         assert base.common_chain_and_height(fork) == (base, common_height)
 
-
     def test_from_checkpoint(self):
         header = Bitcoin.deserialized_header(bsv_checkpoint.raw_header, bsv_checkpoint.height)
         chain = Chain.from_checkpoint(Bitcoin, bsv_checkpoint)
         assert chain.height == bsv_checkpoint.height
         assert chain.tip == header
         assert chain.work == bsv_checkpoint.prev_work + header.work() == 0xd54c9a84f54e93d3d87015
-        assert chain.parent == None
+        assert chain.parent is None
         assert chain._header_indices[-1] == bsv_checkpoint.height
 
 

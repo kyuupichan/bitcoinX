@@ -48,9 +48,10 @@ def test_varint_len_bad(value):
         varint_len(value)
 
 
-@pytest.mark.parametrize("pack_func",
-                         [func for func in set(case[0] for case in pack_cases)
-                          if not '_int' in func])
+@pytest.mark.parametrize("pack_func", [
+    func for func in set(case[0] for case in pack_cases)
+    if '_int' not in func
+])
 def test_pack_negative(pack_func):
     pack_func = globals()[pack_func]
     with pytest.raises(struct_error):

@@ -6,6 +6,7 @@ from bitcoinx.base58 import *
 
 b58_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
+
 @pytest.mark.parametrize("value,answer", (
     (b'\0', '1'),
     (b'\0\0\0\0123456', '11129kECtd'),
@@ -14,7 +15,7 @@ b58_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
     (bytes.fromhex('000111d38e5fc9071ffcd20b4a763cc9ae4f252bb4e48fd66a835e252'
                    'ada93ff480d6dd43dc62a641155a5'), b58_chars),
 ))
-def test_base58_encoding(value,answer):
+def test_base58_encoding(value, answer):
     assert base58_encode(value) == answer
     assert base58_decode(answer) == value
 
@@ -41,6 +42,7 @@ def test_base58_encode():
     with pytest.raises(TypeError):
         base58_encode('foo')
     assert base58_encode(b'') == ''
+
 
 @pytest.mark.parametrize("value,answer", (
     (b'', '3QJmnh'),

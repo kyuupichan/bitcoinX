@@ -58,7 +58,6 @@ class TestPrivateKey:
         with pytest.raises(ValueError):
             PrivateKey(bad_key)
 
-
     @pytest.mark.parametrize("good_key", (
         one,
         bytes(31) + bytes([1]),
@@ -66,7 +65,6 @@ class TestPrivateKey:
     ))
     def test_good(self, good_key):
         p = PrivateKey(good_key)
-
 
     def test_constructor(self):
         secret = os.urandom(32)
@@ -193,14 +191,15 @@ class TestPrivateKey:
     def test_from_random(self):
         secret = int_to_be_bytes(39823453, 32)
         values = [secret, int_to_be_bytes(0, 32), int_to_be_bytes(CURVE_ORDER, 32)]
+
         def source(size):
             assert size == 32
             return values.pop()
+
         p = PrivateKey.from_random(source=source)
         assert p.to_bytes() == secret
         assert p.coin() is Bitcoin
         assert p.is_compressed()
-
 
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34g',
                                          'S6c56bnXQiBjk9mqSYE7ykVQ7NzrRy'])
@@ -210,13 +209,11 @@ class TestPrivateKey:
         assert p.coin() is Bitcoin
         assert not p.is_compressed()
 
-
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34h',
                                          'S6c56bnXQiBjk9mqSYE7ykVQ7NzrRz'])
     def test_from_minikey_bad(self, minikey):
         with pytest.raises(ValueError):
             PrivateKey.from_minikey(minikey)
-
 
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
     def test_from_WIF(self, coin, WIF, hex_str, compressed):
@@ -250,23 +247,19 @@ class TestPrivateKey:
         p = PrivateKey.from_hex(hex_str)
         assert p.to_WIF(coin=coin, compressed=compressed) == WIF
 
-
     def test_to_WIF_no_args(self):
         p = PrivateKey.from_random()
         assert p.to_WIF() == p.to_WIF(coin=Bitcoin, compressed=True)
-
 
     def test_add_one(self):
         p1 = PrivateKey.from_random()
         p2 = p1.add(one)
         assert p2.to_int() == p1.to_int() + 1
 
-
     def test_subtract_one(self):
         p1 = PrivateKey.from_random()
         p2 = p1.add(int_to_be_bytes(CURVE_ORDER - 1))
         assert p1.to_int() - 1 == p2.to_int()
-
 
     def test_add(self):
         p1 = PrivateKey.from_random()
@@ -277,13 +270,11 @@ class TestPrivateKey:
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
 
-
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
     def test_add_preserves_attributes(self, coin, WIF, hex_str, compressed):
         p = PrivateKey.from_WIF(WIF).add(one)
         assert p.coin() is coin
         assert p.is_compressed() is compressed
-
 
     def test_add_bad(self):
         p1 = PrivateKey.from_random()
@@ -300,13 +291,11 @@ class TestPrivateKey:
         with pytest.raises(TypeError):
             p1.add('')
 
-
     def test_mult_one(self):
         p1 = PrivateKey.from_random()
         value = p1.to_int()
         p2 = p1.multiply(one)
         assert p2.to_int() == value
-
 
     def test_mult(self):
         p1 = PrivateKey.from_random()
@@ -317,13 +306,11 @@ class TestPrivateKey:
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
 
-
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
     def test_mult_preserves_attributes(self, coin, WIF, hex_str, compressed):
         p = PrivateKey.from_WIF(WIF).multiply(one)
         assert p.coin() is coin
         assert p.is_compressed() is compressed
-
 
     def test_mult_bad(self):
         p1 = PrivateKey.from_random()
@@ -340,7 +327,6 @@ class TestPrivateKey:
         with pytest.raises(TypeError):
             p1.add('')
 
-
     def test_sign(self):
         p = PrivateKey(bytes(range(32)))
         msg = b'BitcoinSV'
@@ -352,7 +338,6 @@ class TestPrivateKey:
         assert p.sign(msg, hasher=sha256) == result
         assert p.sign(sha256(msg), hasher=None) == result
 
-
     def test_sign_bad_privkey(self):
         p = PrivateKey(bytes(range(32)))
         p._secret = bytes(32)
@@ -360,22 +345,21 @@ class TestPrivateKey:
         with pytest.raises(ValueError):
             p.sign(msg)
 
-
     def test_sign_bad_hasher(self):
         p = PrivateKey(bytes(range(32)))
         msg = b'BitcoinSV'
+
         def bad_hasher(data):
             return sha256(data)[:31]
+
         with pytest.raises(ValueError):
             p.sign(msg, hasher=bad_hasher)
-
 
     def test_sign_string(self):
         p = PrivateKey(bytes(range(32)))
         msg = 'BitcoinSV'
         with pytest.raises(TypeError):
             p.sign(msg)
-
 
     def test_sign_recoverable(self):
         p = PrivateKey(bytes(range(32)))
@@ -388,7 +372,6 @@ class TestPrivateKey:
         assert p.sign_recoverable(msg, hasher=sha256) == result
         assert p.sign_recoverable(sha256(msg), hasher=None) == result
 
-
     def test_sign_recoverable_bad_privkey(self):
         p = PrivateKey(bytes(range(32)))
         p._secret = bytes(32)
@@ -396,15 +379,15 @@ class TestPrivateKey:
         with pytest.raises(ValueError):
             p.sign_recoverable(msg)
 
-
     def test_sign_recoverable_bad_hasher(self):
         p = PrivateKey(bytes(range(32)))
         msg = b'BitcoinSV'
+
         def bad_hasher(data):
             return sha256(data)[:31]
+
         with pytest.raises(ValueError):
             p.sign_recoverable(msg, hasher=bad_hasher)
-
 
     def test_sign_recoverable_string(self):
         p = PrivateKey(bytes(range(32)))
@@ -412,22 +395,20 @@ class TestPrivateKey:
         with pytest.raises(TypeError):
             p.sign_recoverable(msg)
 
-
     @pytest.mark.parametrize("msg", (b'BitcoinSV', 'BitcoinSV'))
     def test_sign_message_and_to_base64(self, msg):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
         priv = PrivateKey.from_WIF(secret)
-        priv._compressed=True
+        priv._compressed = True
         msg_sig = priv.sign_message(msg)
         for encoded_sig in (b64encode(msg_sig).decode(), priv.sign_message_to_base64(msg)):
             assert encoded_sig == ('IIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
                                    'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
 
-        priv._compressed=False
+        priv._compressed = False
         msg_sig = priv.sign_message(msg)
         assert b64encode(msg_sig) == (b'HIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
                                       b'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
-
 
     def test_sign_message_hash(self):
         priv = PrivateKey.from_random()
@@ -436,7 +417,6 @@ class TestPrivateKey:
         # We don't permit signing message hashes directly
         with pytest.raises(ValueError):
             priv.sign_message(bytes(32), hasher=None)
-
 
     def test_sign_message_long(self):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
@@ -454,14 +434,12 @@ class TestPrivateKey:
             '1rG4B7SvE0vDDT1q2T6wSElIp6wysKJKOH7RQ='
         )
 
-
     def test_ecdh_shared_secret(self):
         p1 = PrivateKey.from_random()
         p2 = PrivateKey.from_random()
         ecdh_secret = p1.ecdh_shared_secret(p2.public_key)
         assert ecdh_secret == p2.ecdh_shared_secret(p1.public_key)
         assert p1.shared_secret(p2.public_key, bytes(32), None) == ecdh_secret
-
 
     def test_shared_secret(self):
         p = PrivateKey(bytes(range(32)))
@@ -472,7 +450,6 @@ class TestPrivateKey:
         assert P == p.shared_secret(p2.public_key, msg, sha256)
         assert P == p.shared_secret(p2.public_key, sha256(msg), hasher=None)
 
-
     def test_shared_secret_is_shared(self):
         ours = PrivateKey.from_random()
         theirs = PrivateKey.from_random()
@@ -482,7 +459,6 @@ class TestPrivateKey:
         their_P = theirs.shared_secret(ours.public_key, msg)
 
         assert our_P == their_P
-
 
     def test_decrypt_message_fails(self, AES_impl):
         priv = PrivateKey(bytes(range(32)))
@@ -534,7 +510,6 @@ class TestPrivateKey:
         with pytest.raises(DecryptionError) as e:
             priv.decrypt_message(enc_msg)
         assert 'bad HMAC' in str(e.value)
-
 
     def test_str(self):
         p = PrivateKey.from_random()
@@ -590,7 +565,6 @@ class TestPublicKey:
             '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab'
         )
 
-
     def test_from_bytes(self):
         priv = PrivateKey.from_random()
         for compressed in (False, True):
@@ -599,14 +573,12 @@ class TestPublicKey:
             assert pub.coin() is Bitcoin
             assert pub.is_compressed() is compressed
 
-
     def test_from_bytes_bad(self):
         priv = PrivateKey(bytes(range(32)))
         pub = priv.public_key
         data = pub.to_bytes(compressed=False)[:-1] + bytes(1)
         with pytest.raises(ValueError):
             PublicKey.from_bytes(data)
-
 
     def test_to_hex(self):
         priv = PrivateKey(bytes(range(32)))
@@ -620,7 +592,6 @@ class TestPublicKey:
             '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab'
         )
 
-
     def test_from_hex(self):
         priv = PrivateKey(bytes(range(32)))
         pub = priv.public_key
@@ -633,7 +604,6 @@ class TestPublicKey:
         assert pub == PublicKey.from_hex(
             '036d6caac248af96f6afa7f904f550253a0f3ef3f5aa2fe6838a95b216691468e2'
         )
-
 
     def test_from_hex_bad(self):
         with pytest.raises(ValueError):
@@ -651,7 +621,6 @@ class TestPublicKey:
             32789825133461354718917898111687295334475538855588308840542926904654395755947
         )
 
-
     def test_from_point(self):
         priv = PrivateKey(bytes(range(32)))
         pub = priv.public_key
@@ -661,13 +630,11 @@ class TestPublicKey:
 
         assert PublicKey.from_point(x, y) == pub
 
-
     def test_from_point_bad(self):
         x = 49494098513335428077054975730806467664514612540321453185917289738417036617954
         y = 32789825133461354718917898111687295334475538855588308840542926904654395755948
         with pytest.raises(ValueError):
             PublicKey.from_point(x, y)
-
 
     def test_to_address(self):
         priv = PrivateKey(bytes(range(32)))
@@ -688,7 +655,6 @@ class TestPublicKey:
         assert pub.to_address(coin=BitcoinTestnet, compressed=False) == Address.from_string(
             'mvfcNNibtBZcRHqkTCsrCapVPU6dpCoKjp', BitcoinTestnet)
 
-
     def test_add(self):
         priv = PrivateKey.from_random()
         value = os.urandom(32)
@@ -699,13 +665,11 @@ class TestPublicKey:
         assert P2 == priv2.public_key
         assert P == priv.public_key
 
-
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
     def test_add_preserves_attributes(self, coin, WIF, hex_str, compressed):
         P = PrivateKey.from_WIF(WIF).public_key.add(one)
         assert P.coin() is coin
         assert P.is_compressed() is compressed
-
 
     def test_add_bad(self):
         priv = PrivateKey.from_random()
@@ -721,7 +685,6 @@ class TestPublicKey:
         with pytest.raises(TypeError):
             P.add('')
 
-
     def test_multiply(self):
         priv = PrivateKey.from_random()
         value = os.urandom(32)
@@ -732,13 +695,11 @@ class TestPublicKey:
         assert P2 == priv2.public_key
         assert P == priv.public_key
 
-
     @pytest.mark.parametrize("coin,WIF,hex_str,compressed", WIF_tests)
     def test_multiply_preserves_attributes(self, coin, WIF, hex_str, compressed):
         P = PrivateKey.from_WIF(WIF).public_key.multiply(one)
         assert P.coin() is coin
         assert P.is_compressed() is compressed
-
 
     def test_multiply_bad(self):
         priv = PrivateKey.from_random()
@@ -753,11 +714,9 @@ class TestPublicKey:
         with pytest.raises(TypeError):
             P.multiply('')
 
-
     def test_combine_keys_none(self):
         with pytest.raises(ValueError):
             PublicKey.combine_keys([])
-
 
     def test_combine_keys_self(self):
         priv = PrivateKey.from_random()
@@ -768,7 +727,6 @@ class TestPublicKey:
 
         priv2 = priv.add(priv._secret)
         assert PublicKey.combine_keys([P, P]) == priv2.public_key
-
 
     @pytest.mark.parametrize("compressed,coin", (
         (True, Bitcoin), (False, Bitcoin), (True, BitcoinTestnet), (False, BitcoinTestnet),
@@ -787,13 +745,11 @@ class TestPublicKey:
         assert combined.coin() is coin
         assert combined.is_compressed() is compressed
 
-
     def test_combine_keys_bad(self):
         priv = PrivateKey.from_random()
         priv2 = PrivateKey(int_to_be_bytes(CURVE_ORDER - priv.to_int(), size=32))
         with pytest.raises(ValueError):
             PublicKey.combine_keys([priv.public_key, priv2.public_key])
-
 
     def test_combine_keys_bad_intermediate(self):
         priv = PrivateKey.from_random()
@@ -801,7 +757,6 @@ class TestPublicKey:
         # But combining with bad intermediate result but good final is fine
         P = PublicKey.combine_keys([priv.public_key, priv2.public_key, priv.public_key])
         assert P == priv.public_key
-
 
     def test_verify_der_signature(self):
         priv = PrivateKey.from_random()
@@ -813,7 +768,6 @@ class TestPublicKey:
         assert P.verify_der_signature(sig, message, sha256)
         assert P.verify_der_signature(sig, sha256(message), None)
         assert not P.verify_der_signature(sig, message[:-1])
-
 
     def test_verify_der_signature_bad(self):
         priv = PrivateKey.from_random()
@@ -833,7 +787,6 @@ class TestPublicKey:
             except InvalidSignature:
                 pass
 
-
     def test_verify_recoverable_signature(self):
         priv = PrivateKey.from_random()
         message = b'BitcoinSV'
@@ -844,7 +797,6 @@ class TestPublicKey:
         assert P.verify_recoverable_signature(sig, message, sha256)
         assert P.verify_recoverable_signature(sig, sha256(message), None)
         assert not P.verify_recoverable_signature(sig, message[:-1])
-
 
     def test_verify_recoverable_signature_bad(self):
         priv = PrivateKey.from_random()
@@ -865,7 +817,6 @@ class TestPublicKey:
         with pytest.raises(InvalidSignature):
             P.verify_recoverable_signature(bad_sig, message)
 
-
     def test_from_recoverable_signature(self):
         priv = PrivateKey.from_random()
         message = b'BitcoinSV'
@@ -875,12 +826,10 @@ class TestPublicKey:
         assert priv.public_key == pub
         assert pub.coin() is Bitcoin
 
-
     def test_from_recoverable_signature_bad(self):
         message = b'BitcoinSV'
         with pytest.raises(InvalidSignature):
             PublicKey.from_recoverable_signature(b'1' * 64, message)
-
 
     def test_from_recoverable_signature_bad_r(self):
         priv = PrivateKey.from_random()
@@ -889,7 +838,6 @@ class TestPublicKey:
         bad_sig = bytes(32) + rec_sig[32:]
         with pytest.raises(InvalidSignature):
             PublicKey.from_recoverable_signature(bad_sig, message)
-
 
     def test_from_signed_message(self):
         priv = PrivateKey.from_random()
@@ -901,7 +849,6 @@ class TestPublicKey:
         assert P == P2
         assert P2.coin() is Bitcoin
 
-
     def test_from_signed_message_base64(self):
         priv = PrivateKey.from_random()
         message = b'BitcoinSV'
@@ -912,7 +859,6 @@ class TestPublicKey:
         with pytest.raises(InvalidSignature):
             PublicKey.from_signed_message('abcd%', message)
 
-
     def test_from_signed_message_no_hasher(self):
         priv = PrivateKey.from_random()
         message = bytes(32)
@@ -921,7 +867,6 @@ class TestPublicKey:
         PublicKey.from_signed_message(message_sig, message)
         with pytest.raises(ValueError):
             PublicKey.from_signed_message(message_sig, message, None)
-
 
     @pytest.mark.parametrize("msg", (
         b'BitcoinSV', 'BitcoinSV',
@@ -957,7 +902,6 @@ class TestPublicKey:
         assert not PublicKey.verify_message_and_address(msg_sig2, msg, address_comp)
         assert not PublicKey.verify_message_and_address(msg_sig2, msg, address_uncomp)
 
-
     def test_verify_message_no_hasher(self):
         priv = PrivateKey.from_random()
         message = bytes(32)
@@ -966,7 +910,6 @@ class TestPublicKey:
         priv.public_key.verify_message(message_sig, message)
         with pytest.raises(ValueError):
             priv.public_key.verify_message(message_sig, message, hasher=None)
-
 
     def test_verify_message_sig_base64(self):
         priv = PrivateKey.from_random()
@@ -1026,7 +969,6 @@ class TestPublicKey:
             with pytest.raises(InvalidSignature):
                 P.verify_message(bytes(msg_sig), msg)
 
-
     def test_encrypt_message_and_to_base64(self, AES_impl):
         bmsg = b'BitcoinSV'
         # Test both compressed and uncompressed pubkeys
@@ -1048,7 +990,6 @@ class TestPublicKey:
                 # This tests the default magic of both functions is b'BIE1'
                 assert priv.decrypt_message(enc_msg, magic=b'BIE1') == bmsg
 
-
     def test_encrypt_message_magic(self, AES_impl):
         priv = PrivateKey.from_random()
         P = priv.public_key
@@ -1059,11 +1000,9 @@ class TestPublicKey:
             enc_msg = P.encrypt_message_to_base64(msg, magic)
             assert priv.decrypt_message(enc_msg, magic) == msg
 
-
     def test_str(self):
         P = PrivateKey.from_random().public_key
         assert str(P) == P.to_hex()
-
 
     def test_P2PK_script(self):
         P = PrivateKey.from_random().public_key
@@ -1072,7 +1011,6 @@ class TestPublicKey:
         assert script_c == bytes([33]) + P.to_bytes(compressed=True) + bytes([0xac])
         assert script_u == bytes([65]) + P.to_bytes(compressed=False) + bytes([0xac])
         assert script_c == P.P2PK_script()
-
 
     def test_P2PKH_script(self):
         P = PrivateKey.from_random().public_key
@@ -1085,7 +1023,6 @@ class TestPublicKey:
                                      hash160(P.to_bytes(compressed=False)),
                                      bytes([0x88, 0xac])))
         assert script_c == P.P2PKH_script()
-
 
     def test_hash160(self):
         # From block 1

@@ -170,6 +170,7 @@ def setup_compressed_headers(tmpdir, headers_file, ts_offset, coin):
 
     return headers
 
+
 def setup_gzipped_headers(tmpdir, headers_file, coin):
     import gzip
     with gzip.open(os.path.join(data_dir, headers_file), 'rb') as f:
@@ -215,6 +216,7 @@ def test_testnet(tmpdir, filename, first_height):
         required_bits = headers.required_bits(chain, height, header.timestamp)
         assert required_bits == header.bits
         prior_timestamp = header.timestamp
+
 
 def test_scalingtestnet(tmpdir):
     headers = setup_gzipped_headers(tmpdir, "stnheaders.gz", BitcoinScalingTestnet)
