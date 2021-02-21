@@ -53,14 +53,14 @@ VALID_HASHES = [
 
 def _encode(prefix, kind, addr_hash):
     """Encode a cashaddr address without prefix and separator."""
-    if not isinstance(prefix, str):
-        raise TypeError('prefix must be a string')
+    # if not isinstance(prefix, str):
+    #     raise TypeError('prefix must be a string')
 
-    if not isinstance(addr_hash, (bytes, bytearray)):
-        raise TypeError('addr_hash must be binary bytes')
+    # if not isinstance(addr_hash, (bytes, bytearray)):
+    #     raise TypeError('addr_hash must be binary bytes')
 
-    if kind not in (cashaddr.SCRIPT_TYPE, cashaddr.PUBKEY_TYPE):
-        raise ValueError('unrecognised address type {}'.format(kind))
+    # if kind not in (cashaddr.SCRIPT_TYPE, cashaddr.PUBKEY_TYPE):
+    #     raise ValueError('unrecognised address type {}'.format(kind))
 
     payload = cashaddr._pack_addr_data(kind, addr_hash)
     checksum = cashaddr._create_checksum(prefix, payload)
@@ -96,6 +96,15 @@ class TestCashAddrAddress:
     def test_decode_bad_inputs(self):
         with pytest.raises(TypeError):
             cashaddr.decode(b'foobar')
+
+    def test_emcode_bad_hash_size(self):
+        with pytest.raises(ValueError) as e:
+            _encode_full(BSV_PREFIX, 2, bytes(10))
+
+    def test_decode_bad_kind(self):
+        addr = _encode_full(BSV_PREFIX, 2, bytes(20))
+        with pytest.raises(ValueError) as e:
+            cashaddr.decode(addr)
 
     def test_bad_decode_size(self):
         """Test that addresses with invalid sizes fail to decode."""
@@ -136,6 +145,8 @@ class TestCashAddrAddress:
         # b is invalid
         with pytest.raises(ValueError):
             cashaddr.decode("bitcoincash:ppm2qsznbks23z7629mms6s4cwef74vcwvn0h82")
+        with pytest.raises(ValueError):
+            cashaddr.decode("bitcoincash:x")
 
     @pytest.mark.parametrize("mangled_addr", (
         'qz3jljn0cms4fxkgwr2p8jgkjyw0rnxyesmq0kh2pq',

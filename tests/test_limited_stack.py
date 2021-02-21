@@ -124,3 +124,10 @@ class TestLimitedStack:
 
         assert parent[0] == b'foo'
         assert parent[1] == b'foobar'
+
+    def test_eq(self):
+        stack = LimitedStack(100)
+        stack.append(b'foo')
+
+        assert stack == stack
+        assert stack == [b'foo']

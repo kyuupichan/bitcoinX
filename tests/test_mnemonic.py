@@ -179,7 +179,7 @@ class TestElectrumMnemonic:
         assert ElectrumMnemonic.is_valid_new(mnemonic, '01')
         assert ElectrumMnemonic.is_valid_old(mnemonic)
 
-    def test_old_to_hex_seed_bad(self):
+    def test_old_to_hex_seed_bad_3149(self):
         # See https://github.com/spesmilo/electrum/issues/3149
         m = 'hurry idiot prefer sunset mention mist jaw inhale impossible kingdom rare squeeze'
         with pytest.raises(ValueError):

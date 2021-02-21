@@ -825,7 +825,7 @@ class TestPublicKey:
         with pytest.raises(InvalidSignature):
             P.verify_der_signature(sig_rec, message)
 
-        for n in (10, 20, 30, 40):
+        for n in (0, 10, 20, 30, 40):
             bad_der = bytearray(sig_der)
             bad_der[n] ^= 0x10
             try:
@@ -996,6 +996,7 @@ class TestPublicKey:
 
         assert P1.verify_message_and_address(msg_sig, msg, P1.to_address())
         assert not P1.verify_message_and_address(msg_sig, msg, P2.to_address())
+        assert not P1.verify_message_and_address(msg_sig[:-1], msg, P1.to_address())
 
         with pytest.raises(TypeError):
             P1.verify_message_and_address(msg_sig, msg, b'foobar')

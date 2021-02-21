@@ -174,8 +174,6 @@ class Tx:
             raise IndexError(f'invalid input index: {input_index}')
         if value < 0:
             raise ValueError(f'value cannot be negative: {value}')
-        if sighash is None:
-            sighash = SigHash(SigHash.ALL | SigHash.FORKID)
         if not isinstance(sighash, SigHash):
             raise TypeError('sighash must be a SigHash instance')
 

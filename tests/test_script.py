@@ -665,7 +665,7 @@ class TestScript:
 
         # Now add some random nops at random points
         for n in range(N):
-            p = random.randrange(0, 3)
+            p = n % 3
             pos = random.randrange(0, len(items))
             if p == 0:
                 items.insert(pos, OP_NOP)
@@ -880,7 +880,7 @@ def test_cast_to_bool_zeros(zero):
 
 
 @pytest.mark.parametrize("non_zero", non_zeroes)
-def test_cast_to_bool_zeros(non_zero):
+def test_cast_to_bool_non_zeros(non_zero):
     assert cast_to_bool(non_zero)
 
 
