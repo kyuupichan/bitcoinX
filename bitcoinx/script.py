@@ -172,6 +172,7 @@ b_OP_0 = pack_byte(Ops.OP_0)
 b_OP_DROP = pack_byte(Ops.OP_DROP)
 b_OP_2DROP = pack_byte(Ops.OP_2DROP)
 b_OP_1NEGATE = pack_byte(Ops.OP_1NEGATE)
+bool_items = [b'', b'\1']
 
 
 def push_item(item):

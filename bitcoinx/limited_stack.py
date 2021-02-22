@@ -97,3 +97,7 @@ class LimitedStack:
     def extend(self, items):
         for item in items:
             self.append(item)
+
+    def clear(self):
+        while self._items:
+            self.pop()

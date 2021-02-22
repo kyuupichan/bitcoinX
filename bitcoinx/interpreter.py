@@ -8,13 +8,13 @@
 '''Bitcoin script interpreter.'''
 
 __all__ = (
-    'InterpreterError', 'InterpreterPolicy', 'InterpreterLimits', 'InterpreterState',
-    'InterpreterFlags',
+    'InterpreterError', 'InterpreterLimits', 'InterpreterState', 'InterpreterFlags',
+    'MinerPolicy', 'TxInputContext',
 )
 
 
 import operator
-from enum import IntEnum
+from enum import IntFlag
 from functools import partial
 
 import attr
@@ -36,48 +36,17 @@ from .errors import (
 )
 from .hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from .limited_stack import LimitedStack
+from .misc import cachedproperty
 # pylint:disable=E0611
 from .script import (
     Script, ScriptIterator, Ops, OP_16, OP_IF, OP_ENDIF, OP_RETURN,
     int_to_item, item_to_int, minimal_push_opcode, is_item_minimally_encoded, minimal_encoding,
-    cast_to_bool
+    cast_to_bool, bool_items,
 )
 from .signature import Signature, SigHash, SigEncoding
 
 
-bool_items = [b'', b'\1']
-
-
-@attr.s(slots=True)
-class Condition:
-    '''Represents an open condition block whilst executing.'''
-    opcode = attr.ib()       # OP_IF or OP_NOTIF
-    execute = attr.ib()      # True or False; flips on OP_ELSE
-    seen_else = attr.ib()    # True or False
-
-
-@attr.s(slots=True)
-class InterpreterPolicy:
-    '''Miner policy rules.
-
-    Generally fixed over the node session and apply to non-consensus post-genesis
-    transactions for e.g. mempool acceptance.
-
-    Consensus rules determine what is accepted in a block and are looser.
-    '''
-    # In bytes, e.g. 10_000_000
-    max_script_size = attr.ib()
-    # In bytes, e.g. 256
-    max_script_num_length = attr.ib()
-    # In bytes, e.g. 10_000_000
-    max_stack_memory_usage = attr.ib()
-    # e.g. 1_000_000
-    max_ops_per_script = attr.ib()
-    # e.g. 64
-    max_pubkeys_per_multisig = attr.ib()
-
-
-class InterpreterFlags(IntEnum):
+class InterpreterFlags(IntFlag):
     # Require most compact opcode for pushing stack data, and require minimal-encoding of numbers
     REQUIRE_MINIMAL_PUSH = 1 << 0
     # Top of stack on OP_IF and OP_ENDIF must be boolean.
@@ -102,46 +71,67 @@ class InterpreterFlags(IntEnum):
     ENABLE_CHECKSEQUENCEVERIFY = 1 << 10
     # If set verify_script handles P2SH outputs
     ENABLE_P2SH = 1 << 11
-    # If true verify_script() requires script_sig to be PUSHDATA only
-    REQUIRE_PUSH_ONLY = 1 << 12
-    # If true verify_script() requires a clean stack on exit
+    # If true verify_input() requires script_sig to be PUSHDATA only
+    REQUIRE_SIGPUSH_ONLY = 1 << 12
+    # If true verify_input() requires a clean stack on exit
     REQUIRE_CLEANSTACK = 1 << 13
 
-    # New blocks must comply with these flags (but old blocks may not)
-    MANDATORY_SCRIPT_VERIFY_FLAGS = (
-        REQUIRE_STRICT_ENCODING | REQUIRE_LOW_S | REQUIRE_NULLFAIL | ENABLE_FORKID | ENABLE_P2SH
-    )
 
-    # Standard transactions must comply with these flags
-    STANDARD_VERIFY_FLAGS = (
-        MANDATORY_SCRIPT_VERIFY_FLAGS | REQUIRE_STRICT_DER | REQUIRE_MINIMAL_PUSH
-        | REQUIRE_NULLDUMMY | REJECT_UPGRADEABLE_NOPS | REQUIRE_CLEANSTACK
-        | ENABLE_CHECKLOCKTIMEVERIFY | ENABLE_CHECKSEQUENCEVERIFY
-    )
+# New blocks must comply with these flags (but old blocks may not)
+# See GetBlockScriptFlags() in src/validation.cpp
+MANDATORY_SCRIPT_VERIFY_FLAGS = (
+    InterpreterFlags.ENABLE_P2SH |                  # Activated on Apr 1 2012
+    InterpreterFlags.REQUIRE_STRICT_DER |           # BIP 66 activated at height 363725
+    InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY |   # BIP 65 activated at height 388381
+    InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY |   # BIP112 activated at height 419328
+    InterpreterFlags.ENABLE_FORKID |                # UAHF activated at height 478558
+    InterpreterFlags.REQUIRE_STRICT_ENCODING |      # UAHF activated at height 478558
+    InterpreterFlags.REQUIRE_LOW_S |                # DAA activated at height 504031
+    InterpreterFlags.REQUIRE_NULLFAIL |             # DAA activated at height 504031
+    InterpreterFlags.REQUIRE_SIGPUSH_ONLY           # Genesis activated at height 620538
+)
 
-    @classmethod
-    def sanitize(cls, flags, is_utxo_after_genesis):
-        '''Return sanitized flags .'''
-        # Require strict encoding if FORKID is enabled
-        if flags & cls.ENABLE_FORKID:
-            flags |= cls.REQUIRE_STRICT_ENCODING
 
-        # Disable CLEANSTACK check unless P2SH is enabled as the P2SH inputs would remain.
-        if not (flags & cls.ENABLE_P2SH):
-            flags &= ~cls.REQUIRE_CLEANSTACK
-
-        # For post-genesis UTXOs some features are disabled
-        if is_utxo_after_genesis:
-            flags &= ~(cls.ENABLE_CHECKLOCKTIMEVERIFY | cls.ENABLE_CHECKSEQUENCEVERIFY
-                       | cls.ENABLE_P2SH)
-
-        return flags
+# See src/policy/policy.h
+STANDARD_SCRIPT_VERIFY_FLAGS = (
+    MANDATORY_SCRIPT_VERIFY_FLAGS
+    | InterpreterFlags.REQUIRE_MINIMAL_PUSH
+    | InterpreterFlags.REQUIRE_NULLDUMMY
+    | InterpreterFlags.REJECT_UPGRADEABLE_NOPS
+    | InterpreterFlags.REQUIRE_CLEANSTACK
+)
 
 
 @attr.s(slots=True)
+class MinerPolicy:
+    '''Miner policy rules.
+
+    Generally fixed over the node session and apply to non-consensus post-genesis
+    transactions for e.g. mempool acceptance.
+
+    Consensus rules determine what is accepted in a block and are looser.
+    '''
+    # In bytes, e.g. 10_000_000
+    max_script_size = attr.ib()
+    # In bytes, e.g. 256
+    max_script_num_length = attr.ib()
+    # In bytes, e.g. 10_000_000
+    max_stack_memory_usage = attr.ib()
+    # e.g. 1_000_000
+    max_ops_per_script = attr.ib()
+    # e.g. 64
+    max_pubkeys_per_multisig = attr.ib()
+    # Transactions in blocks must pass script verification with these flags
+    consensus_flags = attr.ib(default=MANDATORY_SCRIPT_VERIFY_FLAGS)
+    # Standard transactions must comply with these flags
+    standard_flags = attr.ib(default=STANDARD_SCRIPT_VERIFY_FLAGS)
+
+
 class InterpreterLimits:
     '''Limits to apply to a particular invocation of the interpreter.  Use the from_policy()
-    method to initialize appropriately for a given miner policy and context.'''
+    method to initialize appropriately for a given miner policy and context.
+
+    Note: all attributes should be considered read-only, do not set them directly.'''
 
     # Class constants
     MAX_SCRIPT_SIZE_BEFORE_GENESIS = 10_000
@@ -156,84 +146,122 @@ class InterpreterLimits:
     MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS = 20
     MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS = UINT32_MAX
 
-    # Attributes
-    script_size = attr.ib()
-    script_num_length = attr.ib()
-    stack_memory_usage = attr.ib()
-    ops_per_script = attr.ib()
-    pubkeys_per_multisig = attr.ib()
-    item_size = attr.ib()
-    flags = attr.ib()
-    is_utxo_after_genesis = attr.ib()
+    DYNAMIC_ATTRS = (
+        'flags', 'script_num_length', 'stack_memory_usage', 'pubkeys_per_multisig', 'item_size',
+    )
 
-    @classmethod
-    def max_script_size_rule(cls, policy, is_genesis_enabled, is_consensus):
+    def __init__(self, policy, is_genesis_enabled, is_consensus, base_flags='standard'):
+        '''Inintialize limits appropriate for the given miner policy.
+
+        is_genesis_enabled is True if the Genesis upgrade is activated.  is_consensus is
+        True if validating transactions in a block, False if validating more strictly for
+        mempool acceptance or relay.  These affect script resource limits.
+
+        base_flags is the set of script verification InterpreterFlags to use, or the
+        string 'consensus' or 'standard' to take the flags from the miner policy.  When
+        accessed via the flags property they are adjusted to ensure consistency and
+        whether the script being validated comes from a post-genesis UTXO or not.
+
+        The limits can be re-used to validate many UTXOs in a transaction or block by
+        calling set_utxo_state() before each validation; this is done automatically by
+        TxInputContext.verify().
+        '''
+        self.policy = policy
+        self.is_genesis_enabled = is_genesis_enabled
+        self.is_consensus = is_consensus
+        self.base_flags = base_flags
+        self.is_utxo_after_genesis = is_genesis_enabled
+
+    def set_utxo_state(self, is_after_genesis):
+        if is_after_genesis and not self.is_genesis_enabled:
+            raise ValueError('cannot have a UTXO after genesis if genesis is not enabled')
+        if is_after_genesis != self.is_utxo_after_genesis:
+            self.is_utxo_after_genesis = is_after_genesis
+            for attrib in self.DYNAMIC_ATTRS:
+                if hasattr(self, attrib):
+                    delattr(self, attrib)
+
+    @cachedproperty
+    def script_size(self):
         '''Implements the max script size rule.'''
-        if is_genesis_enabled:
-            if is_consensus:
-                return cls.MAX_SCRIPT_SIZE_AFTER_GENESIS
-            return policy.max_script_size
-        return cls.MAX_SCRIPT_SIZE_BEFORE_GENESIS
+        if self.is_genesis_enabled:
+            if self.is_consensus:
+                return self.MAX_SCRIPT_SIZE_AFTER_GENESIS
+            return self.policy.max_script_size
+        return self.MAX_SCRIPT_SIZE_BEFORE_GENESIS
 
-    @classmethod
-    def max_script_num_length_rule(cls, policy, is_utxo_after_genesis, is_consensus):
-        '''Implements the max script memory usage rule.'''
-        if is_utxo_after_genesis:
-            if is_consensus:
-                return cls.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
-            return policy.max_script_num_length
-        return cls.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
+    @cachedproperty
+    def ops_per_script(self):
+        '''Implements the max ops per script rule.'''
+        if self.is_genesis_enabled:
+            if self.is_consensus:
+                return self.MAX_OPS_PER_SCRIPT_AFTER_GENESIS
+            return self.policy.max_ops_per_script
+        return self.MAX_OPS_PER_SCRIPT_BEFORE_GENESIS
 
-    @classmethod
-    def max_stack_memory_usage_rule(cls, policy, is_utxo_after_genesis, is_consensus):
+    @cachedproperty
+    def flags(self):
+        '''Return sanitized flags .'''
+        flags = self.base_flags
+        if flags == 'standard':
+            flags = self.policy.standard_flags
+            # See StandardScriptVerifyFlags() in src/policy/policy.h
+            if self.is_genesis_enabled:
+                flags |= InterpreterFlags.REQUIRE_SIGPUSH_ONLY
+        elif flags == 'consensus':
+            flags = self.policy.consensus_flags
+
+        # Require strict encoding if FORKID is enabled
+        if flags & InterpreterFlags.ENABLE_FORKID:
+            flags |= InterpreterFlags.REQUIRE_STRICT_ENCODING
+
+        # Disable CLEANSTACK check unless P2SH is enabled as the P2SH inputs would remain.
+        if not flags & InterpreterFlags.ENABLE_P2SH:
+            flags &= ~InterpreterFlags.REQUIRE_CLEANSTACK
+
+        # For post-genesis UTXOs obsolete script features are disabled
+        if self.is_utxo_after_genesis:
+            flags &= ~(InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY
+                       | InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY
+                       | InterpreterFlags.ENABLE_P2SH)
+
+        return flags
+
+    @cachedproperty
+    def script_num_length(self):
         '''Implements the max script memory usage rule.'''
-        if is_utxo_after_genesis:
-            if is_consensus:
-                return cls.MAX_STACK_MEMORY_USAGE_AFTER_GENESIS
-            return policy.max_stack_memory_usage
+        if self.is_utxo_after_genesis:
+            if self.is_consensus:
+                return self.MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS
+            return self.policy.max_script_num_length
+        return self.MAX_SCRIPT_NUM_LENGTH_BEFORE_GENESIS
+
+    @cachedproperty
+    def stack_memory_usage(self):
+        '''Implements the max script memory usage rule.'''
+        if self.is_utxo_after_genesis:
+            if self.is_consensus:
+                return self.MAX_STACK_MEMORY_USAGE_AFTER_GENESIS
+            return self.policy.max_stack_memory_usage
         # Before genesis other stricter limitations applied so this can be infinite
         return INT64_MAX
 
-    @classmethod
-    def max_ops_per_script_rule(cls, policy, is_genesis_enabled, is_consensus):
-        '''Implements the max script size rule.'''
-        if is_genesis_enabled:
-            if is_consensus:
-                return cls.MAX_OPS_PER_SCRIPT_AFTER_GENESIS
-            return policy.max_ops_per_script
-        return cls.MAX_OPS_PER_SCRIPT_BEFORE_GENESIS
-
-    @classmethod
-    def max_pubkeys_per_multisig_rule(cls, policy, is_utxo_after_genesis, is_consensus):
+    @cachedproperty
+    def pubkeys_per_multisig(self):
         '''Implements the rule re maximum public keys in an OP_CHECKMULTISIG[VERIFY].'''
-        if is_utxo_after_genesis:
-            if is_consensus:
-                return cls.MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS
-            return policy.max_pubkeys_per_multisig
-        return cls.MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
+        if self.is_utxo_after_genesis:
+            if self.is_consensus:
+                return self.MAX_PUBKEYS_PER_MULTISIG_AFTER_GENESIS
+            return self.policy.max_pubkeys_per_multisig
+        return self.MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
 
-    @classmethod
-    def max_item_size_rule(cls, is_utxo_after_genesis):
+    @cachedproperty
+    def item_size(self):
         # No limit for post-genesis UTXOs
-        if is_utxo_after_genesis:
+        if self.is_utxo_after_genesis:
             return UINT64_MAX
         else:
-            return cls.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
-
-    @classmethod
-    def from_policy(cls, policy, flags, is_genesis_enabled, is_utxo_after_genesis, is_consensus):
-        if is_utxo_after_genesis and not is_genesis_enabled:
-            raise ValueError('cannot have a UTXO after genesis if genesis is not enabled')
-        return cls(
-            cls.max_script_size_rule(policy, is_genesis_enabled, is_consensus),
-            cls.max_script_num_length_rule(policy, is_utxo_after_genesis, is_consensus),
-            cls.max_stack_memory_usage_rule(policy, is_utxo_after_genesis, is_consensus),
-            cls.max_ops_per_script_rule(policy, is_genesis_enabled, is_consensus),
-            cls.max_pubkeys_per_multisig_rule(policy, is_utxo_after_genesis, is_consensus),
-            cls.max_item_size_rule(is_utxo_after_genesis),
-            InterpreterFlags.sanitize(flags, is_utxo_after_genesis),
-            is_utxo_after_genesis,
-        )
+            return self.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
 
     def cleanup_script_code(self, sig_bytes, script_code):
         '''Return script_code with signatures deleted if pre-BCH fork.'''
@@ -317,7 +345,7 @@ class InterpreterLimits:
         '''Enforces the limit on stack item size.'''
         if size > self.item_size:
             raise InvalidPushSize(f'item length {size:,d} exceeds the limit '
-                                  f'of {self.limits.item_size:,d} bytes')
+                                  f'of {self.item_size:,d} bytes')
 
     def validate_minimal_push_opcode(self, op, item):
         if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
@@ -331,6 +359,7 @@ class InterpreterLimits:
             raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
 
 
+@attr.s(slots=True)
 class TxInputContext:
     '''The context of a transaction input when evaluating its script_sig against a previous
     outputs script_pubkey.'''
@@ -344,16 +373,19 @@ class TxInputContext:
     # True if the UTXO was created after the Genesis upgrade
     is_utxo_after_genesis = attr.ib()
 
-    def verify(limits):
+    def verify_input(self, limits):
         '''Return the boolean result of validating the input subject to limits.'''
+        # Update limits appropriately for the UTXO state
+        limits.set_utxo_state(self.is_utxo_after_genesis)
+
         script_sig = self.tx.inputs[self.input_index].script_sig
-        if limits.flags & InterpreterFlags.REQUIRE_PUSH_ONLY and not script_sig.is_push_only():
+        if limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY and not script_sig.is_push_only():
             raise PushOnlyError('script_sig is not pushdata only')
 
         script_pubkey = self.utxo.script_pubkey
         is_P2SH = limits.flags & InterpreterFlags.ENABLE_P2SH and script_pubkey.is_P2SH()
 
-        state = InterpreterState(self, limits)
+        state = InterpreterState(limits, self)
         state.evaluate_script(script_sig)
         if is_P2SH:
             stack_copy = state.stack.make_copy()
@@ -422,18 +454,31 @@ class TxInputContext:
             raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
 
+@attr.s(slots=True)
+class Condition:
+    '''Represents an open condition block whilst executing.'''
+    opcode = attr.ib()       # OP_IF or OP_NOTIF
+    execute = attr.ib()      # True or False; flips on OP_ELSE
+    seen_else = attr.ib()    # True or False
+
+
 class InterpreterState:
     '''Interpreter state that updates as a script executes.'''
 
-    def __init__(self, limits, context):
+    def __init__(self, limits, txin_context=None):
         self.limits = limits
-        self.context = context
+        self._txin_context = txin_context
         self.stack = LimitedStack(self.limits.stack_memory_usage)
         self.alt_stack = self.stack.make_child_stack()
         self.conditions = []
         self.execute = False
         self.iterator = None
         self.op_count = 0
+
+    def txin_context(self, op):
+        if self._txin_context is None:
+            raise RuntimeError(f'cannot process {op.name} without a TxInputContext')
+        return self._txin_context
 
     def bump_op_count(self, bump):
         self.op_count += bump
@@ -502,7 +547,7 @@ class InterpreterState:
                     # A top-level post-geneis OP_RETURN terminates successfully, ignoring
                     # the rest of the script even in the presence of unbalanced IFs,
                     # invalid opcodes etc.  Otherwise the grammar is checked.
-                    if not state.conditions:
+                    if not self.conditions:
                         return
                     non_top_level_return_after_genesis = True
 
@@ -525,9 +570,8 @@ def handle_IF(state, op):
     if state.execute:
         state.require_stack_depth(1)
         top = state.stack[-1]
-        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_IF:
-            if state.stack[-1] not in bool_items:
-                raise MinimalIfError('top of stack not True or False')
+        if top not in bool_items and state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_IF:
+            raise MinimalIfError('top of stack not True or False')
         state.stack.pop()
         execute = cast_to_bool(top)
         if op == Ops.OP_NOTIF:
@@ -853,8 +897,9 @@ def handle_CODESEPARATOR(state):
     state.iterator.on_code_separator()
 
 
-def handle_CHECKSIG(state):
+def handle_CHECKSIG(state, op):
     # (sig pubkey -- bool)
+    check_sig = state.txin_context(op).check_sig
     state.require_stack_depth(2)
     sig_bytes = state.stack[-2]
     pubkey_bytes = state.stack[-1]
@@ -862,7 +907,7 @@ def handle_CHECKSIG(state):
     state.limits.validate_pubkey(pubkey_bytes)
     script_code = state.iterator.script_code()
     script_code = state.limits.cleanup_script_code(sig_bytes, script_code)
-    is_good = state.context.check_sig(sig_bytes, pubkey_bytes, script_code)
+    is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
     if not is_good:
         state.limits.validate_nullfail(sig_bytes)
     state.stack.pop()
@@ -871,14 +916,16 @@ def handle_CHECKSIG(state):
 
 def handle_CHECKSIGVERIFY(state):
     # (sig pubkey -- )
-    handle_CHECKSIG(state)
+    handle_CHECKSIG(state, Ops.OP_CHECKSIGVERIFY)
     if not cast_to_bool(state.stack[-1]):
         raise CheckSigVerifyFailed('OP_CHECKSIGVERIFY failed')
     state.stack.pop()
 
 
-def handle_CHECKMULTISIG(state):
+def handle_CHECKMULTISIG(state, op):
     # ([sig ...] sig_count [pubkey ...] pubkey_count -- bool)
+    check_sig = state.txin_context(op).check_sig
+
     state.require_stack_depth(1)
     # Limit key count to 4 bytes
     key_count = state.limits.to_number(state.stack[-1], length_limit=4)
@@ -912,7 +959,7 @@ def handle_CHECKMULTISIG(state):
         state.limits.validate_signature(sig_bytes)
         pubkey_bytes = state.stack[key_base_index + keys_remaining]
         state.limits.validate_pubkey(pubkey_bytes)
-        is_good = state.context.check_sig(sig_bytes, pubkey_bytes, script_code)
+        is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
         if is_good:
             sigs_remaining -= 1
         keys_remaining -= 1
@@ -934,7 +981,7 @@ def handle_CHECKMULTISIG(state):
 
 def handle_CHECKMULTISIGVERIFY(state):
     # (sig pubkey -- )
-    handle_CHECKMULTISIG(state)
+    handle_CHECKMULTISIG(state, Ops.OP_CHECKMULTISIGVERIFY)
     if not cast_to_bool(state.stack[-1]):
         raise CheckMultiSigVerifyFailed('OP_CHECKMULTISIGVERIFY failed')
     state.stack.pop()
@@ -1001,22 +1048,24 @@ def handle_CHECKLOCKTIMEVERIFY(state):
     if not state.limits.flags & InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY:
         handle_upgradeable_nop(state, Ops.OP_NOP2)
     else:
+        context = state.txin_context(Ops.OP_CHECKLOCKTIMEVERIFY)
         state.require_stack_depth(1)
         locktime = state.limits.to_number(state.stack[-1], length_limit=5)
         if locktime < 0:
             raise LockTimeError(f'locktime {locktime:,d} is negative')
-        state.context.validate_locktime(locktime)
+        context.validate_locktime(locktime)
 
 
 def handle_CHECKSEQUENCEVERIFY(state):
     if not state.limits.flags & InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY:
         handle_upgradeable_nop(state, Ops.OP_NOP3)
     else:
+        context = state.txin_context(Ops.OP_CHECKSEQUENCEVERIFY)
         state.require_stack_depth(1)
         sequence = state.limits.to_number(state.stack[-1], length_limit=5)
         if sequence < 0:
             raise LockTimeError(f'sequence {sequence:,d} is negative')
-        state.context.validate_sequence(sequence)
+        context.validate_sequence(sequence)
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
@@ -1117,9 +1166,9 @@ op_handlers[Ops.OP_SHA256] = partial(handle_hash, hash_func=sha256)
 op_handlers[Ops.OP_HASH160] = partial(handle_hash, hash_func=hash160)
 op_handlers[Ops.OP_HASH256] = partial(handle_hash, hash_func=double_sha256)
 op_handlers[Ops.OP_CODESEPARATOR] = handle_CODESEPARATOR
-op_handlers[Ops.OP_CHECKSIG] = handle_CHECKSIG
+op_handlers[Ops.OP_CHECKSIG] = partial(handle_CHECKSIG, op=Ops.OP_CHECKSIG)
 op_handlers[Ops.OP_CHECKSIGVERIFY] = handle_CHECKSIGVERIFY
-op_handlers[Ops.OP_CHECKMULTISIG] = handle_CHECKMULTISIG
+op_handlers[Ops.OP_CHECKMULTISIG] = partial(handle_CHECKMULTISIG, op=Ops.OP_CHECKMULTISIG)
 op_handlers[Ops.OP_CHECKMULTISIGVERIFY] = handle_CHECKMULTISIGVERIFY
 
 #

@@ -12,21 +12,23 @@ from bitcoinx.consts import (
 from bitcoinx.errors import *
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
 from bitcoinx.interpreter import *
+from bitcoinx.interpreter import MANDATORY_SCRIPT_VERIFY_FLAGS, STANDARD_SCRIPT_VERIFY_FLAGS
 from bitcoinx.script import *
 from bitcoinx import (
-    pack_varint, PrivateKey, pack_byte, varint_len, SigHash,
+    TxOutput, pack_varint, PrivateKey, pack_byte, varint_len, SigHash,
     compact_signature_to_der, der_signature_to_compact, CURVE_ORDER, be_bytes_to_int,
     int_to_be_bytes,
 )
 
-from .utils import random_tx, read_tx, random_value, zeroes, non_zeroes
+from .utils import random_txinput_context, random_tx, read_tx, zeroes, non_zeroes
+
 
 
 policies = [
     # A fairly restrictive policy
-    InterpreterPolicy(100_000, 64, 20_000, 1_000, 16),
+    MinerPolicy(100_000, 64, 20_000, 1_000, 16),
     # A loose policy
-    InterpreterPolicy(10_000_000, 256, 10_000_000, 32_000, 256),
+    MinerPolicy(10_000_000, 256, 10_000_000, 32_000, 256),
 ]
 
 
@@ -36,23 +38,20 @@ def policy(request):
 
 
 def create_interpreter_limits():
-    args_s = (
-        (True, True, True),
-        (True, True, False),
-        (True, False, True),
-        (True, False, False),
-        (False, False, True),
-        (False, False, False),
-    )
-    flags_s = (
-        0,
-        InterpreterFlags.REQUIRE_MINIMAL_PUSH,
-        InterpreterFlags.REQUIRE_MINIMAL_IF,
-    )
-    return [InterpreterLimits.from_policy(policy, flags, *args)
-            for policy in policies
-            for flags in flags_s
-            for args in args_s]
+    flag_sets = ('consensus', 'standard', InterpreterFlags.REQUIRE_MINIMAL_IF)
+    result = []
+    for policy in policies:
+        for is_consensus in (True, False):
+            for base_flags in flag_sets:
+                for is_genesis_enabled in (True, False):
+                    limits = InterpreterLimits(policy, is_genesis_enabled,
+                                               is_consensus, base_flags)
+                    result.append(limits)
+                    if is_genesis_enabled:
+                        limits = copy.copy(limits)
+                        limits.set_utxo_state(False)
+                        result.append(limits)
+    return result
 
 
 all_interpreter_limits = create_interpreter_limits()
@@ -73,19 +72,12 @@ def state(limits):
     yield InterpreterState(copy.copy(limits))
 
 
-def add_flags(old, extra_flags):
-    new_flags = InterpreterFlags.sanitize(old.flags | extra_flags, old.is_utxo_after_genesis)
+def set_base_flags(old, flags):
+    return InterpreterLimits(old.policy, old.is_genesis_enabled, old.is_consensus, flags)
 
-    return InterpreterLimits(
-        old.script_size,
-        old.script_num_length,
-        old.stack_memory_usage,
-        old.ops_per_script,
-        old.pubkeys_per_multisig,
-        old.item_size,
-        new_flags,
-        old.is_utxo_after_genesis,
-    )
+
+def add_flags(old, extra_flags):
+    return set_base_flags(old, old.flags | extra_flags)
 
 
 @pytest.fixture(params=(
@@ -97,42 +89,42 @@ def add_flags(old, extra_flags):
     InterpreterFlags.ENABLE_FORKID,
 ))
 def checksig_state(request, limits):
-    tx = random_tx(False)
-    input_index = random.randrange(0, len(tx.inputs))
-    value = random_value()
-    new_limits = add_flags(limits, request.param)
-    yield InterpreterState(new_limits, tx=tx, input_index=input_index, value=value)
+    yield InterpreterState(add_flags(limits, request.param), random_txinput_context())
 
 
 @pytest.fixture
 def checklocktime_state(old_limits):
-    tx = random_tx(False)
-    input_index = random.randrange(0, len(tx.inputs))
-    value = random_value()
-    new_limits = add_flags(old_limits, (InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY
-                                        | InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY))
-    yield InterpreterState(new_limits, tx=tx, input_index=input_index, value=value)
+    limits = add_flags(old_limits, (InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY |
+                                    InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY))
+    limits.set_utxo_state(False)
+    yield InterpreterState(limits, random_txinput_context())
 
 
 @pytest.fixture(params=(
     0,
-    InterpreterFlags.REQUIRE_PUSH_ONLY,
+    InterpreterFlags.REQUIRE_SIGPUSH_ONLY,
     InterpreterFlags.ENABLE_FORKID,
     InterpreterFlags.ENABLE_P2SH,
     InterpreterFlags.REQUIRE_CLEANSTACK | InterpreterFlags.ENABLE_P2SH,
 ))
-def verify_state(request, limits):
-    yield InterpreterState(add_flags(limits, request.param))
+def verify_limits(request, limits):
+    yield add_flags(limits, request.param)
 
 
 @pytest.fixture
-def P2SH_state(old_limits, request):
-    yield InterpreterState(add_flags(old_limits, InterpreterFlags.ENABLE_P2SH), value=0)
+def P2SH_limits(old_limits):
+    flags = (old_limits.flags | InterpreterFlags.ENABLE_P2SH)
+    # Get rid of more recent stuff that triggers; we test on old transactions
+    flags &= ~(InterpreterFlags.REQUIRE_LOW_S | InterpreterFlags.ENABLE_FORKID)
+    limits = set_base_flags(old_limits, flags)
+    limits.set_utxo_state(False)
+    yield limits
 
 
 def random_sighash(state, valid=True):
+    context = state._txin_context
     choices = [SigHash.ALL, SigHash.NONE]
-    if state.input_index < len(state.tx.outputs):
+    if context.input_index < len(context.tx.outputs):
         choices.append(SigHash.SINGLE)
     choices += [value | SigHash.ANYONE_CAN_PAY for value in choices]
     if not (valid ^ bool(state.limits.flags & InterpreterFlags.ENABLE_FORKID)):
@@ -149,105 +141,141 @@ has_forkid_sig = '300602010102010142'
 no_forkid_sig = '300602010102010103'
 
 
+class TestMinerPolicy:
+
+    def test_defaults(self):
+        policy = MinerPolicy(10_000_000,  256, 10_000_000, 1_000_000, 64)
+        assert policy.consensus_flags == MANDATORY_SCRIPT_VERIFY_FLAGS
+        assert policy.standard_flags == STANDARD_SCRIPT_VERIFY_FLAGS
+
+
 class TestInterpreterLimits:
 
-    @pytest.mark.parametrize('is_genesis_enabled, is_utxo_after_genesis, is_consensus',
-                             product((False, True), (False, True), (False, True)))
-    def test_from_policy(self, policy, is_genesis_enabled, is_utxo_after_genesis, is_consensus):
-        if is_utxo_after_genesis and not is_genesis_enabled:
-            with pytest.raises(ValueError):
-                InterpreterLimits.from_policy(policy, 0, is_genesis_enabled,
-                                              is_utxo_after_genesis, is_consensus)
-            return
+    @pytest.mark.parametrize('is_genesis_enabled, is_consensus, base_flags',
+                             product((False, True), (False, True),
+                                     ('standard', 'consensus', 0)))
+    def test_constructor(self, policy, is_genesis_enabled, is_consensus, base_flags):
+        limits = InterpreterLimits(policy, is_genesis_enabled, is_consensus, base_flags)
 
-        limits = InterpreterLimits.from_policy(policy, 0, is_genesis_enabled,
-                                               is_utxo_after_genesis, is_consensus)
+        # Test is_utxo_after_genesis
+        assert limits.is_utxo_after_genesis == is_genesis_enabled
 
-        # Test script_size
-        if is_genesis_enabled:
-            if is_consensus:
-                assert limits.script_size == UINT32_MAX
+        if base_flags == 'standard':
+            base_flags = policy.standard_flags
+            # See StandardScriptVerifyFlags() in src/policy/policy.h
+            if is_genesis_enabled:
+                base_flags |= InterpreterFlags.REQUIRE_SIGPUSH_ONLY
+        elif base_flags == 'consensus':
+            base_flags = policy.consensus_flags
+
+        # Require strict encoding if FORKID is enabled
+        if base_flags & InterpreterFlags.ENABLE_FORKID:
+            base_flags |= InterpreterFlags.REQUIRE_STRICT_ENCODING
+
+        # Disable CLEANSTACK check unless P2SH is enabled as the P2SH inputs would remain.
+        if not base_flags & InterpreterFlags.ENABLE_P2SH:
+            base_flags &= ~InterpreterFlags.REQUIRE_CLEANSTACK
+
+        # Flip state to ensure cached values are lost
+        for is_utxo_after_genesis in (False, True, False, True):
+            if is_utxo_after_genesis and not is_genesis_enabled:
+                with pytest.raises(ValueError):
+                    limits.set_utxo_state(is_utxo_after_genesis)
+                continue
+
+            limits.set_utxo_state(is_utxo_after_genesis)
+
+            # Test script_size
+            if is_genesis_enabled:
+                if is_consensus:
+                    assert limits.script_size == UINT32_MAX
+                else:
+                    assert limits.script_size == policy.max_script_size
             else:
-                assert limits.script_size == policy.max_script_size
-        else:
-            assert limits.script_size == 10_000
+                assert limits.script_size == 10_000
 
-        # Test script_num_length
-        if is_utxo_after_genesis:
-            if is_consensus:
-                assert limits.script_num_length == 750 * 1000
+            # Test ops_per_script
+            if is_genesis_enabled:
+                if is_consensus:
+                    assert limits.ops_per_script == UINT32_MAX
+                else:
+                    assert limits.ops_per_script == policy.max_ops_per_script
             else:
-                assert limits.script_num_length == policy.max_script_num_length
-        else:
-            assert limits.script_num_length == 4
+                assert limits.ops_per_script == 500
 
-        # Test stack_memory_usage
-        if is_utxo_after_genesis:
-            if is_consensus:
+            # Test script_num_length
+            if is_utxo_after_genesis:
+                if is_consensus:
+                    assert limits.script_num_length == 750 * 1000
+                else:
+                    assert limits.script_num_length == policy.max_script_num_length
+            else:
+                assert limits.script_num_length == 4
+
+            # Test stack_memory_usage
+            if is_utxo_after_genesis:
+                if is_consensus:
+                    assert limits.stack_memory_usage == INT64_MAX
+                else:
+                    assert limits.stack_memory_usage == policy.max_stack_memory_usage
+            else:
                 assert limits.stack_memory_usage == INT64_MAX
+
+            # Test pubkeys_per_multisig
+            if is_utxo_after_genesis:
+                if is_consensus:
+                    assert limits.pubkeys_per_multisig == UINT32_MAX
+                else:
+                    assert limits.pubkeys_per_multisig == policy.max_pubkeys_per_multisig
             else:
-                assert limits.stack_memory_usage == policy.max_stack_memory_usage
-        else:
-            assert limits.stack_memory_usage == INT64_MAX
+                assert limits.pubkeys_per_multisig == 20
 
-        # Test ops_per_script
-        if is_genesis_enabled:
-            if is_consensus:
-                assert limits.ops_per_script == UINT32_MAX
+            # Max item size
+            if is_utxo_after_genesis:
+                assert limits.item_size == UINT64_MAX
             else:
-                assert limits.ops_per_script == policy.max_ops_per_script
+                assert limits.item_size == 520
+
+            # Test flags
+            expected_flags = base_flags
+            if is_utxo_after_genesis:
+                expected_flags &= ~(InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY
+                                    | InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY
+                                    | InterpreterFlags.ENABLE_P2SH)
+
+            assert limits.flags == expected_flags
+
+    @pytest.mark.parametrize('sig_hex,script_code,result', (
+        ('30454501', Script() << OP_1 << bytes.fromhex('30454501') << OP_2,
+         Script() << OP_1 << OP_2),
+        ('30454541', Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
+    ))
+    def test_cleanup_script_code(self, limits, sig_hex, script_code, result):
+        sig_bytes = bytes.fromhex(sig_hex)
+        sighash = SigHash.from_sig_bytes(sig_bytes)
+        if limits.flags & InterpreterFlags.ENABLE_FORKID or sighash.has_forkid():
+            result = script_code
+        assert limits.cleanup_script_code(sig_bytes, script_code) == result
+
+    @pytest.mark.parametrize('sig_hex,raises', (
+        ('', False),
+        ('30454541', True),
+    ))
+    def test_validate_nullfail(self, limits, sig_hex, raises):
+        sig_bytes = bytes.fromhex(sig_hex)
+        if raises and limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            with pytest.raises(NullFailError):
+                limits.validate_nullfail(sig_bytes)
         else:
-            assert limits.ops_per_script == 500
+            limits.validate_nullfail(sig_bytes)
 
-        # Test pubkeys_per_multisig
-        if is_utxo_after_genesis:
-            if is_consensus:
-                assert limits.pubkeys_per_multisig == UINT32_MAX
-            else:
-                assert limits.pubkeys_per_multisig == policy.max_pubkeys_per_multisig
+    @pytest.mark.parametrize('dummy', (b'', b'\0'))
+    def test_validate_nulldummy(self, limits, dummy):
+        if dummy and limits.flags & InterpreterFlags.REQUIRE_NULLDUMMY:
+            with pytest.raises(NullDummyError):
+                limits.validate_nulldummy(dummy)
         else:
-            assert limits.pubkeys_per_multisig == 20
-
-        # Max item size
-        if is_utxo_after_genesis:
-            assert limits.item_size == UINT64_MAX
-        else:
-            assert limits.item_size == 520
-
-        assert limits.is_utxo_after_genesis is limits.is_utxo_after_genesis
-
-
-class TestInterpreterState:
-
-    def test_validate_item_size(self, state):
-        state.validate_item_size(state.limits.item_size)
-        with pytest.raises(InvalidPushSize):
-            state.validate_item_size(state.limits.item_size + 1)
-
-    def test_bump_op_count(self, state):
-        state.bump_op_count(state.limits.ops_per_script)
-        with pytest.raises(TooManyOps):
-            state.bump_op_count(1)
-
-    def test_validate_minimal_push_opcode(self, state):
-        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
-            with pytest.raises(MinimalEncodingError):
-                state.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
-        else:
-            state.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
-
-    def test_validate_stack_size(self, state):
-        state.stack = [b''] * InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
-        if state.limits.is_utxo_after_genesis:
-            state.alt_stack = [b'']
-            state.validate_stack_size()
-        else:
-            state.stack = [b''] * InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
-            state.alt_stack = []
-            state.validate_stack_size()
-            state.alt_stack.append(b'')
-            with pytest.raises(StackSizeTooLarge):
-                state.validate_stack_size()
+            limits.validate_nulldummy(dummy)
 
     @pytest.mark.parametrize('sig_hex,flags,err_text', (
         ('', 0, None),
@@ -280,13 +308,13 @@ class TestInterpreterState:
     ))
     def test_validate_signature(self, limits, sig_hex, flags, err_text):
         sig_bytes = bytes.fromhex(sig_hex)
-        state = InterpreterState(add_flags(limits, flags))
+        limits = set_base_flags(limits, flags)
         if err_text:
             with pytest.raises(InvalidSignature) as e:
-                state.validate_signature(sig_bytes)
+                limits.validate_signature(sig_bytes)
             assert err_text in str(e.value)
         else:
-            state.validate_signature(sig_bytes)
+            limits.validate_signature(sig_bytes)
 
     @pytest.mark.parametrize('pubkey,flags,fail', (
         ('', 0, False),
@@ -325,70 +353,70 @@ class TestInterpreterState:
     ))
     def test_validate_pubkey(self, limits, pubkey, flags, fail):
         pubkey_bytes = bytes.fromhex(pubkey)
-        state = InterpreterState(add_flags(limits, flags))
+        limits = set_base_flags(limits, flags)
         if fail:
             with pytest.raises(InvalidPublicKeyEncoding) as e:
-                state.validate_pubkey(pubkey_bytes)
+                limits.validate_pubkey(pubkey_bytes)
             assert 'invalid public key encoding' in str(e.value)
         else:
-            state.validate_pubkey(pubkey_bytes)
-
-    @pytest.mark.parametrize('sig_hex,flags,script_code,result', (
-        ('30454501', 0, Script() << OP_1 << bytes.fromhex('30454501') << OP_2,
-         Script() << OP_1 << OP_2),
-        ('30454501', InterpreterFlags.ENABLE_FORKID,
-         Script() << OP_1 << bytes.fromhex('30454501') << OP_2, None),
-        ('30454541', 0, Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
-        ('30454541', InterpreterFlags.ENABLE_FORKID,
-         Script() << OP_1 << bytes.fromhex('30454541') << OP_2, None),
-    ))
-    def test_cleanup_script_code(self, limits, sig_hex, flags, script_code, result):
-        sig_bytes = bytes.fromhex(sig_hex)
-        state = InterpreterState(add_flags(limits, flags))
-        if result is None:
-            assert state.cleanup_script_code(sig_bytes, script_code) == script_code
-        else:
-            assert state.cleanup_script_code(sig_bytes, script_code) == result
-
-    @pytest.mark.parametrize('sig_hex,flags,raises', (
-        ('', 0, False),
-        ('', InterpreterFlags.REQUIRE_NULLFAIL, False),
-        ('30454501', 0, False),
-        ('30454541', InterpreterFlags.REQUIRE_NULLFAIL, True),
-    ))
-    def test_validate_nullfail(self, limits, sig_hex, flags, raises):
-        sig_bytes = bytes.fromhex(sig_hex)
-        state = InterpreterState(add_flags(limits, flags))
-        if raises:
-            with pytest.raises(NullFailError):
-                state.validate_nullfail(sig_bytes)
-        else:
-            state.validate_nullfail(sig_bytes)
+            limits.validate_pubkey(pubkey_bytes)
 
     @pytest.mark.parametrize('number, value', (
         ('01020304', 0x04030201),
         ('0102030405', 0x0504030201),
         ('0102030400', 0x04030201),
     ))
-    def test_to_number_length(self, state, number, value):
+    def test_to_number(self, limits, number, value):
         number = bytes.fromhex(number)
-        if len(number) > 4 and not state.limits.is_utxo_after_genesis:
+        if len(number) > 4 and not limits.is_utxo_after_genesis:
             with pytest.raises(InvalidNumber):
-                state.to_number(number)
-        elif state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH and number[-1] == 0:
+                limits.to_number(number)
+        elif limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH and number[-1] == 0:
             with pytest.raises(MinimalEncodingError):
-                state.to_number(number)
+                limits.to_number(number)
         else:
-            assert state.to_number(number) == value
+            assert limits.to_number(number) == value
 
-    def test_to_number_minimal(self, state):
+    def test_to_number_minimal(self, limits):
         number = bytes.fromhex('0100')
-        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+        if limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
-                state.to_number(number)
+                limits.to_number(number)
         else:
-            assert state.to_number(number) == 1
+            assert limits.to_number(number) == 1
 
+    def test_validate_item_size(self, limits):
+        limits.validate_item_size(limits.item_size)
+        with pytest.raises(InvalidPushSize):
+            limits.validate_item_size(limits.item_size + 1)
+
+    def test_validate_minimal_push_opcode(self, limits):
+        if limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            with pytest.raises(MinimalEncodingError):
+                limits.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
+        else:
+            limits.validate_minimal_push_opcode(OP_PUSHDATA1, b'\1')
+
+
+class TestInterpreterState:
+
+    def test_bump_op_count(self, state):
+        state.bump_op_count(state.limits.ops_per_script)
+        with pytest.raises(TooManyOps):
+            state.bump_op_count(1)
+
+    def test_validate_stack_size(self, state):
+        state.stack = [b''] * InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+        if state.limits.is_utxo_after_genesis:
+            state.alt_stack = [b'']
+            state.validate_stack_size()
+        else:
+            state.stack = [b''] * InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+            state.alt_stack = []
+            state.validate_stack_size()
+            state.alt_stack.append(b'')
+            with pytest.raises(StackSizeTooLarge):
+                state.validate_stack_size()
 
 reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
 
@@ -440,7 +468,7 @@ class TestEvaluateScriptBase:
             with pytest.raises(InvalidStackOperation):
                 state.evaluate_script(script)
             assert len(state.stack) == n
-            state.reset()
+            state.stack.clear()
 
 
 class TestEvaluateScript(TestEvaluateScriptBase):
@@ -469,7 +497,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
             limit = InterpreterLimits.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS
             script = Script() << bytes(limit)
             state.evaluate_script(script)
-            state.reset()
             script = Script() << bytes(limit + 1)
             with pytest.raises(InvalidPushSize):
                 state.evaluate_script(script)
@@ -492,29 +519,31 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         with pytest.raises(TooManyOps):
             state.evaluate_script(script)
 
-    def test_stack_memory_usage_limit(self, policy):
+    def test_stack_memory_usage_limit(self, limits):
         item = bytes(100)
         count = 20
         overhead = 32
         limit = count * (overhead + len(item))
 
-        limits = InterpreterLimits(1_000_000, 2048, limit, 1_000, 64, 1_000, 0, True)
-        # Apply the policy limit
+        # Force to the given limit
+        limits = copy.copy(limits)
+        limits.stack_memory_usage = limit
         state = InterpreterState(limits)
+
         script = Script().push_many([item] * count)
         # Should work fine
         state.evaluate_script(script)
         assert state.stack.combined_size() == state.stack.size_limit
 
         # Test the alt-stack is counted
-        state.reset()
+        state = InterpreterState(limits)
         script = Script().push_many([item] * (count - 1) + [OP_TOALTSTACK, OP_DUP])
         # Should work fine
         state.evaluate_script(script)
         assert state.stack.combined_size() == state.stack.size_limit
 
-        # Reduce the limit by 1
-        limits = InterpreterLimits(1_000_000, 2048, limit - 1, 1_000, 64, 1_000, 0, True)
+        # Reduce the limit by 1 and blow up
+        limits.stack_memory_usage = limit - 1
         state = InterpreterState(limits)
         script = Script().push_many([item] * count)
         with pytest.raises(StackMemoryUsageError):
@@ -522,7 +551,7 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         assert state.stack.combined_size() == state.stack.size_limit - (len(item) + overhead - 1)
 
         # Test the alt-stack is counted
-        state.reset()
+        state = InterpreterState(limits)
         script = Script().push_many([item] * (count - 1) + [OP_TOALTSTACK, OP_DUP])
         with pytest.raises(StackMemoryUsageError):
             state.evaluate_script(script)
@@ -555,7 +584,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         # After genesis with top-level OP_RETURN truncated scripts are OK
         if state.limits.is_utxo_after_genesis:
             state.evaluate_script(script)
-            state.reset()
             # But after non-top-level OP_RETURN they are not as grammar is checked
             script = Script() << OP_1 << OP_IF << OP_RETURN << OP_ENDIF << b'foobar'
             script = Script(script.to_bytes()[:-1])
@@ -569,7 +597,6 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         # This is all fine
         script = Script() << OP_0 << OP_1 << OP_16 << b'foo' << bytes(300)
         state.evaluate_script(script)
-        state.reset()
 
         script = Script(bytes([1, 5]))
         if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
@@ -603,14 +630,12 @@ class TestEvaluateScript(TestEvaluateScriptBase):
             return
         script = Script() << op
 
-        # No effect with no flags
-        state.evaluate_script(script)
-
-        # Reject with flags
-        state.limits = add_flags(state.limits, InterpreterFlags.REJECT_UPGRADEABLE_NOPS)
-        with pytest.raises(UpgradeableNopError) as e:
+        if state.limits.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
+            with pytest.raises(UpgradeableNopError) as e:
+                state.evaluate_script(script)
+            assert str(e.value) == f'encountered upgradeable NOP {op.name}'
+        else:
             state.evaluate_script(script)
-        assert str(e.value) == f'encountered upgradeable NOP {op.name}'
 
     def test_invalid_opcode(self, state):
         script = Script(b'\xff')
@@ -635,18 +660,20 @@ class TestEvaluateScript(TestEvaluateScriptBase):
         assert state.alt_stack == []
 
 
-class TestVerifyScript(TestEvaluateScriptBase):
+class TestVerifyInput(TestEvaluateScriptBase):
 
     @pytest.mark.parametrize('result', (True, False))
-    def test_sig_push_only(self, verify_state, result):
-        state = verify_state
-        script_sig = Script() << OP_0 << OP_DROP << int(result)
-        script_pubkey = Script()
-        if state.limits.flags & InterpreterFlags.REQUIRE_PUSH_ONLY:
+    def test_sig_push_only(self, verify_limits, result):
+        tx = random_tx(False)
+        tx.inputs[0].script_sig = Script() << OP_0 << OP_DROP << int(result)
+        utxo = TxOutput(0, Script())
+        context = TxInputContext(tx, 0, utxo, False)
+
+        if verify_limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY:
             with pytest.raises(PushOnlyError):
-                state.verify_script(script_sig, script_pubkey)
+                context.verify_input(verify_limits)
         else:
-            assert state.verify_script(script_sig, script_pubkey) is result
+            assert context.verify_input(verify_limits) is result
 
     @pytest.mark.parametrize('script_sig, script_pubkey, triggers, result', (
         (Script(), Script(), False, False),
@@ -658,50 +685,52 @@ class TestVerifyScript(TestEvaluateScriptBase):
         (Script() << OP_1 << OP_2, Script(), True, True),
         (Script() << OP_0 << OP_1 << OP_1, Script() << OP_2DROP, False, False),
     ))
-    def test_cleanstack(self, verify_state, script_sig, script_pubkey, triggers, result):
-        state = verify_state
-        if state.limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and triggers:
+    def test_cleanstack(self, verify_limits, script_sig, script_pubkey, triggers, result):
+        tx = random_tx(False)
+        tx.inputs[0].script_sig = script_sig
+        utxo = TxOutput(1, script_pubkey)
+        context = TxInputContext(tx, 0, utxo, False)
+
+        if verify_limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and triggers:
             with pytest.raises(CleanStackError):
-                state.verify_script(script_sig, script_pubkey)
+                context.verify_input(verify_limits)
         else:
-            assert state.verify_script(script_sig, script_pubkey) is result
+            assert context.verify_input(verify_limits) is result
 
     @pytest.mark.parametrize('succeed', (True, False))
-    def test_P2SH_spend(self, P2SH_state, succeed):
-        state = P2SH_state
+    def test_P2SH_spend(self, P2SH_limits, succeed):
+        # A P2SH 1-of-2 multisig
         # funding transaction a0f1aaa2fb4582c89e0511df0374a5a2833bf95f7314f4a51b55b7b71e90ce0f
         script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
-
-        # A P2SH 1-of-2 multisig
-        spending_tx = read_tx('4d8eabfc.txn')
-        input_index = 2
-
-        state.tx = spending_tx
-        state.input_index = input_index
-
+        utxo = TxOutput(10_000_000, script_pubkey)
+        tx = read_tx('4d8eabfc.txn')
+        context = TxInputContext(tx, 2, utxo, False)
         # Test success and failure by modifying an output
-        spending_tx.outputs[0].value += not succeed
-        script_sig = spending_tx.inputs[input_index].script_sig
+        if succeed:
+            assert context.verify_input(P2SH_limits)
+        else:
+            tx.outputs[0].value += 1
+            if P2SH_limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+                with pytest.raises(NullFailError):
+                    context.verify_input(P2SH_limits)
+            else:
+                assert not context.verify_input(P2SH_limits)
 
-        assert state.verify_script(script_sig, script_pubkey) is succeed
-
-    def test_P2SH_push_only(self, P2SH_state):
-        state = P2SH_state
+    def test_P2SH_push_only(self, P2SH_limits):
         script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
+        utxo = TxOutput(10_000_000, script_pubkey)
+        tx = read_tx('4d8eabfc.txn')
+        context = TxInputContext(tx, 2, utxo, False)
 
-        # A P2SH 1-of-2 multisig
-        spending_tx = read_tx('4d8eabfc.txn')
-        input_index = 2
-
-        state.tx = spending_tx
-        state.input_index = input_index
-
-        # Prepend an OP_NOP
-        script_sig = Script(pack_byte(OP_NOP) + bytes(spending_tx.inputs[input_index].script_sig))
+        # Append an OP_NOP to the script_sig
+        tx.inputs[2].script_sig <<= OP_NOP
 
         with pytest.raises(PushOnlyError) as e:
-            state.verify_script(script_sig, script_pubkey)
-        assert 'P2SH script_sig is not pushdata only' == str(e.value)
+            context.verify_input(P2SH_limits)
+        if P2SH_limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY:
+            assert 'script_sig is not pushdata only' == str(e.value)
+        else:
+            assert 'P2SH script_sig is not pushdata only' == str(e.value)
 
 
 class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
@@ -722,8 +751,9 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
 
     def test_CLTV_minimal(self, checklocktime_state):
         state = checklocktime_state
-        state.tx.locktime = 1
-        state.tx.inputs[state.input_index].sequence = 5000
+        context = state._txin_context
+        context.tx.locktime = 1
+        context.tx.inputs[context.input_index].sequence = 5000
         script = Script() << bytes(5) << OP_CHECKLOCKTIMEVERIFY
         if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
@@ -744,8 +774,9 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
     ))
     def test_CLTV(self, checklocktime_state, locktime, tx_locktime, is_final, text):
         state = checklocktime_state
-        state.tx.locktime = tx_locktime
-        state.tx.inputs[state.input_index].sequence = SEQUENCE_FINAL if is_final else 5000
+        context = state._txin_context
+        context.tx.locktime = tx_locktime
+        context.tx.inputs[context.input_index].sequence = SEQUENCE_FINAL if is_final else 5000
         script = Script() << locktime << OP_CHECKLOCKTIMEVERIFY
         if text is None:
             state.evaluate_script(script)
@@ -771,9 +802,9 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
 
     def test_CSV_minimal(self, checklocktime_state):
         state = checklocktime_state
-        state.tx = copy.copy(state.tx)
-        state.tx.version = 2
-        state.tx.inputs[state.input_index].sequence = 0
+        context = state._txin_context
+        context.tx.version = 2
+        context.tx.inputs[context.input_index].sequence = 0
         script = Script() << bytes(5) << OP_CHECKSEQUENCEVERIFY
         if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
@@ -785,11 +816,11 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
 
     def test_CSV_tx_version(self, checklocktime_state):
         state = checklocktime_state
-        state.tx = copy.copy(state.tx)
-        state.tx.version = random.randrange(-2, 2)
-        state.tx.inputs[state.input_index].sequence = 500
+        context = state._txin_context
+        context.tx.version = random.randrange(-2, 2)
+        context.tx.inputs[context.input_index].sequence = 500
         script = Script() << 0 << OP_CHECKSEQUENCEVERIFY
-        if state.tx.version >= 0:
+        if context.tx.version >= 0:
             with pytest.raises(LockTimeError) as e:
                 state.evaluate_script(script)
             assert 'transaction version is under 2' in str(e.value)
@@ -814,8 +845,9 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
     ))
     def test_CSV(self, checklocktime_state, sequence, tx_sequence, text):
         state = checklocktime_state
-        state.tx.version = random.randrange(2, 8)
-        state.tx.inputs[state.input_index].sequence = tx_sequence
+        context = state._txin_context
+        context.tx.version = random.randrange(2, 8)
+        context.tx.inputs[context.input_index].sequence = tx_sequence
         script = Script() << sequence << OP_CHECKSEQUENCEVERIFY
         if text is None:
             state.evaluate_script(script)
@@ -1077,13 +1109,13 @@ class TestNumeric(TestEvaluateScriptBase):
         assert state.stack == [mul, neg_mul, neg_mul, mul]
 
         # Commutativity
-        state.reset()
+        state.stack.clear()
         script = Script().push_many((b, a, OP_MUL))
         state.evaluate_script(script)
         assert state.stack == [mul]
 
         # Identities
-        state.reset()
+        state.stack.clear()
         script = Script().push_many((a, 1, OP_MUL, a, b'\x81', OP_MUL, a, b'', OP_MUL,
                                      1, a, OP_MUL, b'\x81', a, OP_MUL, b'', a, OP_MUL))
         state.evaluate_script(script)
@@ -1106,7 +1138,7 @@ class TestNumeric(TestEvaluateScriptBase):
     def test_overflow(self, state):
         script = Script().push_many((70000, 70000, OP_MUL))
         state.evaluate_script(script)
-        state.reset()
+        state.stack.clear()
 
         script = Script().push_many((70000, 70000, OP_MUL, OP_0, OP_ADD))
         if state.limits.script_num_length == 4:
@@ -1130,46 +1162,42 @@ class TestNumeric(TestEvaluateScriptBase):
         assert state.stack == [int_to_item(div), int_to_item(mod)]
         assert not state.alt_stack
 
-        state.reset()
+        state.stack.clear()
         script = Script().push_many((a, -b, OP_DIV, a, -b, OP_MOD))
         state.evaluate_script(script)
         assert state.stack == [int_to_item(-div), int_to_item(mod)]
-        assert not state.alt_stack
 
-        state.reset()
+        state.stack.clear()
         script = Script().push_many((-a, b, OP_DIV, -a, b, OP_MOD))
         state.evaluate_script(script)
         assert state.stack == [int_to_item(-div), int_to_item(-mod)]
-        assert not state.alt_stack
 
-        state.reset()
+        state.stack.clear()
         script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
         state.evaluate_script(script)
         assert state.stack == [int_to_item(div), int_to_item(-mod)]
-        assert not state.alt_stack
 
-        state.reset()
+        state.stack.clear()
         script = Script().push_many((-a, -b, OP_DIV, -a, -b, OP_MOD))
         state.evaluate_script(script)
         assert state.stack == [int_to_item(div), int_to_item(-mod)]
-        assert not state.alt_stack
 
         for value in a, b:
             for zeroes in ('00', '80', '0000', '0080'):
-                state.reset()
+                state.stack.clear()
                 script = Script().push_many((value, 0, OP_DIV))
                 with pytest.raises(DivisionByZero) as e:
                     state.evaluate_script(script)
                 assert 'division by zero' in str(e.value)
 
-                state.reset()
+                state.stack.clear()
                 script = Script().push_many((value, 0, OP_MOD))
                 with pytest.raises(DivisionByZero) as e:
                     state.evaluate_script(script)
                 assert 'modulo by zero' in str(e.value)
 
             # Division identities
-            state.reset()
+            state.stack.clear()
             script = Script().push_many((value, 1, OP_DIV, value, b'\x81', OP_DIV,
                                          value, value, OP_DIV, value, -value, OP_DIV))
             state.evaluate_script(script)
@@ -1305,25 +1333,21 @@ class TestControlOperations(TestEvaluateScriptBase):
                 state.evaluate_script(script)
             assert 'top of stack not True or False' in str(e.value)
             assert state.stack[-1] == b'\2'
-            state.reset()
 
             script = Script() << bytes(1) << op << OP_ENDIF
             with pytest.raises(MinimalIfError) as e:
                 state.evaluate_script(script)
             assert 'top of stack not True or False' in str(e.value)
             assert state.stack[-1] == b'\0'
-            state.reset()
 
             script = Script() << b'\1\0' << op << OP_ENDIF
             with pytest.raises(MinimalIfError) as e:
                 state.evaluate_script(script)
             assert 'top of stack not True or False' in str(e.value)
             assert state.stack[-1] == b'\1\0'
-            state.reset()
 
         script = Script() << 0 << op << OP_ENDIF
         state.evaluate_script(script)
-        state.reset()
 
         script = Script() << 1 << op << OP_ENDIF
         state.evaluate_script(script)
@@ -1551,7 +1575,7 @@ class TestStackOperations(TestEvaluateScriptBase):
         state.evaluate_script(script)
         assert state.stack == [item]
         assert not state.alt_stack
-        state.reset()
+        state.stack.clear()
 
         item = random.choice(non_zeroes)
         script = Script() << item << OP_IFDUP
@@ -1629,7 +1653,7 @@ class TestStackOperations(TestEvaluateScriptBase):
         state.evaluate_script(script)
         assert state.stack == list(datas) + [datas[-(n + 1)]]
         assert not state.alt_stack
-        state.reset()
+        state.stack.clear()
 
         # Test bad pick
         n = random.choice([-1, count])
@@ -1658,7 +1682,7 @@ class TestStackOperations(TestEvaluateScriptBase):
         expected.append(expected.pop(-(n + 1)))
         assert state.stack == expected
         assert not state.alt_stack
-        state.reset()
+        state.stack.clear()
 
         # Test bad roll
         n = random.choice([-1, count])
@@ -1996,7 +2020,7 @@ def make_not_low_S(sig):
     return compact_signature_to_der(compact_sig_high_S)
 
 
-def checksig_scripts(state, sighash, op, kind):
+def checksig_scripts(context, sighash, op, kind):
     if kind == 'insert_sig':
         script_pubkey = Script() << OP_DROP << op
     else:
@@ -2004,8 +2028,8 @@ def checksig_scripts(state, sighash, op, kind):
 
     # Create a random private key and sign the transaction
     privkey = PrivateKey.from_random()
-    message_hash = state.tx.signature_hash(state.input_index, state.value,
-                                           script_pubkey, sighash)
+    message_hash = context.tx.signature_hash(context.input_index, context.utxo.value,
+                                             script_pubkey, sighash)
     if kind == 'bad_hash':
         message_hash = sha256(message_hash)
     sig = privkey.sign(message_hash, hasher=None)
@@ -2030,7 +2054,7 @@ def checksig_scripts(state, sighash, op, kind):
     return script_sig, script_pubkey
 
 
-def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
+def checkmultisig_scripts(context, sighash, op, kind, min_m=0):
     min_n = max(min_m, 0)
 
     # Let's test m of n multisig.  m, and or n, can be zero.
@@ -2068,8 +2092,8 @@ def checkmultisig_scripts(state, sighash, op, kind, min_m=0):
         extra_no_sigs = [OP_DROP] * insert_sig_count
     script_pubkey = Script().push_many(pubkey_parts + extra_no_sigs)
 
-    message_hash = state.tx.signature_hash(state.input_index, state.value,
-                                           script_pubkey, sighash)
+    message_hash = context.tx.signature_hash(context.input_index, context.utxo.value,
+                                             script_pubkey, sighash)
     if kind == 'bad_hash':
         message_hash = sha256(message_hash)
     # Sigs must be in order of the keys
@@ -2142,6 +2166,7 @@ class TestCrypto(TestEvaluateScriptBase):
     ))
     def test_CODESEPARATOR(self, checksig_state, script_pubkey, script_code):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
 
         # APPEND OP_CHECKSIGVERIFY to check if the correct script_code has been signed
@@ -2150,8 +2175,8 @@ class TestCrypto(TestEvaluateScriptBase):
 
         # Create a random private key and sign the transaction
         privkey = PrivateKey.from_random()
-        message_hash = state.tx.signature_hash(state.input_index, state.value,
-                                               script_code, sighash)
+        message_hash = context.tx.signature_hash(context.input_index, context.utxo.value,
+                                                 script_code, sighash)
         sig = privkey.sign(message_hash, hasher=None) + pack_byte(sighash)
         script_sig = Script() << sig << privkey.public_key.to_bytes()
 
@@ -2162,10 +2187,11 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_good(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         self.require_stack(state, 2, op)
 
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'good')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'good')
 
         # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
@@ -2179,27 +2205,33 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_bad_sig(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_hash')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'bad_hash')
 
-        # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
-        if op == OP_CHECKSIG:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            assert len(state.stack) == 2
+        elif op == OP_CHECKSIG:
             state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
         else:
             with pytest.raises(CheckSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-        assert state.stack == [b'']
+            assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_find_and_delete(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
         # find_and_delete of sigs is not done with forkid
         if sighash.has_forkid():
             return
         # Insert the sig in the pubkey to check it's removed
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'insert_sig')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'insert_sig')
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
         if op == OP_CHECKSIG:
@@ -2210,8 +2242,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_not_strict_DER(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'not_strict_DER')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'not_strict_DER')
         state.evaluate_script(script_sig)
         if state.limits.flags & (InterpreterFlags.REQUIRE_STRICT_DER
                                  | InterpreterFlags.REQUIRE_LOW_S
@@ -2226,8 +2259,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_not_low_S(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'not_low_S')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'not_low_S')
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_LOW_S:
             with pytest.raises(InvalidSignature) as e:
@@ -2240,8 +2274,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_bad_sighash(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state, valid=False)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'good')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'good')
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
             with pytest.raises(InvalidSignature) as e:
@@ -2259,8 +2294,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_bad_pubkey_encoding(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_pubkey_encoding')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'bad_pubkey_encoding')
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
             with pytest.raises(InvalidPublicKeyEncoding) as e:
@@ -2273,8 +2309,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_empty_sig(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'empty_sig')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'empty_sig')
         state.evaluate_script(script_sig)
         if op == OP_CHECKSIG:
             # Empty sig should not raise any errors but just fail a signature check
@@ -2287,32 +2324,31 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_invalid_pubkey(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'invalid_pubkey')
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'invalid_pubkey')
         state.evaluate_script(script_sig)
-        if op == OP_CHECKSIG:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            assert len(state.stack) == 2
+        elif op == OP_CHECKSIG:
             # Invalid public key should not raise any errors but just fail a signature check
             state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
         else:
             with pytest.raises(CheckSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-        assert state.stack == [b'']
+            assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKSIG, OP_CHECKSIGVERIFY))
     def test_CHECKSIG_NULLFAIL(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'bad_hash')
-        state.evaluate_script(script_sig)
 
-        state.limits = add_flags(state.limits, InterpreterFlags.REQUIRE_NULLFAIL)
-        with pytest.raises(NullFailError):
-            state.evaluate_script(script_pubkey)
-        assert len(state.stack) == 2
-
-        # Now try with an empty sig
-        state.reset()
-        script_sig, script_pubkey = checksig_scripts(state, sighash, op, 'empty_sig')
+        # The tests above cover NULLFAIL for normal sigs; try an empty sig
+        script_sig, script_pubkey = checksig_scripts(context, sighash, op, 'empty_sig')
         state.evaluate_script(script_sig)
         if op == OP_CHECKSIG:
             state.evaluate_script(script_pubkey)
@@ -2324,9 +2360,10 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_good(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
 
-        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'good')
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(context, sighash, op, 'good')
 
         # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
@@ -2341,19 +2378,26 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_wrong_order(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
 
-        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'wrong_order', min_m=2)
 
         # The sigs are good but in the wrong order
         state.evaluate_script(script_sig)
-        if op == OP_CHECKMULTISIG:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            # The first bad sig is left on the stack
+            assert 2 <= len(state.stack) <= 1 + m
+        elif op == OP_CHECKMULTISIG:
             state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
         else:
             with pytest.raises(CheckMultiSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-        assert state.stack == [b'']
+            assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_stack_size(self, checksig_state, op):
@@ -2361,18 +2405,18 @@ class TestCrypto(TestEvaluateScriptBase):
         script = Script() << op
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << OP_0 << op
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script)
-        state.reset()
+        state.stack.clear()
 
         # This would be OK but there is no dummy
         script = Script() << OP_0 << OP_0 << op
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script)
-        state.reset()
+        state.stack.clear()
 
         # This is OK - no sigs, no pubkeys
         script = Script() << OP_0 << OP_0 << OP_0 << op
@@ -2387,7 +2431,7 @@ class TestCrypto(TestEvaluateScriptBase):
         with pytest.raises(InvalidPublicKeyCount) as e:
             state.evaluate_script(script)
         assert 'number of public keys, -1, in multi-sig check lies outside' in str(e.value)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << OP_0 << OP_0 << state.limits.pubkeys_per_multisig << op
         if state.limits.pubkeys_per_multisig > INT32_MAX:
@@ -2397,7 +2441,7 @@ class TestCrypto(TestEvaluateScriptBase):
         else:
             with pytest.raises(InvalidStackOperation):
                 state.evaluate_script(script)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << OP_0 << OP_0 << state.limits.pubkeys_per_multisig + 1 << op
         if state.limits.pubkeys_per_multisig > INT32_MAX:
@@ -2407,13 +2451,13 @@ class TestCrypto(TestEvaluateScriptBase):
         else:
             with pytest.raises(InvalidPublicKeyCount) as e:
                 state.evaluate_script(script)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << OP_0 << OP_0 << int_to_item(0, 5) << op
         with pytest.raises(InvalidNumber) as e:
             state.evaluate_script(script)
         assert 'number of length 5 bytes exceeds the limit of 4 bytes' in str(e.value)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << OP_0 << OP_0 << int_to_item(0, 2) << op
         if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
@@ -2425,9 +2469,10 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_op_count(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
 
-        script_sig, script_pubkey, _, n = checkmultisig_scripts(state, sighash, op, 'good')
+        script_sig, script_pubkey, _, n = checkmultisig_scripts(context, sighash, op, 'good')
 
         # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
@@ -2445,7 +2490,7 @@ class TestCrypto(TestEvaluateScriptBase):
         with pytest.raises(InvalidSignatureCount) as e:
             state.evaluate_script(script)
         assert 'number of signatures, -1, in OP_CHECKMULTISIG lies outside' in str(e.value)
-        state.reset()
+        state.stack.clear()
 
         key_count = random.randrange(1, 10)
         sig_count = key_count + 1
@@ -2454,13 +2499,13 @@ class TestCrypto(TestEvaluateScriptBase):
         with pytest.raises(InvalidSignatureCount) as e:
             state.evaluate_script(script)
         assert f'number of signatures, {sig_count}, in OP_CHECKMULTISIG lies ' in str(e.value)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << int_to_item(0, 5) << OP_0 << op
         with pytest.raises(InvalidNumber) as e:
             state.evaluate_script(script)
         assert 'number of length 5 bytes exceeds the limit of 4 bytes' in str(e.value)
-        state.reset()
+        state.stack.clear()
 
         script = Script() << OP_0 << int_to_item(0, 2) << OP_0 << op
         if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
@@ -2486,28 +2531,36 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_bad_sig(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'bad_hash',
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op, 'bad_hash',
                                                                 min_m=1)
 
-        # This should complete if the correct script is signed
         state.evaluate_script(script_sig)
-        if op == OP_CHECKMULTISIG:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            # The first sig is bad and left on the stack
+            assert len(state.stack) == 1 + m
+        elif op == OP_CHECKMULTISIG:
+            # This should complete if the correct script is signed
             state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
         else:
             with pytest.raises(CheckMultiSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-        assert state.stack == [b'']
+            assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_find_and_delete(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
         # find_and_delete of sigs is not done with forkid
         if sighash.has_forkid():
             return
         # Insert sigs in the pubkey to check they're removed
-        script_sig, script_pubkey, _, _ = checkmultisig_scripts(state, sighash, op, 'insert_sig')
+        script_sig, script_pubkey, _, _ = checkmultisig_scripts(context, sighash, op, 'insert_sig')
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
         if op == OP_CHECKMULTISIG:
@@ -2518,8 +2571,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_not_strict_DER(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'not_strict_DER', min_m=1)
         state.evaluate_script(script_sig)
         if state.limits.flags & (InterpreterFlags.REQUIRE_STRICT_DER
@@ -2535,8 +2589,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_not_low_S(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'not_low_S', min_m=1)
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_LOW_S:
@@ -2550,8 +2605,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_bad_sighash(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state, valid=False)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'good', min_m=1)
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
@@ -2570,8 +2626,9 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_bad_pubkey_encoding(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'bad_pubkey_encoding', min_m=1)
         state.evaluate_script(script_sig)
         # Only public keys actually used are checked
@@ -2585,43 +2642,55 @@ class TestCrypto(TestEvaluateScriptBase):
 
         # Bad encodings are only noticed if consumed...
         script_sig, script_pubkey, m, n = checkmultisig_scripts(
-            state, sighash, op, 'bad_pubkey_encoding_missed')
+            context, sighash, op, 'bad_pubkey_encoding_missed')
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_empty_sig(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'empty_sig', min_m=1)
         state.evaluate_script(script_sig)
-        if op == OP_CHECKMULTISIG:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL and m > 1:
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            assert 2 <= len(state.stack) <= 1 + m
+        elif op == OP_CHECKMULTISIG:
             # Empty sig should not raise any errors but just fail a signature check
             state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
         else:
             with pytest.raises(CheckMultiSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-        assert state.stack == [b'']
+            assert state.stack == [b'']
 
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_invalid_pubkey(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'invalid_pubkey', min_m=1)
         state.evaluate_script(script_sig)
-        if op == OP_CHECKMULTISIG:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            with pytest.raises(NullFailError):
+                state.evaluate_script(script_pubkey)
+            assert 2 <= len(state.stack) <= 1 + m
+        elif op == OP_CHECKMULTISIG:
             # Invalid public key should not raise any errors but just fail a signature check
             state.evaluate_script(script_pubkey)
+            assert state.stack == [b'']
         else:
             with pytest.raises(CheckMultiSigVerifyFailed):
                 state.evaluate_script(script_pubkey)
-        assert state.stack == [b'']
+            assert state.stack == [b'']
+        state.stack.clear()
 
-        state.reset()
         # If the pubkey is not used, its invalid state is missed
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'invalid_pubkey_missed', min_m=1)
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
@@ -2629,19 +2698,11 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_NULLFAIL(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
-                                                                'bad_hash', min_m=1)
 
-        state.evaluate_script(script_sig)
-        state.limits = add_flags(state.limits, InterpreterFlags.REQUIRE_NULLFAIL)
-        with pytest.raises(NullFailError):
-            state.evaluate_script(script_pubkey)
-        assert len(state.stack) <= m + 1
-
-        # Now try with an empty sig
-        state.reset()
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        # The tests above cover NULLFAIL for normal sigs; try all empty sigs
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'all_empty_sig', min_m=1)
         state.evaluate_script(script_sig)
         if op == OP_CHECKMULTISIG:
@@ -2654,26 +2715,25 @@ class TestCrypto(TestEvaluateScriptBase):
     @pytest.mark.parametrize("op", (OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY))
     def test_CHECKMULTISIG_DUMMY(self, checksig_state, op):
         state = checksig_state
+        context = state._txin_context
         sighash = random_sighash(state)
 
         # Test we need a dummy
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op, 'no_dummy')
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op, 'no_dummy')
         state.evaluate_script(script_sig)
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script_pubkey)
-        state.reset()
+        state.stack.clear()
 
         # Test non-null dummy
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(state, sighash, op,
+        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'nonnull_dummy')
         state.evaluate_script(script_sig)
-        # Fine with non-null dummy
-        state.evaluate_script(script_pubkey)
-        state.reset()
-
-        state.limits = add_flags(state.limits, InterpreterFlags.REQUIRE_NULLDUMMY)
-        state.evaluate_script(script_sig)
-        with pytest.raises(NullDummyError):
+        if state.limits.flags  & InterpreterFlags.REQUIRE_NULLDUMMY:
+            with pytest.raises(NullDummyError):
+                state.evaluate_script(script_pubkey)
+        else:
+            # Fine with non-null dummy
             state.evaluate_script(script_pubkey)
 
 
@@ -2698,11 +2758,9 @@ class TestByteStringOperations(TestEvaluateScriptBase):
         assert state.alt_stack == []
 
     def test_CAT_size_enforced(self, state):
-
         item = bytes(InterpreterLimits.MAX_SCRIPT_ELEMENT_SIZE_BEFORE_GENESIS)
         script = Script() << item << b'' << OP_CAT
         state.evaluate_script(script)
-        state.reset()
 
         script = Script() << item << b'1' << OP_CAT
         if state.limits.is_utxo_after_genesis:
@@ -2723,7 +2781,7 @@ class TestByteStringOperations(TestEvaluateScriptBase):
         assert state.alt_stack == []
 
         # Negative
-        state.reset()
+        state.stack.clear()
         num = random.randrange(-10, 0)
         script = Script() << value << num << OP_SPLIT
         with pytest.raises(InvalidSplit) as e:
@@ -2732,7 +2790,7 @@ class TestByteStringOperations(TestEvaluateScriptBase):
         assert len(state.stack) == 2
 
         # Too large
-        state.reset()
+        state.stack.clear()
         num = len(value) + random.randrange(1, 10)
         script = Script() << value << num << OP_SPLIT
         with pytest.raises(InvalidSplit) as e:
@@ -2742,7 +2800,7 @@ class TestByteStringOperations(TestEvaluateScriptBase):
 
     def test_SPLIT_minimal(self, state):
         script = Script() << b'foobar' << b'\0' << OP_SPLIT
-        if state.limits.flags == InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
                 state.evaluate_script(script)
             assert state.stack == [b'foobar', b'\0']
@@ -2772,7 +2830,7 @@ class TestByteStringOperations(TestEvaluateScriptBase):
 
     def test_NUM2BIN_minimal(self, state):
         script = Script() << b'' << b'\3\0' << OP_NUM2BIN
-        if state.limits.flags == InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+        if state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
             with pytest.raises(MinimalEncodingError):
                 state.evaluate_script(script)
             assert state.stack == [b'', b'\3\0']
@@ -2842,7 +2900,7 @@ class TestByteStringOperations(TestEvaluateScriptBase):
         state.evaluate_script(script)
         assert state.stack == [result]
 
-        state.reset()
+        state.stack.clear()
         result = b'\6' * (state.limits.script_num_length + 1)
         script = Script() << result + b'\0' << OP_BIN2NUM
         with pytest.raises(InvalidNumber):
