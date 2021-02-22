@@ -235,88 +235,23 @@ class InterpreterLimits:
             is_utxo_after_genesis,
         )
 
+    def cleanup_script_code(self, sig_bytes, script_code):
+        '''Return script_code with signatures deleted if pre-BCH fork.'''
+        sighash = SigHash.from_sig_bytes(sig_bytes)
+        if self.flags & InterpreterFlags.ENABLE_FORKID or sighash.has_forkid():
+            return script_code
+        else:
+            return script_code.find_and_delete(Script() << sig_bytes)
 
-class InterpreterState:
-    '''Things that vary per evaluation, typically because they're a function of the
-    transaction input.'''
+    def validate_nullfail(self, sig_bytes):
+        '''Fail immediately if a failed signature was not null.'''
+        if sig_bytes and self.flags & InterpreterFlags.REQUIRE_NULLFAIL:
+            raise NullFailError('signature check failed on a non-null signature')
 
-    def __init__(self, limits, *, tx=None, input_index=-1, value=-1):
-        self.limits = limits
-        self.tx = tx
-        self.input_index = input_index
-        self.value = value
-        self.reset()
-
-    def reset(self):
-        # These are updated by the interpreter whilst running
-        self.stack = LimitedStack(self.limits.stack_memory_usage)
-        self.alt_stack = self.stack.make_child_stack()
-        self.conditions = []
-        self.execute = False
-        self.iterator = None
-        self.finished = False
-        self.op_count = 0
-        self.non_top_level_return_after_genesis = False
-
-    def bump_op_count(self, bump):
-        self.op_count += bump
-        if self.op_count > self.limits.ops_per_script:
-            raise TooManyOps(f'op count exceeds the limit of {self.limits.ops_per_script:,d}')
-
-    def require_stack_depth(self, depth):
-        if len(self.stack) < depth:
-            raise InvalidStackOperation(f'stack depth {len(self.stack)} less than required '
-                                        f'depth of {depth}')
-
-    def require_alt_stack(self):
-        if not self.alt_stack:
-            raise InvalidStackOperation('alt stack is empty')
-
-    def validate_item_size(self, size):
-        '''Enforces the limit on stack item size.'''
-        if size > self.limits.item_size:
-            raise InvalidPushSize(f'item length {size:,d} exceeds the limit '
-                                  f'of {self.limits.item_size:,d} bytes')
-
-    def validate_minimal_push_opcode(self, op, item):
-        if self.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
-            expected_op = minimal_push_opcode(item)
-            if op != expected_op:
-                raise MinimalEncodingError(f'item not pushed with minimal opcode {expected_op}')
-
-    def validate_stack_size(self):
-        '''Enforces the limits on combined stack size.
-
-        For post-genesis UTXOs the limit is instead on stack memory usage.
-        '''
-        if self.limits.is_utxo_after_genesis:
-            return
-        stack_size = len(self.stack) + len(self.alt_stack)
-        limit = InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
-        if stack_size > limit:
-            raise StackSizeTooLarge(f'combined stack size exceeds the limit of {limit:,d} items')
-
-    def validate_number_length(self, size, *, limit=None):
-        if limit is None:
-            limit = self.limits.script_num_length
-        if size > limit:
-            raise InvalidNumber(f'number of length {size:,d} bytes exceeds the limit '
-                                f'of {limit:,d} bytes')
-
-    def to_number(self, item, *, length_limit=None):
-        self.validate_number_length(len(item), limit=length_limit)
-
-        if (self.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH
-                and not is_item_minimally_encoded(item)):
-            raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
-
-        return item_to_int(item)
-
-    def validate_pubkey_count(self, count):
-        limit = self.limits.pubkeys_per_multisig
-        if not 0 <= count <= limit:
-            raise InvalidPublicKeyCount(f'number of public keys, {count:,d}, in multi-sig check '
-                                        f'lies outside range 0 <= count <= {limit:d}')
+    def validate_nulldummy(self, dummy):
+        '''Fail if the multisig duumy pop isn't an empty stack item.'''
+        if dummy and self.flags & InterpreterFlags.REQUIRE_NULLDUMMY:
+            raise NullDummyError('multisig dummy argument was not null')
 
     def validate_signature(self, sig_bytes):
         '''Raise the InvalidSignature exception if the signature does not meet the requirements of
@@ -325,7 +260,7 @@ class InterpreterState:
         if not sig_bytes:
             return
 
-        flags = self.limits.flags
+        flags = self.flags
         if flags & (InterpreterFlags.REQUIRE_STRICT_DER
                     | InterpreterFlags.REQUIRE_LOW_S
                     | InterpreterFlags.REQUIRE_STRICT_ENCODING):
@@ -348,7 +283,7 @@ class InterpreterState:
     def validate_pubkey(self, pubkey_bytes):
         '''Raise the InvalidPublicKeyEncoding exception if the public key is not a standard
         compressed or uncompressed encoding and REQUIRE_STRICT_ENCODING is flagged.'''
-        if self.limits.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
+        if self.flags & InterpreterFlags.REQUIRE_STRICT_ENCODING:
             length = len(pubkey_bytes)
             if length == 33 and pubkey_bytes[0] in {2, 3}:
                 return
@@ -356,27 +291,94 @@ class InterpreterState:
                 return
             raise InvalidPublicKeyEncoding('invalid public key encoding')
 
-    def validate_nullfail(self, sig_bytes):
-        '''Fail immediately if a failed signature was not null.'''
-        if self.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL and sig_bytes:
-            raise NullFailError('signature check failed on a non-null signature')
+    def validate_pubkey_count(self, count):
+        limit = self.pubkeys_per_multisig
+        if not 0 <= count <= limit:
+            raise InvalidPublicKeyCount(f'number of public keys, {count:,d}, in multi-sig check '
+                                        f'lies outside range 0 <= count <= {limit:d}')
 
-    def validate_nulldummy(self):
-        '''Fail if the multisig duumy pop isn't an empty stack item.'''
-        if self.limits.flags & InterpreterFlags.REQUIRE_NULLDUMMY and self.stack[-1]:
-            raise NullDummyError('multisig dummy argument was not null')
+    def validate_number_length(self, size, *, limit=None):
+        if limit is None:
+            limit = self.script_num_length
+        if size > limit:
+            raise InvalidNumber(f'number of length {size:,d} bytes exceeds the limit '
+                                f'of {limit:,d} bytes')
 
-    def cleanup_script_code(self, sig_bytes, script_code):
-        '''Return script_code with signatures deleted if pre-BCH fork.'''
-        sighash = SigHash.from_sig_bytes(sig_bytes)
-        if self.limits.flags & InterpreterFlags.ENABLE_FORKID or sighash.has_forkid():
-            return script_code
-        else:
-            return script_code.find_and_delete(Script() << sig_bytes)
+    def to_number(self, item, *, length_limit=None):
+        self.validate_number_length(len(item), limit=length_limit)
+
+        if (self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH
+                and not is_item_minimally_encoded(item)):
+            raise MinimalEncodingError(f'number is not minimally encoded: {item.hex()}')
+
+        return item_to_int(item)
+
+    def validate_item_size(self, size):
+        '''Enforces the limit on stack item size.'''
+        if size > self.item_size:
+            raise InvalidPushSize(f'item length {size:,d} exceeds the limit '
+                                  f'of {self.limits.item_size:,d} bytes')
+
+    def validate_minimal_push_opcode(self, op, item):
+        if self.flags & InterpreterFlags.REQUIRE_MINIMAL_PUSH:
+            expected_op = minimal_push_opcode(item)
+            if op != expected_op:
+                raise MinimalEncodingError(f'item not pushed with minimal opcode {expected_op}')
+
+    def handle_upgradeable_nop(self, op):
+        '''Raise on upgradeable nops if the flag is set.'''
+        if self.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
+            raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
+
+
+class TxInputContext:
+    '''The context of a transaction input when evaluating its script_sig against a previous
+    outputs script_pubkey.'''
+
+    # The transaction containing the input, an instance of Tx
+    tx = attr.ib()
+    # The index of the input
+    input_index = attr.ib()
+    # The previous output it is spending, an instance of TxOutput
+    utxo = attr.ib()
+    # True if the UTXO was created after the Genesis upgrade
+    is_utxo_after_genesis = attr.ib()
+
+    def verify(limits):
+        '''Return the boolean result of validating the input subject to limits.'''
+        script_sig = self.tx.inputs[self.input_index].script_sig
+        if limits.flags & InterpreterFlags.REQUIRE_PUSH_ONLY and not script_sig.is_push_only():
+            raise PushOnlyError('script_sig is not pushdata only')
+
+        script_pubkey = self.utxo.script_pubkey
+        is_P2SH = limits.flags & InterpreterFlags.ENABLE_P2SH and script_pubkey.is_P2SH()
+
+        state = InterpreterState(self, limits)
+        state.evaluate_script(script_sig)
+        if is_P2SH:
+            stack_copy = state.stack.make_copy()
+        state.evaluate_script(script_pubkey)
+        if not state.stack or not cast_to_bool(state.stack[-1]):
+            return False
+
+        # Additional validation for P2SH transactions
+        if is_P2SH:
+            if not script_sig.is_push_only():
+                raise PushOnlyError('P2SH script_sig is not pushdata only')
+            state.stack.restore_copy(stack_copy)
+            pubkey_script = Script(state.stack.pop())
+            state.evaluate_script(pubkey_script)
+            if not state.stack or not cast_to_bool(state.stack[-1]):
+                return False
+
+        if limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and len(state.stack) != 1:
+            raise CleanStackError('stack is not clean')
+
+        return True
 
     def check_sig(self, sig_bytes, pubkey_bytes, script_code):
         '''Check a signature.  Returns True or False.'''
-        if not sig_bytes or not self.tx:
+        if not sig_bytes:
             return False
         from .keys import PublicKey
         try:
@@ -386,7 +388,8 @@ class InterpreterState:
 
         # Split out to a normalized DER signature and the sighash
         der_sig, sighash = Signature.split_and_normalize(sig_bytes)
-        message_hash = self.tx.signature_hash(self.input_index, self.value, script_code, sighash)
+        message_hash = self.tx.signature_hash(self.input_index, self.utxo.value,
+                                              script_code, sighash)
 
         return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
 
@@ -418,10 +421,45 @@ class InterpreterState:
         if sequence > txin_seq:
             raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
-    def handle_upgradeable_nop(self, op):
-        '''Raise on upgradeable nops if the flag is set.'''
-        if self.limits.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
-            raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
+
+class InterpreterState:
+    '''Interpreter state that updates as a script executes.'''
+
+    def __init__(self, limits, context):
+        self.limits = limits
+        self.context = context
+        self.stack = LimitedStack(self.limits.stack_memory_usage)
+        self.alt_stack = self.stack.make_child_stack()
+        self.conditions = []
+        self.execute = False
+        self.iterator = None
+        self.op_count = 0
+
+    def bump_op_count(self, bump):
+        self.op_count += bump
+        if self.op_count > self.limits.ops_per_script:
+            raise TooManyOps(f'op count exceeds the limit of {self.limits.ops_per_script:,d}')
+
+    def require_stack_depth(self, depth):
+        if len(self.stack) < depth:
+            raise InvalidStackOperation(f'stack depth {len(self.stack)} less than required '
+                                        f'depth of {depth}')
+
+    def require_alt_stack(self):
+        if not self.alt_stack:
+            raise InvalidStackOperation('alt stack is empty')
+
+    def validate_stack_size(self):
+        '''Enforces the limits on combined stack size.
+
+        For post-genesis UTXOs the limit is instead on stack memory usage.
+        '''
+        if self.limits.is_utxo_after_genesis:
+            return
+        stack_size = len(self.stack) + len(self.alt_stack)
+        limit = InterpreterLimits.MAX_STACK_ELEMENTS_BEFORE_GENESIS
+        if stack_size > limit:
+            raise StackSizeTooLarge(f'combined stack size exceeds the limit of {limit:,d} items')
 
     def evaluate_script(self, script):
         '''Evaluate a script and update state.'''
@@ -429,18 +467,18 @@ class InterpreterState:
             raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
                                  f'{self.limits.script_size:,d} bytes')
 
-        # pylint:disable=W0201
+        self.conditions = []
         self.op_count = 0
-        self.non_top_level_return_after_genesis = False
         self.iterator = ScriptIterator(script)
+        non_top_level_return_after_genesis = False
 
         for op, item in self.iterator.ops_and_items():
             # Check pushitem size first
             if item is not None:
-                self.validate_item_size(len(item))
+                self.limits.validate_item_size(len(item))
 
             self.execute = (all(condition.execute for condition in self.conditions)
-                            and (not self.non_top_level_return_after_genesis or op == OP_RETURN))
+                            and (not non_top_level_return_after_genesis or op == OP_RETURN))
 
             # Pushitem and OP_RESERVED do not count towards op count.
             if op > OP_16:
@@ -453,47 +491,26 @@ class InterpreterState:
                 raise DisabledOpcode(f'{Ops(op).name} is disabled')
 
             if self.execute and item is not None:
-                self.validate_minimal_push_opcode(op, item)
+                self.limits.validate_minimal_push_opcode(op, item)
                 self.stack.append(item)
             elif self.execute or OP_IF <= op <= OP_ENDIF:
-                op_handlers[op](self)
-                if self.finished:
-                    return
+                try:
+                    op_handlers[op](self)
+                except OpReturnError:
+                    if not self.limits.is_utxo_after_genesis:
+                        raise
+                    # A top-level post-geneis OP_RETURN terminates successfully, ignoring
+                    # the rest of the script even in the presence of unbalanced IFs,
+                    # invalid opcodes etc.  Otherwise the grammar is checked.
+                    if not state.conditions:
+                        return
+                    non_top_level_return_after_genesis = True
 
             self.validate_stack_size()
 
         if self.conditions:
             raise UnbalancedConditional(f'unterminated {self.conditions[-1].opcode.name} '
                                         'at end of script')
-
-    def verify_script(self, script_sig, script_pubkey):
-        '''Return the result of evaluating the scripts.'''
-        if self.limits.flags & InterpreterFlags.REQUIRE_PUSH_ONLY and not script_sig.is_push_only():
-            raise PushOnlyError('script_sig is not pushdata only')
-
-        is_P2SH = (self.limits.flags & InterpreterFlags.ENABLE_P2SH) and script_pubkey.is_P2SH()
-
-        self.evaluate_script(script_sig)
-        if is_P2SH:
-            stack_copy = self.stack.make_copy()
-        self.evaluate_script(script_pubkey)
-        if not self.stack or not cast_to_bool(self.stack[-1]):
-            return False
-
-        # Additional validation for P2SH transactions
-        if is_P2SH:
-            if not script_sig.is_push_only():
-                raise PushOnlyError('P2SH script_sig is not pushdata only')
-            self.stack.restore_copy(stack_copy)
-            pubkey_script = Script(self.stack.pop())
-            self.evaluate_script(pubkey_script)
-            if not self.stack or not cast_to_bool(self.stack[-1]):
-                return False
-
-        if self.limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and len(self.stack) != 1:
-            raise CleanStackError('stack is not clean')
-
-        return True
 
 
 #
@@ -550,16 +567,7 @@ def handle_VERIFY(state):
 
 
 def handle_RETURN(state):
-    if state.limits.is_utxo_after_genesis:
-        if state.conditions:
-            # Check for invalid grammar if OP_RETURN in an if statement after genesis
-            state.non_top_level_return_after_genesis = True
-        else:
-            # Terminate execution successfully.  The remainder of the script is ignored
-            # even in the presence of unbalanced IFs, invalid opcodes etc.
-            state.finished = True
-    else:
-        raise OpReturnError('OP_RETURN encountered')
+    raise OpReturnError('OP_RETURN encountered')
 
 
 def invalid_opcode(_state, op):
@@ -668,7 +676,7 @@ def handle_PICK_ROLL(state, op):
     # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
     # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
     state.require_stack_depth(2)
-    n = int(state.to_number(state.stack[-1]))
+    n = int(state.limits.to_number(state.stack[-1]))
     state.stack.pop()
     depth = len(state.stack)
     if not 0 <= n < depth:
@@ -749,7 +757,7 @@ def shift_right(value, count):
 def handle_LSHIFT(state):
     # (x n -- out).   Logical bit-shift maintaining item size
     state.require_stack_depth(2)
-    n = int(state.to_number(state.stack[-1]))
+    n = int(state.limits.to_number(state.stack[-1]))
     if n < 0:
         raise NegativeShiftCount(f'invalid shift left of {n:,d} bits')
     state.stack.pop()
@@ -759,7 +767,7 @@ def handle_LSHIFT(state):
 def handle_RSHIFT(state):
     # (x n -- out).   Logical bit-shift maintaining item size
     state.require_stack_depth(2)
-    n = int(state.to_number(state.stack[-1]))
+    n = int(state.limits.to_number(state.stack[-1]))
     if n < 0:
         raise NegativeShiftCount(f'invalid right left of {n:,d} bits')
     state.stack.pop()
@@ -772,15 +780,15 @@ def handle_RSHIFT(state):
 def handle_unary_numeric(state, unary_op):
     # (x -- out)
     state.require_stack_depth(1)
-    value = state.to_number(state.stack[-1])
+    value = state.limits.to_number(state.stack[-1])
     state.stack[-1] = int_to_item(unary_op(value))
 
 
 def handle_binary_numeric(state, binary_op):
     # (x1 x2 -- out)
     state.require_stack_depth(2)
-    x1 = state.to_number(state.stack[-2])
-    x2 = state.to_number(state.stack[-1])
+    x1 = state.limits.to_number(state.stack[-2])
+    x2 = state.limits.to_number(state.stack[-1])
     try:
         result = binary_op(x1, x2)
     except ZeroDivisionError:
@@ -850,13 +858,13 @@ def handle_CHECKSIG(state):
     state.require_stack_depth(2)
     sig_bytes = state.stack[-2]
     pubkey_bytes = state.stack[-1]
-    state.validate_signature(sig_bytes)
-    state.validate_pubkey(pubkey_bytes)
+    state.limits.validate_signature(sig_bytes)
+    state.limits.validate_pubkey(pubkey_bytes)
     script_code = state.iterator.script_code()
-    script_code = state.cleanup_script_code(sig_bytes, script_code)
-    is_good = state.check_sig(sig_bytes, pubkey_bytes, script_code)
+    script_code = state.limits.cleanup_script_code(sig_bytes, script_code)
+    is_good = state.context.check_sig(sig_bytes, pubkey_bytes, script_code)
     if not is_good:
-        state.validate_nullfail(sig_bytes)
+        state.limits.validate_nullfail(sig_bytes)
     state.stack.pop()
     state.stack[-1] = bool_items[is_good]
 
@@ -873,12 +881,12 @@ def handle_CHECKMULTISIG(state):
     # ([sig ...] sig_count [pubkey ...] pubkey_count -- bool)
     state.require_stack_depth(1)
     # Limit key count to 4 bytes
-    key_count = state.to_number(state.stack[-1], length_limit=4)
-    state.validate_pubkey_count(key_count)
+    key_count = state.limits.to_number(state.stack[-1], length_limit=4)
+    state.limits.validate_pubkey_count(key_count)
     state.bump_op_count(key_count)
     # Ensure we can read sig_count, also limited to 4 bytes
     state.require_stack_depth(key_count + 2)
-    sig_count = state.to_number(state.stack[-(key_count + 2)], length_limit=4)
+    sig_count = state.limits.to_number(state.stack[-(key_count + 2)], length_limit=4)
     if not 0 <= sig_count <= key_count:
         raise InvalidSignatureCount(f'number of signatures, {sig_count:,d}, in OP_CHECKMULTISIG '
                                     f'lies outside range 0 <= count <= {key_count:,d}')
@@ -888,10 +896,11 @@ def handle_CHECKMULTISIG(state):
     state.require_stack_depth(item_count)
 
     # Remove signatures for pre-BCH fork scripts
+    cleanup_script_code = state.limits.cleanup_script_code
     script_code = state.iterator.script_code()
     first_sig_index = -(key_count + 3)
     for n in range(sig_count):
-        script_code = state.cleanup_script_code(state.stack[first_sig_index - n], script_code)
+        script_code = cleanup_script_code(state.stack[first_sig_index - n], script_code)
 
     keys_remaining = key_count
     sigs_remaining = sig_count
@@ -900,10 +909,10 @@ def handle_CHECKMULTISIG(state):
     # Loop while the remaining number of sigs to check does not exceed the remaining keys
     while keys_remaining >= sigs_remaining > 0:
         sig_bytes = state.stack[sig_base_index + sigs_remaining]
-        state.validate_signature(sig_bytes)
+        state.limits.validate_signature(sig_bytes)
         pubkey_bytes = state.stack[key_base_index + keys_remaining]
-        state.validate_pubkey(pubkey_bytes)
-        is_good = state.check_sig(sig_bytes, pubkey_bytes, script_code)
+        state.limits.validate_pubkey(pubkey_bytes)
+        is_good = state.context.check_sig(sig_bytes, pubkey_bytes, script_code)
         if is_good:
             sigs_remaining -= 1
         keys_remaining -= 1
@@ -914,12 +923,12 @@ def handle_CHECKMULTISIG(state):
     for n in range(item_count):
         # If the operation failed NULLFAIL requires all signatures be empty
         if not is_good and n >= key_count + 2:
-            state.validate_nullfail(state.stack[-1])
+            state.limits.validate_nullfail(state.stack[-1])
         state.stack.pop()
 
     # An old CHECKMULTISIG bug consumes an extra argument.  Check it's null.
     state.require_stack_depth(1)
-    state.validate_nulldummy()
+    state.limits.validate_nulldummy(state.stack[-1])
     state.stack[-1] = bool_items[is_good]
 
 
@@ -939,7 +948,7 @@ def handle_CAT(state):
     # (x1 x2 -- x1x2 )
     state.require_stack_depth(2)
     item = state.stack[-2] + state.stack[-1]
-    state.validate_item_size(len(item))
+    state.limits.validate_item_size(len(item))
     state.stack.pop()
     state.stack[-1] = item
 
@@ -948,7 +957,7 @@ def handle_SPLIT(state):
     # (x posiition -- x1 x2)
     state.require_stack_depth(2)
     x = state.stack[-2]
-    n = int(state.to_number(state.stack[-1]))
+    n = int(state.limits.to_number(state.stack[-1]))
     if not 0 <= n <= len(x):
         raise InvalidSplit(f'cannot split item of length {len(x):,d} at position {n:,d}')
     state.stack[-2] = x[:n]
@@ -958,10 +967,10 @@ def handle_SPLIT(state):
 def handle_NUM2BIN(state):
     # (in size -- out)  encode the value of "in" in size bytes
     state.require_stack_depth(2)
-    size = int(state.to_number(state.stack[-1]))
+    size = int(state.limits.to_number(state.stack[-1]))
     if size < 0 or size > INT32_MAX:
         raise InvalidPushSize(f'invalid size {size:,d} in OP_NUM2BIN operation')
-    state.validate_item_size(size)
+    state.limits.validate_item_size(size)
     state.stack.pop()
     state.stack[-1] = int_to_item(item_to_int(state.stack[-1]), size)
 
@@ -970,7 +979,7 @@ def handle_BIN2NUM(state):
     # (in -- out)    minimally encode in as a number
     state.require_stack_depth(1)
     state.stack[-1] = minimal_encoding(state.stack[-1])
-    state.validate_number_length(len(state.stack[-1]))
+    state.limits.validate_number_length(len(state.stack[-1]))
 
 
 def handle_SIZE(state):
@@ -985,7 +994,7 @@ def handle_SIZE(state):
 #
 
 def handle_upgradeable_nop(state, op):
-    state.handle_upgradeable_nop(op)
+    state.limits.handle_upgradeable_nop(op)
 
 
 def handle_CHECKLOCKTIMEVERIFY(state):
@@ -993,10 +1002,10 @@ def handle_CHECKLOCKTIMEVERIFY(state):
         handle_upgradeable_nop(state, Ops.OP_NOP2)
     else:
         state.require_stack_depth(1)
-        locktime = state.to_number(state.stack[-1], length_limit=5)
+        locktime = state.limits.to_number(state.stack[-1], length_limit=5)
         if locktime < 0:
             raise LockTimeError(f'locktime {locktime:,d} is negative')
-        state.validate_locktime(locktime)
+        state.context.validate_locktime(locktime)
 
 
 def handle_CHECKSEQUENCEVERIFY(state):
@@ -1004,10 +1013,10 @@ def handle_CHECKSEQUENCEVERIFY(state):
         handle_upgradeable_nop(state, Ops.OP_NOP3)
     else:
         state.require_stack_depth(1)
-        sequence = state.to_number(state.stack[-1], length_limit=5)
+        sequence = state.limits.to_number(state.stack[-1], length_limit=5)
         if sequence < 0:
             raise LockTimeError(f'sequence {sequence:,d} is negative')
-        state.validate_sequence(sequence)
+        state.context.validate_sequence(sequence)
 
 
 op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]

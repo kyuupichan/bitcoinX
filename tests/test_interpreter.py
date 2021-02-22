@@ -248,7 +248,6 @@ class TestInterpreterState:
             state.alt_stack.append(b'')
             with pytest.raises(StackSizeTooLarge):
                 state.validate_stack_size()
-        state.reset()
 
     @pytest.mark.parametrize('sig_hex,flags,err_text', (
         ('', 0, None),
