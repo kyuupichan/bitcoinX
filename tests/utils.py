@@ -4,7 +4,7 @@ from random import randrange, choice, random
 
 
 from bitcoinx import (
-    Tx, TxInput, TxOutput, Script, SEQUENCE_FINAL,
+    Tx, TxInput, TxOutput, Script, TxInputContext, SEQUENCE_FINAL,
     OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR
 )
 
@@ -59,6 +59,15 @@ def random_tx(is_single):
     outputs = [random_output() for _ in range(n_outputs)]
 
     return Tx(version, inputs, outputs, locktime)
+
+
+def random_txinput_context():
+    tx = random_tx(False)
+    input_index = randrange(0, len(tx.inputs))
+    utxo = random_output()
+    is_utxo_after_genesis = random_bool()
+
+    return TxInputContext(tx, input_index, utxo, is_utxo_after_genesis)
 
 
 def read_tx_hex(filename):
