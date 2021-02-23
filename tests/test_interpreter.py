@@ -2489,7 +2489,7 @@ class TestCrypto(TestEvaluateScriptBase):
         script = Script() << OP_0 << OP_1NEGATE << OP_0 << op
         with pytest.raises(InvalidSignatureCount) as e:
             state.evaluate_script(script)
-        assert 'number of signatures, -1, in OP_CHECKMULTISIG lies outside' in str(e.value)
+        assert f'number of signatures, -1, in {op.name} lies outside' in str(e.value)
         state.stack.clear()
 
         key_count = random.randrange(1, 10)
@@ -2498,7 +2498,7 @@ class TestCrypto(TestEvaluateScriptBase):
         script = script.push_many([OP_0] * key_count + [key_count, op])
         with pytest.raises(InvalidSignatureCount) as e:
             state.evaluate_script(script)
-        assert f'number of signatures, {sig_count}, in OP_CHECKMULTISIG lies ' in str(e.value)
+        assert f'number of signatures, {sig_count}, in {op.name} lies ' in str(e.value)
         state.stack.clear()
 
         script = Script() << int_to_item(0, 5) << OP_0 << op

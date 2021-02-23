@@ -353,7 +353,7 @@ class InterpreterLimits:
             if op != expected_op:
                 raise MinimalEncodingError(f'item not pushed with minimal opcode {expected_op}')
 
-    def handle_upgradeable_nop(self, op):
+    def validate_upgradeable_nop(self, op):
         '''Raise on upgradeable nops if the flag is set.'''
         if self.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
             raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
@@ -512,6 +512,7 @@ class InterpreterState:
             raise ScriptTooLarge(f'script length {len(script):,d} exceeds the limit of '
                                  f'{self.limits.script_size:,d} bytes')
 
+        handlers = self._handlers
         self.conditions = []
         self.op_count = 0
         self.iterator = ScriptIterator(script)
@@ -540,7 +541,7 @@ class InterpreterState:
                 self.stack.append(item)
             elif self.execute or OP_IF <= op <= OP_ENDIF:
                 try:
-                    op_handlers[op](self)
+                    handlers[op](self)
                 except OpReturnError:
                     if not self.limits.is_utxo_after_genesis:
                         raise
@@ -557,213 +558,548 @@ class InterpreterState:
             raise UnbalancedConditional(f'unterminated {self.conditions[-1].opcode.name} '
                                         'at end of script')
 
+    #
+    # Control
+    #
+    def on_NOP(self):
+        pass
 
-#
-# Control
-#
-def handle_NOP(_state):
-    pass
+    def on_IF(self, op):
+        execute = False
+        if self.execute:
+            self.require_stack_depth(1)
+            top = self.stack[-1]
+            if top not in bool_items and self.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_IF:
+                raise MinimalIfError('top of stack not True or False')
+            self.stack.pop()
+            execute = cast_to_bool(top)
+            if op == Ops.OP_NOTIF:
+                execute = not execute
+        self.conditions.append(Condition(op, execute, False))
+
+    def on_ELSE(self):
+        top_condition = self.conditions[-1] if self.conditions else None
+        # Only one ELSE is allowed per condition block after genesis
+        if not top_condition or (top_condition.seen_else and self.limits.is_utxo_after_genesis):
+            raise UnbalancedConditional('unexpected OP_ELSE')
+        top_condition.execute = not top_condition.execute
+        top_condition.seen_else = True
+
+    def on_ENDIF(self):
+        # Only one ELSE is allowed per condition block after genesis
+        if not self.conditions:
+            raise UnbalancedConditional('unexpected OP_ENDIF')
+        self.conditions.pop()
+
+    def on_VERIF(self, op):
+        # Post-genesis UTXOs permit OP_VERIF and OP_NOTVERIF in unexecuted branches
+        if self.limits.is_utxo_after_genesis and not self.execute:
+            return
+        self.on_invalid_opcode(op)
+
+    def on_VERIFY(self):
+        # (true -- ) or (false -- false) and return
+        self.require_stack_depth(1)
+        if not cast_to_bool(self.stack[-1]):
+            raise VerifyFailed()
+        self.stack.pop()
+
+    def on_RETURN(self):
+        raise OpReturnError('OP_RETURN encountered')
+
+    def on_invalid_opcode(self, op):
+        try:
+            name = Ops(op).name
+        except ValueError:
+            name = str(op)
+
+        raise InvalidOpcode(f'invalid opcode {name}')
+
+    #
+    # Stack operations
+    #
+    def on_TOALTSTACK(self):
+        self.require_stack_depth(1)
+        self.alt_stack.append(self.stack.pop())
+
+    def on_FROMALTSTACK(self):
+        self.require_alt_stack()
+        self.stack.append(self.alt_stack.pop())
+
+    def on_DROP(self):
+        # (x -- )
+        self.require_stack_depth(1)
+        self.stack.pop()
+
+    def on_2DROP(self):
+        # (x1 x2 -- )
+        self.require_stack_depth(2)
+        self.stack.pop()
+        self.stack.pop()
+
+    def on_nDUP(self, n):
+        # (x -- x x) or (x1 x2 -- x1 x2 x1 x2) or (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
+        self.require_stack_depth(n)
+        self.stack.extend(self.stack[-n:])
+
+    def on_OVER(self):
+        # (x1 x2 -- x1 x2 x1)
+        self.require_stack_depth(2)
+        self.stack.append(self.stack[-2])
+
+    def on_2OVER(self):
+        # (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
+        self.require_stack_depth(4)
+        self.stack.extend(self.stack[-4: -2])
+
+    def on_ROT(self):
+        # (x1 x2 x3 -- x2 x3 x1)
+        self.require_stack_depth(3)
+        self.stack.append(self.stack.pop(-3))
+
+    def on_2ROT(self):
+        # (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
+        self.require_stack_depth(6)
+        self.stack.extend([self.stack.pop(-6), self.stack.pop(-5)])
+
+    def on_SWAP(self):
+        # ( x1 x2 -- x2 x1 )
+        self.require_stack_depth(2)
+        self.stack.append(self.stack.pop(-2))
+
+    def on_2SWAP(self):
+        # (x1 x2 x3 x4 -- x3 x4 x1 x2)
+        self.require_stack_depth(4)
+        self.stack.extend([self.stack.pop(-4), self.stack.pop(-3)])
+
+    def on_IFDUP(self):
+        # (x - 0 | x x)
+        self.require_stack_depth(1)
+        last = self.stack[-1]
+        if cast_to_bool(last):
+            self.stack.append(last)
+
+    def on_DEPTH(self):
+        # ( -- stacksize)
+        self.stack.append(int_to_item(len(self.stack)))
+
+    def on_NIP(self):
+        # (x1 x2 -- x2)
+        self.require_stack_depth(2)
+        self.stack.pop(-2)
+
+    def on_TUCK(self):
+        # ( x1 x2 -- x2 x1 x2 )
+        self.require_stack_depth(2)
+        self.stack.insert(-2, self.stack[-1])
+
+    def on_PICK_ROLL(self, op):
+        # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
+        # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
+        self.require_stack_depth(2)
+        n = int(self.limits.to_number(self.stack[-1]))
+        self.stack.pop()
+        depth = len(self.stack)
+        if not 0 <= n < depth:
+            raise InvalidStackOperation(f'{op.name} with argument {n:,d} used '
+                                        f'on stack with depth {depth:,d}')
+        if op == Ops.OP_PICK:
+            self.stack.append(self.stack[-(n + 1)])
+        else:
+            self.stack.append(self.stack.pop(-(n + 1)))
+
+    #
+    # Bitwise logic
+    #
+    def on_INVERT(self):
+        # (x -- out)
+        self.require_stack_depth(1)
+        self.stack[-1] = bytes(x ^ 255 for x in self.stack[-1])
+
+    def on_binary_bitop(self, binop):
+        # (x1 x2 -- out)
+        self.require_stack_depth(2)
+        x1 = self.stack[-2]
+        x2 = self.stack[-1]
+        if len(x1) != len(x2):
+            raise InvalidOperandSize('operands to bitwise operator must have same size')
+        self.stack.pop()
+        self.stack[-1] = bytes(binop(b1, b2) for b1, b2 in zip(x1, x2))
+
+    def on_EQUAL(self):
+        # (x1 x2 -- bool).   Bitwise equality
+        self.require_stack_depth(2)
+        self.stack.append(bool_items[self.stack.pop() == self.stack.pop()])
+
+    def on_EQUALVERIFY(self):
+        # (x1 x2 -- )
+        self.on_EQUAL()
+        if not cast_to_bool(self.stack[-1]):
+            raise EqualVerifyFailed()
+        self.stack.pop()
+
+    def on_LSHIFT(self):
+        # (x n -- out).   Logical bit-shift maintaining item size
+        self.require_stack_depth(2)
+        n = int(self.limits.to_number(self.stack[-1]))
+        if n < 0:
+            raise NegativeShiftCount(f'invalid shift left of {n:,d} bits')
+        self.stack.pop()
+        self.stack[-1] = shift_left(self.stack[-1], n)
+
+    def on_RSHIFT(self):
+        # (x n -- out).   Logical bit-shift maintaining item size
+        self.require_stack_depth(2)
+        n = int(self.limits.to_number(self.stack[-1]))
+        if n < 0:
+            raise NegativeShiftCount(f'invalid right left of {n:,d} bits')
+        self.stack.pop()
+        self.stack[-1] = shift_right(self.stack[-1], n)
+
+    #
+    # Numeric
+    #
+    def on_unary_numeric(self, unary_op):
+        # (x -- out)
+        self.require_stack_depth(1)
+        value = self.limits.to_number(self.stack[-1])
+        self.stack[-1] = int_to_item(unary_op(value))
+
+    def on_binary_numeric(self, binary_op):
+        # (x1 x2 -- out)
+        self.require_stack_depth(2)
+        x1 = self.limits.to_number(self.stack[-2])
+        x2 = self.limits.to_number(self.stack[-1])
+        try:
+            result = binary_op(x1, x2)
+        except ZeroDivisionError:
+            raise DivisionByZero('division by zero' if binary_op is bitcoin_div
+                                 else 'modulo by zero') from None
+        self.stack.pop()
+        self.stack[-1] = int_to_item(result)
+
+    def on_NUMEQUALVERIFY(self):
+        # (x1 x2 -- )
+        self.on_binary_numeric(operator.eq)
+        if not cast_to_bool(self.stack[-1]):
+            raise NumEqualVerifyFailed('OP_NUMEQUALVERIFY failed')
+        self.stack.pop()
+
+    def on_WITHIN(self):
+        # (x max min -- out)    True if x is >= min and < max.
+        self.require_stack_depth(3)
+        x = item_to_int(self.stack[-3])
+        mn = item_to_int(self.stack[-2])
+        mx = item_to_int(self.stack[-1])
+        self.stack.pop()
+        self.stack.pop()
+        self.stack[-1] = bool_items[mn <= x < mx]
+
+    #
+    # Crypto
+    #
+    def on_hash(self, hash_func):
+        # (x -- x x)
+        self.require_stack_depth(1)
+        self.stack.append(hash_func(self.stack.pop()))
+
+    def on_CODESEPARATOR(self):
+        # script_code starts after the code separator
+        self.iterator.on_code_separator()
+
+    def on_CHECKSIG(self, op):
+        # (sig pubkey -- bool)
+        check_sig = self.txin_context(op).check_sig
+        self.require_stack_depth(2)
+        sig_bytes = self.stack[-2]
+        pubkey_bytes = self.stack[-1]
+        self.limits.validate_signature(sig_bytes)
+        self.limits.validate_pubkey(pubkey_bytes)
+        script_code = self.iterator.script_code()
+        script_code = self.limits.cleanup_script_code(sig_bytes, script_code)
+        is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
+        if not is_good:
+            self.limits.validate_nullfail(sig_bytes)
+        self.stack.pop()
+        self.stack[-1] = bool_items[is_good]
+
+    def on_CHECKSIGVERIFY(self):
+        # (sig pubkey -- )
+        self.on_CHECKSIG(Ops.OP_CHECKSIGVERIFY)
+        if not cast_to_bool(self.stack[-1]):
+            raise CheckSigVerifyFailed('OP_CHECKSIGVERIFY failed')
+        self.stack.pop()
+
+    def on_CHECKMULTISIG(self, op):
+        # ([sig ...] sig_count [pubkey ...] pubkey_count -- bool)
+        check_sig = self.txin_context(op).check_sig
+
+        self.require_stack_depth(1)
+        # Limit key count to 4 bytes
+        key_count = self.limits.to_number(self.stack[-1], length_limit=4)
+        self.limits.validate_pubkey_count(key_count)
+        self.bump_op_count(key_count)
+        # Ensure we can read sig_count, also limited to 4 bytes
+        self.require_stack_depth(key_count + 2)
+        sig_count = self.limits.to_number(self.stack[-(key_count + 2)], length_limit=4)
+        if not 0 <= sig_count <= key_count:
+            raise InvalidSignatureCount(f'number of signatures, {sig_count:,d}, in {op.name} '
+                                        f'lies outside range 0 <= count <= {key_count:,d}')
+
+        # Ensure we have all the sigs
+        item_count = key_count + sig_count + 2
+        self.require_stack_depth(item_count)
+
+        # Remove signatures for pre-BCH fork scripts
+        cleanup_script_code = self.limits.cleanup_script_code
+        script_code = self.iterator.script_code()
+        first_sig_index = -(key_count + 3)
+        for n in range(sig_count):
+            script_code = cleanup_script_code(self.stack[first_sig_index - n], script_code)
+
+        keys_remaining = key_count
+        sigs_remaining = sig_count
+        key_base_index = -(key_count + 2)
+        sig_base_index = key_base_index - (sig_count + 1)
+        # Loop while the remaining number of sigs to check does not exceed the remaining keys
+        while keys_remaining >= sigs_remaining > 0:
+            sig_bytes = self.stack[sig_base_index + sigs_remaining]
+            self.limits.validate_signature(sig_bytes)
+            pubkey_bytes = self.stack[key_base_index + keys_remaining]
+            self.limits.validate_pubkey(pubkey_bytes)
+            is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
+            if is_good:
+                sigs_remaining -= 1
+            keys_remaining -= 1
+
+        is_good = keys_remaining >= sigs_remaining
+
+        # Clean up the stack
+        for n in range(item_count):
+            # If the operation failed NULLFAIL requires all signatures be empty
+            if not is_good and n >= key_count + 2:
+                self.limits.validate_nullfail(self.stack[-1])
+            self.stack.pop()
+
+        # An old CHECKMULTISIG bug consumes an extra argument.  Check it's null.
+        self.require_stack_depth(1)
+        self.limits.validate_nulldummy(self.stack[-1])
+        self.stack[-1] = bool_items[is_good]
+
+    def on_CHECKMULTISIGVERIFY(self):
+        # ([sig ...] sig_count [pubkey ...] pubkey_count -- )
+        self.on_CHECKMULTISIG(Ops.OP_CHECKMULTISIGVERIFY)
+        if not cast_to_bool(self.stack[-1]):
+            raise CheckMultiSigVerifyFailed('OP_CHECKMULTISIGVERIFY failed')
+        self.stack.pop()
+
+    #
+    # Byte string operations
+    #
+    def on_CAT(self):
+        # (x1 x2 -- x1x2 )
+        self.require_stack_depth(2)
+        item = self.stack[-2] + self.stack[-1]
+        self.limits.validate_item_size(len(item))
+        self.stack.pop()
+        self.stack[-1] = item
+
+    def on_SPLIT(self):
+        # (x posiition -- x1 x2)
+        self.require_stack_depth(2)
+        x = self.stack[-2]
+        n = int(self.limits.to_number(self.stack[-1]))
+        if not 0 <= n <= len(x):
+            raise InvalidSplit(f'cannot split item of length {len(x):,d} at position {n:,d}')
+        self.stack[-2] = x[:n]
+        self.stack[-1] = x[n:]
+
+    def on_NUM2BIN(self):
+        # (in size -- out)  encode the value of "in" in size bytes
+        self.require_stack_depth(2)
+        size = int(self.limits.to_number(self.stack[-1]))
+        if size < 0 or size > INT32_MAX:
+            raise InvalidPushSize(f'invalid size {size:,d} in OP_NUM2BIN operation')
+        self.limits.validate_item_size(size)
+        self.stack.pop()
+        self.stack[-1] = int_to_item(item_to_int(self.stack[-1]), size)
+
+    def on_BIN2NUM(self):
+        # (in -- out)    minimally encode in as a number
+        self.require_stack_depth(1)
+        self.stack[-1] = minimal_encoding(self.stack[-1])
+        self.limits.validate_number_length(len(self.stack[-1]))
+
+    def on_SIZE(self):
+        # ( x -- x size(x) )
+        self.require_stack_depth(1)
+        size = len(self.stack[-1])
+        self.stack.append(int_to_item(size))
+
+    #
+    # Expansion
+    #
+    def on_upgradeable_nop(self, op):
+        self.limits.validate_upgradeable_nop(op)
+
+    def on_CHECKLOCKTIMEVERIFY(self):
+        if not self.limits.flags & InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY:
+            self.on_upgradeable_nop(Ops.OP_NOP2)
+        else:
+            context = self.txin_context(Ops.OP_CHECKLOCKTIMEVERIFY)
+            self.require_stack_depth(1)
+            locktime = self.limits.to_number(self.stack[-1], length_limit=5)
+            if locktime < 0:
+                raise LockTimeError(f'locktime {locktime:,d} is negative')
+            context.validate_locktime(locktime)
+
+    def on_CHECKSEQUENCEVERIFY(self):
+        if not self.limits.flags & InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY:
+            self.on_upgradeable_nop(Ops.OP_NOP3)
+        else:
+            context = self.txin_context(Ops.OP_CHECKSEQUENCEVERIFY)
+            self.require_stack_depth(1)
+            sequence = self.limits.to_number(self.stack[-1], length_limit=5)
+            if sequence < 0:
+                raise LockTimeError(f'sequence {sequence:,d} is negative')
+            context.validate_sequence(sequence)
+
+    @classmethod
+    def bind_handlers(cls):
+        handlers = [partial(cls.on_invalid_opcode, op=op) for op in range(256)]
+
+        #
+        # Control
+        #
+        handlers[Ops.OP_NOP] = cls.on_NOP
+        handlers[Ops.OP_VER] = partial(cls.on_invalid_opcode, op=Ops.OP_VER)
+        handlers[Ops.OP_IF] = partial(cls.on_IF, op=Ops.OP_IF)
+        handlers[Ops.OP_NOTIF] = partial(cls.on_IF, op=Ops.OP_NOTIF)
+        handlers[Ops.OP_VERIF] = partial(cls.on_VERIF, op=Ops.OP_VERIF)
+        handlers[Ops.OP_VERNOTIF] = partial(cls.on_VERIF, op=Ops.OP_VERNOTIF)
+        handlers[Ops.OP_ELSE] = cls.on_ELSE
+        handlers[Ops.OP_ENDIF] = cls.on_ENDIF
+        handlers[Ops.OP_VERIFY] = cls.on_VERIFY
+        handlers[Ops.OP_RETURN] = cls.on_RETURN
+
+        #
+        # Stack operations
+        #
+        handlers[Ops.OP_TOALTSTACK] = cls.on_TOALTSTACK
+        handlers[Ops.OP_FROMALTSTACK] = cls.on_FROMALTSTACK
+        handlers[Ops.OP_DROP] = cls.on_DROP
+        handlers[Ops.OP_2DROP] = cls.on_2DROP
+        handlers[Ops.OP_DUP] = partial(cls.on_nDUP, n=1)
+        handlers[Ops.OP_2DUP] = partial(cls.on_nDUP, n=2)
+        handlers[Ops.OP_3DUP] = partial(cls.on_nDUP, n=3)
+        handlers[Ops.OP_OVER] = cls.on_OVER
+        handlers[Ops.OP_2OVER] = cls.on_2OVER
+        handlers[Ops.OP_2ROT] = cls.on_2ROT
+        handlers[Ops.OP_2SWAP] = cls.on_2SWAP
+        handlers[Ops.OP_IFDUP] = cls.on_IFDUP
+        handlers[Ops.OP_DEPTH] = cls.on_DEPTH
+        handlers[Ops.OP_NIP] = cls.on_NIP
+        handlers[Ops.OP_PICK] = partial(cls.on_PICK_ROLL, op=Ops.OP_PICK)
+        handlers[Ops.OP_ROLL] = partial(cls.on_PICK_ROLL, op=Ops.OP_ROLL)
+        handlers[Ops.OP_ROT] = cls.on_ROT
+        handlers[Ops.OP_SWAP] = cls.on_SWAP
+        handlers[Ops.OP_TUCK] = cls.on_TUCK
+
+        #
+        # Byte string operations
+        #
+        handlers[Ops.OP_CAT] = cls.on_CAT
+        handlers[Ops.OP_SPLIT] = cls.on_SPLIT
+        handlers[Ops.OP_NUM2BIN] = cls.on_NUM2BIN
+        handlers[Ops.OP_BIN2NUM] = cls.on_BIN2NUM
+        handlers[Ops.OP_SIZE] = cls.on_SIZE
+
+        #
+        # Bitwise logic
+        #
+        handlers[Ops.OP_INVERT] = cls.on_INVERT
+        handlers[Ops.OP_AND] = partial(cls.on_binary_bitop, binop=operator.and_)
+        handlers[Ops.OP_OR] = partial(cls.on_binary_bitop, binop=operator.or_)
+        handlers[Ops.OP_XOR] = partial(cls.on_binary_bitop, binop=operator.xor)
+        handlers[Ops.OP_EQUAL] = cls.on_EQUAL
+        handlers[Ops.OP_EQUALVERIFY] = cls.on_EQUALVERIFY
+        handlers[Ops.OP_LSHIFT] = cls.on_LSHIFT
+        handlers[Ops.OP_RSHIFT] = cls.on_RSHIFT
+
+        #
+        # Numeric
+        #
+        handlers[Ops.OP_1ADD] = partial(cls.on_unary_numeric, unary_op=lambda x: x + 1)
+        handlers[Ops.OP_1SUB] = partial(cls.on_unary_numeric, unary_op=lambda x: x - 1)
+        # OP_2MUL = 0x8d
+        # OP_2DIV = 0x8e
+        handlers[Ops.OP_NEGATE] = partial(cls.on_unary_numeric, unary_op=operator.neg)
+        handlers[Ops.OP_ABS] = partial(cls.on_unary_numeric, unary_op=operator.abs)
+        handlers[Ops.OP_NOT] = partial(cls.on_unary_numeric, unary_op=operator.not_)
+        handlers[Ops.OP_0NOTEQUAL] = partial(cls.on_unary_numeric, unary_op=operator.truth)
+        handlers[Ops.OP_ADD] = partial(cls.on_binary_numeric, binary_op=operator.add)
+        handlers[Ops.OP_SUB] = partial(cls.on_binary_numeric, binary_op=operator.sub)
+        handlers[Ops.OP_MUL] = partial(cls.on_binary_numeric, binary_op=operator.mul)
+        handlers[Ops.OP_DIV] = partial(cls.on_binary_numeric, binary_op=bitcoin_div)
+        handlers[Ops.OP_MOD] = partial(cls.on_binary_numeric, binary_op=bitcoin_mod)
+        handlers[Ops.OP_BOOLAND] = partial(cls.on_binary_numeric, binary_op=logical_and)
+        handlers[Ops.OP_BOOLOR] = partial(cls.on_binary_numeric, binary_op=logical_or)
+        handlers[Ops.OP_NUMEQUAL] = partial(cls.on_binary_numeric, binary_op=operator.eq)
+        handlers[Ops.OP_NUMEQUALVERIFY] = cls.on_NUMEQUALVERIFY
+        handlers[Ops.OP_NUMNOTEQUAL] = partial(cls.on_binary_numeric, binary_op=operator.ne)
+        handlers[Ops.OP_LESSTHAN] = partial(cls.on_binary_numeric, binary_op=operator.lt)
+        handlers[Ops.OP_GREATERTHAN] = partial(cls.on_binary_numeric, binary_op=operator.gt)
+        handlers[Ops.OP_LESSTHANOREQUAL] = partial(cls.on_binary_numeric, binary_op=operator.le)
+        handlers[Ops.OP_GREATERTHANOREQUAL] = partial(cls.on_binary_numeric, binary_op=operator.ge)
+        handlers[Ops.OP_MIN] = partial(cls.on_binary_numeric, binary_op=min)
+        handlers[Ops.OP_MAX] = partial(cls.on_binary_numeric, binary_op=max)
+        handlers[Ops.OP_WITHIN] = cls.on_WITHIN
+
+        #
+        # Crypto
+        #
+        handlers[Ops.OP_RIPEMD160] = partial(cls.on_hash, hash_func=ripemd160)
+        handlers[Ops.OP_SHA1] = partial(cls.on_hash, hash_func=sha1)
+        handlers[Ops.OP_SHA256] = partial(cls.on_hash, hash_func=sha256)
+        handlers[Ops.OP_HASH160] = partial(cls.on_hash, hash_func=hash160)
+        handlers[Ops.OP_HASH256] = partial(cls.on_hash, hash_func=double_sha256)
+        handlers[Ops.OP_CODESEPARATOR] = cls.on_CODESEPARATOR
+        handlers[Ops.OP_CHECKSIG] = partial(cls.on_CHECKSIG, op=Ops.OP_CHECKSIG)
+        handlers[Ops.OP_CHECKSIGVERIFY] = cls.on_CHECKSIGVERIFY
+        handlers[Ops.OP_CHECKMULTISIG] = partial(cls.on_CHECKMULTISIG, op=Ops.OP_CHECKMULTISIG)
+        handlers[Ops.OP_CHECKMULTISIGVERIFY] = cls.on_CHECKMULTISIGVERIFY
+
+        #
+        # Expansion
+        #
+        for _op in (Ops.OP_NOP1, Ops.OP_NOP4, Ops.OP_NOP5, Ops.OP_NOP6, Ops.OP_NOP7,
+                    Ops.OP_NOP8, Ops.OP_NOP9, Ops.OP_NOP10):
+            handlers[_op] = partial(cls.on_upgradeable_nop, op=_op)
+        handlers[Ops.OP_NOP2] = cls.on_CHECKLOCKTIMEVERIFY
+        handlers[Ops.OP_NOP3] = cls.on_CHECKSEQUENCEVERIFY
+
+        cls._handlers = handlers
 
 
-def handle_IF(state, op):
-    execute = False
-    if state.execute:
-        state.require_stack_depth(1)
-        top = state.stack[-1]
-        if top not in bool_items and state.limits.flags & InterpreterFlags.REQUIRE_MINIMAL_IF:
-            raise MinimalIfError('top of stack not True or False')
-        state.stack.pop()
-        execute = cast_to_bool(top)
-        if op == Ops.OP_NOTIF:
-            execute = not execute
-    state.conditions.append(Condition(op, execute, False))
+def bitcoin_div(a, b):
+    # In bitcoin script division is rounded towards zero
+    result = abs(a) // abs(b)
+    return -result if (a >= 0) ^ (b >= 0) else result
 
 
-def handle_ELSE(state):
-    top_condition = state.conditions[-1] if state.conditions else None
-    # Only one ELSE is allowed per condition block after genesis
-    if not top_condition or (top_condition.seen_else and state.limits.is_utxo_after_genesis):
-        raise UnbalancedConditional('unexpected OP_ELSE')
-    top_condition.execute = not top_condition.execute
-    top_condition.seen_else = True
+def bitcoin_mod(a, b):
+    # In bitcoin script a % b is abs(a) % abs(b) with the sign of a.
+    # Then (a % b) * b + a == a
+    result = abs(a) % abs(b)
+    return result if a >= 0 else -result
 
 
-def handle_ENDIF(state):
-    # Only one ELSE is allowed per condition block after genesis
-    if not state.conditions:
-        raise UnbalancedConditional('unexpected OP_ENDIF')
-    state.conditions.pop()
+def logical_and(x1, x2):
+    return 1 if (x1 and x2) else 0
 
 
-def handle_VERIF(state, op):
-    # Post-genesis UTXOs permit OP_VERIF and OP_NOTVERIF in unexecuted branches
-    if state.limits.is_utxo_after_genesis and not state.execute:
-        return
-    invalid_opcode(state, op)
-
-
-def handle_VERIFY(state):
-    # (true -- ) or (false -- false) and return
-    state.require_stack_depth(1)
-    if not cast_to_bool(state.stack[-1]):
-        raise VerifyFailed()
-    state.stack.pop()
-
-
-def handle_RETURN(state):
-    raise OpReturnError('OP_RETURN encountered')
-
-
-def invalid_opcode(_state, op):
-    try:
-        name = Ops(op).name
-    except ValueError:
-        name = str(op)
-
-    raise InvalidOpcode(f'invalid opcode {name}')
-
-
-#
-# Stack operations
-#
-def handle_TOALTSTACK(state):
-    state.require_stack_depth(1)
-    state.alt_stack.append(state.stack.pop())
-
-
-def handle_FROMALTSTACK(state):
-    state.require_alt_stack()
-    state.stack.append(state.alt_stack.pop())
-
-
-def handle_DROP(state):
-    # (x -- )
-    state.require_stack_depth(1)
-    state.stack.pop()
-
-
-def handle_2DROP(state):
-    # (x1 x2 -- )
-    state.require_stack_depth(2)
-    state.stack.pop()
-    state.stack.pop()
-
-
-def handle_nDUP(state, n):
-    # (x -- x x) or (x1 x2 -- x1 x2 x1 x2) or (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
-    state.require_stack_depth(n)
-    state.stack.extend(state.stack[-n:])
-
-
-def handle_OVER(state):
-    # (x1 x2 -- x1 x2 x1)
-    state.require_stack_depth(2)
-    state.stack.append(state.stack[-2])
-
-
-def handle_2OVER(state):
-    # (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
-    state.require_stack_depth(4)
-    state.stack.extend(state.stack[-4: -2])
-
-
-def handle_ROT(state):
-    # (x1 x2 x3 -- x2 x3 x1)
-    state.require_stack_depth(3)
-    state.stack.append(state.stack.pop(-3))
-
-
-def handle_2ROT(state):
-    # (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
-    state.require_stack_depth(6)
-    state.stack.extend([state.stack.pop(-6), state.stack.pop(-5)])
-
-
-def handle_SWAP(state):
-    # ( x1 x2 -- x2 x1 )
-    state.require_stack_depth(2)
-    state.stack.append(state.stack.pop(-2))
-
-
-def handle_2SWAP(state):
-    # (x1 x2 x3 x4 -- x3 x4 x1 x2)
-    state.require_stack_depth(4)
-    state.stack.extend([state.stack.pop(-4), state.stack.pop(-3)])
-
-
-def handle_IFDUP(state):
-    # (x - 0 | x x)
-    state.require_stack_depth(1)
-    last = state.stack[-1]
-    if cast_to_bool(last):
-        state.stack.append(last)
-
-
-def handle_DEPTH(state):
-    # ( -- stacksize)
-    state.stack.append(int_to_item(len(state.stack)))
-
-
-def handle_NIP(state):
-    # (x1 x2 -- x2)
-    state.require_stack_depth(2)
-    state.stack.pop(-2)
-
-
-def handle_TUCK(state):
-    # ( x1 x2 -- x2 x1 x2 )
-    state.require_stack_depth(2)
-    state.stack.insert(-2, state.stack[-1])
-
-
-def handle_PICK_ROLL(state, op):
-    # pick: (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
-    # roll: (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
-    state.require_stack_depth(2)
-    n = int(state.limits.to_number(state.stack[-1]))
-    state.stack.pop()
-    depth = len(state.stack)
-    if not 0 <= n < depth:
-        raise InvalidStackOperation(f'{op.name} with argument {n:,d} used '
-                                    f'on stack with depth {depth:,d}')
-    if op == Ops.OP_PICK:
-        state.stack.append(state.stack[-(n + 1)])
-    else:
-        state.stack.append(state.stack.pop(-(n + 1)))
-
-
-#
-# Bitwise logic
-#
-def handle_INVERT(state):
-    # (x -- out)
-    state.require_stack_depth(1)
-    state.stack[-1] = bytes(x ^ 255 for x in state.stack[-1])
-
-
-def handle_binary_bitop(state, binop):
-    # (x1 x2 -- out)
-    state.require_stack_depth(2)
-    x1 = state.stack[-2]
-    x2 = state.stack[-1]
-    if len(x1) != len(x2):
-        raise InvalidOperandSize('operands to bitwise operator must have same size')
-    state.stack.pop()
-    state.stack[-1] = bytes(binop(b1, b2) for b1, b2 in zip(x1, x2))
-
-
-def handle_EQUAL(state):
-    # (x1 x2 -- bool).   Bitwise equality
-    state.require_stack_depth(2)
-    state.stack.append(bool_items[state.stack.pop() == state.stack.pop()])
-
-
-def handle_EQUALVERIFY(state):
-    # (x1 x2 -- )
-    handle_EQUAL(state)
-    if not cast_to_bool(state.stack[-1]):
-        raise EqualVerifyFailed()
-    state.stack.pop()
+def logical_or(x1, x2):
+    return 1 if (x1 or x2) else 0
 
 
 def shift_left(value, count):
@@ -798,384 +1134,4 @@ def shift_right(value, count):
                  for lhs, rhs in pairs(value, n_bytes))
 
 
-def handle_LSHIFT(state):
-    # (x n -- out).   Logical bit-shift maintaining item size
-    state.require_stack_depth(2)
-    n = int(state.limits.to_number(state.stack[-1]))
-    if n < 0:
-        raise NegativeShiftCount(f'invalid shift left of {n:,d} bits')
-    state.stack.pop()
-    state.stack[-1] = shift_left(state.stack[-1], n)
-
-
-def handle_RSHIFT(state):
-    # (x n -- out).   Logical bit-shift maintaining item size
-    state.require_stack_depth(2)
-    n = int(state.limits.to_number(state.stack[-1]))
-    if n < 0:
-        raise NegativeShiftCount(f'invalid right left of {n:,d} bits')
-    state.stack.pop()
-    state.stack[-1] = shift_right(state.stack[-1], n)
-
-
-#
-# Numeric
-#
-def handle_unary_numeric(state, unary_op):
-    # (x -- out)
-    state.require_stack_depth(1)
-    value = state.limits.to_number(state.stack[-1])
-    state.stack[-1] = int_to_item(unary_op(value))
-
-
-def handle_binary_numeric(state, binary_op):
-    # (x1 x2 -- out)
-    state.require_stack_depth(2)
-    x1 = state.limits.to_number(state.stack[-2])
-    x2 = state.limits.to_number(state.stack[-1])
-    try:
-        result = binary_op(x1, x2)
-    except ZeroDivisionError:
-        raise DivisionByZero('division by zero' if binary_op is bitcoin_div
-                             else 'modulo by zero') from None
-    state.stack.pop()
-    state.stack[-1] = int_to_item(result)
-
-
-def handle_NUMEQUALVERIFY(state):
-    # (x1 x2 -- )
-    handle_binary_numeric(state, operator.eq)
-    if not cast_to_bool(state.stack[-1]):
-        raise NumEqualVerifyFailed('OP_NUMEQUALVERIFY failed')
-    state.stack.pop()
-
-
-def bitcoin_div(a, b):
-    # In bitcoin script division is rounded towards zero
-    result = abs(a) // abs(b)
-    return -result if (a >= 0) ^ (b >= 0) else result
-
-
-def bitcoin_mod(a, b):
-    # In bitcoin script a % b is abs(a) % abs(b) with the sign of a.
-    # Then (a % b) * b + a == a
-    result = abs(a) % abs(b)
-    return result if a >= 0 else -result
-
-
-def logical_and(x1, x2):
-    return 1 if (x1 and x2) else 0
-
-
-def logical_or(x1, x2):
-    return 1 if (x1 or x2) else 0
-
-
-def handle_WITHIN(state):
-    # (x max min -- out)    True if x is >= min and < max.
-    state.require_stack_depth(3)
-    x = item_to_int(state.stack[-3])
-    mn = item_to_int(state.stack[-2])
-    mx = item_to_int(state.stack[-1])
-    state.stack.pop()
-    state.stack.pop()
-    state.stack[-1] = bool_items[mn <= x < mx]
-
-
-#
-# Crypto
-#
-
-def handle_hash(state, hash_func):
-    # (x -- x x)
-    state.require_stack_depth(1)
-    state.stack.append(hash_func(state.stack.pop()))
-
-
-def handle_CODESEPARATOR(state):
-    # script_code starts after the code separator
-    state.iterator.on_code_separator()
-
-
-def handle_CHECKSIG(state, op):
-    # (sig pubkey -- bool)
-    check_sig = state.txin_context(op).check_sig
-    state.require_stack_depth(2)
-    sig_bytes = state.stack[-2]
-    pubkey_bytes = state.stack[-1]
-    state.limits.validate_signature(sig_bytes)
-    state.limits.validate_pubkey(pubkey_bytes)
-    script_code = state.iterator.script_code()
-    script_code = state.limits.cleanup_script_code(sig_bytes, script_code)
-    is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
-    if not is_good:
-        state.limits.validate_nullfail(sig_bytes)
-    state.stack.pop()
-    state.stack[-1] = bool_items[is_good]
-
-
-def handle_CHECKSIGVERIFY(state):
-    # (sig pubkey -- )
-    handle_CHECKSIG(state, Ops.OP_CHECKSIGVERIFY)
-    if not cast_to_bool(state.stack[-1]):
-        raise CheckSigVerifyFailed('OP_CHECKSIGVERIFY failed')
-    state.stack.pop()
-
-
-def handle_CHECKMULTISIG(state, op):
-    # ([sig ...] sig_count [pubkey ...] pubkey_count -- bool)
-    check_sig = state.txin_context(op).check_sig
-
-    state.require_stack_depth(1)
-    # Limit key count to 4 bytes
-    key_count = state.limits.to_number(state.stack[-1], length_limit=4)
-    state.limits.validate_pubkey_count(key_count)
-    state.bump_op_count(key_count)
-    # Ensure we can read sig_count, also limited to 4 bytes
-    state.require_stack_depth(key_count + 2)
-    sig_count = state.limits.to_number(state.stack[-(key_count + 2)], length_limit=4)
-    if not 0 <= sig_count <= key_count:
-        raise InvalidSignatureCount(f'number of signatures, {sig_count:,d}, in OP_CHECKMULTISIG '
-                                    f'lies outside range 0 <= count <= {key_count:,d}')
-
-    # Ensure we have all the sigs
-    item_count = key_count + sig_count + 2
-    state.require_stack_depth(item_count)
-
-    # Remove signatures for pre-BCH fork scripts
-    cleanup_script_code = state.limits.cleanup_script_code
-    script_code = state.iterator.script_code()
-    first_sig_index = -(key_count + 3)
-    for n in range(sig_count):
-        script_code = cleanup_script_code(state.stack[first_sig_index - n], script_code)
-
-    keys_remaining = key_count
-    sigs_remaining = sig_count
-    key_base_index = -(key_count + 2)
-    sig_base_index = key_base_index - (sig_count + 1)
-    # Loop while the remaining number of sigs to check does not exceed the remaining keys
-    while keys_remaining >= sigs_remaining > 0:
-        sig_bytes = state.stack[sig_base_index + sigs_remaining]
-        state.limits.validate_signature(sig_bytes)
-        pubkey_bytes = state.stack[key_base_index + keys_remaining]
-        state.limits.validate_pubkey(pubkey_bytes)
-        is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
-        if is_good:
-            sigs_remaining -= 1
-        keys_remaining -= 1
-
-    is_good = keys_remaining >= sigs_remaining
-
-    # Clean up the stack
-    for n in range(item_count):
-        # If the operation failed NULLFAIL requires all signatures be empty
-        if not is_good and n >= key_count + 2:
-            state.limits.validate_nullfail(state.stack[-1])
-        state.stack.pop()
-
-    # An old CHECKMULTISIG bug consumes an extra argument.  Check it's null.
-    state.require_stack_depth(1)
-    state.limits.validate_nulldummy(state.stack[-1])
-    state.stack[-1] = bool_items[is_good]
-
-
-def handle_CHECKMULTISIGVERIFY(state):
-    # (sig pubkey -- )
-    handle_CHECKMULTISIG(state, Ops.OP_CHECKMULTISIGVERIFY)
-    if not cast_to_bool(state.stack[-1]):
-        raise CheckMultiSigVerifyFailed('OP_CHECKMULTISIGVERIFY failed')
-    state.stack.pop()
-
-
-#
-# Byte string operations
-#
-
-def handle_CAT(state):
-    # (x1 x2 -- x1x2 )
-    state.require_stack_depth(2)
-    item = state.stack[-2] + state.stack[-1]
-    state.limits.validate_item_size(len(item))
-    state.stack.pop()
-    state.stack[-1] = item
-
-
-def handle_SPLIT(state):
-    # (x posiition -- x1 x2)
-    state.require_stack_depth(2)
-    x = state.stack[-2]
-    n = int(state.limits.to_number(state.stack[-1]))
-    if not 0 <= n <= len(x):
-        raise InvalidSplit(f'cannot split item of length {len(x):,d} at position {n:,d}')
-    state.stack[-2] = x[:n]
-    state.stack[-1] = x[n:]
-
-
-def handle_NUM2BIN(state):
-    # (in size -- out)  encode the value of "in" in size bytes
-    state.require_stack_depth(2)
-    size = int(state.limits.to_number(state.stack[-1]))
-    if size < 0 or size > INT32_MAX:
-        raise InvalidPushSize(f'invalid size {size:,d} in OP_NUM2BIN operation')
-    state.limits.validate_item_size(size)
-    state.stack.pop()
-    state.stack[-1] = int_to_item(item_to_int(state.stack[-1]), size)
-
-
-def handle_BIN2NUM(state):
-    # (in -- out)    minimally encode in as a number
-    state.require_stack_depth(1)
-    state.stack[-1] = minimal_encoding(state.stack[-1])
-    state.limits.validate_number_length(len(state.stack[-1]))
-
-
-def handle_SIZE(state):
-    # ( x -- x size(x) )
-    state.require_stack_depth(1)
-    size = len(state.stack[-1])
-    state.stack.append(int_to_item(size))
-
-
-#
-# Expansion
-#
-
-def handle_upgradeable_nop(state, op):
-    state.limits.handle_upgradeable_nop(op)
-
-
-def handle_CHECKLOCKTIMEVERIFY(state):
-    if not state.limits.flags & InterpreterFlags.ENABLE_CHECKLOCKTIMEVERIFY:
-        handle_upgradeable_nop(state, Ops.OP_NOP2)
-    else:
-        context = state.txin_context(Ops.OP_CHECKLOCKTIMEVERIFY)
-        state.require_stack_depth(1)
-        locktime = state.limits.to_number(state.stack[-1], length_limit=5)
-        if locktime < 0:
-            raise LockTimeError(f'locktime {locktime:,d} is negative')
-        context.validate_locktime(locktime)
-
-
-def handle_CHECKSEQUENCEVERIFY(state):
-    if not state.limits.flags & InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY:
-        handle_upgradeable_nop(state, Ops.OP_NOP3)
-    else:
-        context = state.txin_context(Ops.OP_CHECKSEQUENCEVERIFY)
-        state.require_stack_depth(1)
-        sequence = state.limits.to_number(state.stack[-1], length_limit=5)
-        if sequence < 0:
-            raise LockTimeError(f'sequence {sequence:,d} is negative')
-        context.validate_sequence(sequence)
-
-
-op_handlers = [partial(invalid_opcode, op=op) for op in range(256)]
-
-#
-# Control
-#
-op_handlers[Ops.OP_NOP] = handle_NOP
-op_handlers[Ops.OP_VER] = partial(invalid_opcode, op=Ops.OP_VER)
-op_handlers[Ops.OP_IF] = partial(handle_IF, op=Ops.OP_IF)
-op_handlers[Ops.OP_NOTIF] = partial(handle_IF, op=Ops.OP_NOTIF)
-op_handlers[Ops.OP_VERIF] = partial(handle_VERIF, op=Ops.OP_VERIF)
-op_handlers[Ops.OP_VERNOTIF] = partial(handle_VERIF, op=Ops.OP_VERNOTIF)
-op_handlers[Ops.OP_ELSE] = handle_ELSE
-op_handlers[Ops.OP_ENDIF] = handle_ENDIF
-op_handlers[Ops.OP_VERIFY] = handle_VERIFY
-op_handlers[Ops.OP_RETURN] = handle_RETURN
-
-#
-# Stack operations
-#
-op_handlers[Ops.OP_TOALTSTACK] = handle_TOALTSTACK
-op_handlers[Ops.OP_FROMALTSTACK] = handle_FROMALTSTACK
-op_handlers[Ops.OP_DROP] = handle_DROP
-op_handlers[Ops.OP_2DROP] = handle_2DROP
-op_handlers[Ops.OP_DUP] = partial(handle_nDUP, n=1)
-op_handlers[Ops.OP_2DUP] = partial(handle_nDUP, n=2)
-op_handlers[Ops.OP_3DUP] = partial(handle_nDUP, n=3)
-op_handlers[Ops.OP_OVER] = handle_OVER
-op_handlers[Ops.OP_2OVER] = handle_2OVER
-op_handlers[Ops.OP_2ROT] = handle_2ROT
-op_handlers[Ops.OP_2SWAP] = handle_2SWAP
-op_handlers[Ops.OP_IFDUP] = handle_IFDUP
-op_handlers[Ops.OP_DEPTH] = handle_DEPTH
-op_handlers[Ops.OP_NIP] = handle_NIP
-op_handlers[Ops.OP_PICK] = partial(handle_PICK_ROLL, op=Ops.OP_PICK)
-op_handlers[Ops.OP_ROLL] = partial(handle_PICK_ROLL, op=Ops.OP_ROLL)
-op_handlers[Ops.OP_ROT] = handle_ROT
-op_handlers[Ops.OP_SWAP] = handle_SWAP
-op_handlers[Ops.OP_TUCK] = handle_TUCK
-
-#
-# Byte string operations
-#
-op_handlers[Ops.OP_CAT] = handle_CAT
-op_handlers[Ops.OP_SPLIT] = handle_SPLIT
-op_handlers[Ops.OP_NUM2BIN] = handle_NUM2BIN
-op_handlers[Ops.OP_BIN2NUM] = handle_BIN2NUM
-op_handlers[Ops.OP_SIZE] = handle_SIZE
-
-#
-# Bitwise logic
-#
-op_handlers[Ops.OP_INVERT] = handle_INVERT
-op_handlers[Ops.OP_AND] = partial(handle_binary_bitop, binop=operator.and_)
-op_handlers[Ops.OP_OR] = partial(handle_binary_bitop, binop=operator.or_)
-op_handlers[Ops.OP_XOR] = partial(handle_binary_bitop, binop=operator.xor)
-op_handlers[Ops.OP_EQUAL] = handle_EQUAL
-op_handlers[Ops.OP_EQUALVERIFY] = handle_EQUALVERIFY
-op_handlers[Ops.OP_LSHIFT] = handle_LSHIFT
-op_handlers[Ops.OP_RSHIFT] = handle_RSHIFT
-
-#
-# Numeric
-#
-op_handlers[Ops.OP_1ADD] = partial(handle_unary_numeric, unary_op=lambda x: x + 1)
-op_handlers[Ops.OP_1SUB] = partial(handle_unary_numeric, unary_op=lambda x: x - 1)
-# OP_2MUL = 0x8d
-# OP_2DIV = 0x8e
-op_handlers[Ops.OP_NEGATE] = partial(handle_unary_numeric, unary_op=operator.neg)
-op_handlers[Ops.OP_ABS] = partial(handle_unary_numeric, unary_op=operator.abs)
-op_handlers[Ops.OP_NOT] = partial(handle_unary_numeric, unary_op=operator.not_)
-op_handlers[Ops.OP_0NOTEQUAL] = partial(handle_unary_numeric, unary_op=operator.truth)
-op_handlers[Ops.OP_ADD] = partial(handle_binary_numeric, binary_op=operator.add)
-op_handlers[Ops.OP_SUB] = partial(handle_binary_numeric, binary_op=operator.sub)
-op_handlers[Ops.OP_MUL] = partial(handle_binary_numeric, binary_op=operator.mul)
-op_handlers[Ops.OP_DIV] = partial(handle_binary_numeric, binary_op=bitcoin_div)
-op_handlers[Ops.OP_MOD] = partial(handle_binary_numeric, binary_op=bitcoin_mod)
-op_handlers[Ops.OP_BOOLAND] = partial(handle_binary_numeric, binary_op=logical_and)
-op_handlers[Ops.OP_BOOLOR] = partial(handle_binary_numeric, binary_op=logical_or)
-op_handlers[Ops.OP_NUMEQUAL] = partial(handle_binary_numeric, binary_op=operator.eq)
-op_handlers[Ops.OP_NUMEQUALVERIFY] = handle_NUMEQUALVERIFY
-op_handlers[Ops.OP_NUMNOTEQUAL] = partial(handle_binary_numeric, binary_op=operator.ne)
-op_handlers[Ops.OP_LESSTHAN] = partial(handle_binary_numeric, binary_op=operator.lt)
-op_handlers[Ops.OP_GREATERTHAN] = partial(handle_binary_numeric, binary_op=operator.gt)
-op_handlers[Ops.OP_LESSTHANOREQUAL] = partial(handle_binary_numeric, binary_op=operator.le)
-op_handlers[Ops.OP_GREATERTHANOREQUAL] = partial(handle_binary_numeric, binary_op=operator.ge)
-op_handlers[Ops.OP_MIN] = partial(handle_binary_numeric, binary_op=min)
-op_handlers[Ops.OP_MAX] = partial(handle_binary_numeric, binary_op=max)
-op_handlers[Ops.OP_WITHIN] = handle_WITHIN
-
-#
-# Crypto
-#
-op_handlers[Ops.OP_RIPEMD160] = partial(handle_hash, hash_func=ripemd160)
-op_handlers[Ops.OP_SHA1] = partial(handle_hash, hash_func=sha1)
-op_handlers[Ops.OP_SHA256] = partial(handle_hash, hash_func=sha256)
-op_handlers[Ops.OP_HASH160] = partial(handle_hash, hash_func=hash160)
-op_handlers[Ops.OP_HASH256] = partial(handle_hash, hash_func=double_sha256)
-op_handlers[Ops.OP_CODESEPARATOR] = handle_CODESEPARATOR
-op_handlers[Ops.OP_CHECKSIG] = partial(handle_CHECKSIG, op=Ops.OP_CHECKSIG)
-op_handlers[Ops.OP_CHECKSIGVERIFY] = handle_CHECKSIGVERIFY
-op_handlers[Ops.OP_CHECKMULTISIG] = partial(handle_CHECKMULTISIG, op=Ops.OP_CHECKMULTISIG)
-op_handlers[Ops.OP_CHECKMULTISIGVERIFY] = handle_CHECKMULTISIGVERIFY
-
-#
-# Expansion
-#
-for _op in (Ops.OP_NOP1, Ops.OP_NOP4, Ops.OP_NOP5, Ops.OP_NOP6, Ops.OP_NOP7,
-            Ops.OP_NOP8, Ops.OP_NOP9, Ops.OP_NOP10):
-    op_handlers[_op] = partial(handle_upgradeable_nop, op=_op)
-op_handlers[Ops.OP_NOP2] = handle_CHECKLOCKTIMEVERIFY
-op_handlers[Ops.OP_NOP3] = handle_CHECKSEQUENCEVERIFY
+InterpreterState.bind_handlers()
