@@ -40,7 +40,7 @@ class TestWordlists:
 class TestBIP39Mnemonic:
 
     @pytest.mark.parametrize("text,answer", (
-        ('cat dog', 'cat dog'),
+        ('cat Dog', 'cat dog'),
         (' 　cat 　dog  ', 'cat dog'),
         ('　やきとり　きぎ　', 'やきとり きき\u3099'),
         (' élève ', 'e\u0301le\u0300ve'),
@@ -52,8 +52,8 @@ class TestBIP39Mnemonic:
     @pytest.mark.parametrize("mnemonic,passphrase,answer", (
         (' cat DOG ', 'secret', '97e3e08653c3d414715f0cc66450c45d4c5058c9bdd66511faef508a0bbcf00'
          'c482b7aaf85a8f0bd0a5f554a6f643c4f8f9d6148b4db877e6f0d3b38d756b032'),
-        ('satoshi', 'nakamoto', '4fe51b817226a539176db8a90404a271cf1ab258dbac34e5b2a054f5a4b42'
-         '67fe0d2f2521bd6420cd35694a6b43942698554d492182e1c04ca59d6b8775da09e'),
+        ('satoshi', ' nakamoto ', '4b6953dc0adb93323476bc7fcfdc5efaa687ec2535408ca85ec26d11dc793'
+         '0d9a16095617880eb9699dd873a8b1532316bcde513f99ef572d8068926cabecf4e'),
         ('satoshi', ' NAKAMOTO ', 'b76966c0d7e5355e381cfc98fc354c8a9d956880f62da82874cd0516371ce'
          'bafccd79d00bc6cfc072a1bbbf4a71d5541f15cab0a4b9b2040e145ee55387b7a05'),
     ), ids=['cat dog', 'satoshi', 'NAKAMOTO']
@@ -118,6 +118,44 @@ class TestElectrumMnemonic:
     def test_generate_new(self, bits, prefix, execution_count):
         mnemonic = ElectrumMnemonic.generate_new(english_wordlist, prefix=prefix, bits=bits)
         assert ElectrumMnemonic.is_valid_new(mnemonic, prefix)
+
+    @pytest.mark.parametrize("text,answer", (
+        ('caT dog', 'cat dog'),
+        (' 　cat 　dOg  ', 'cat dog'),
+        ('　やきとり　きぎ　', 'やきとり きき\u3099'),
+        (' élève ', 'e\u0301le\u0300ve'),
+        ('e\u0301le\u0300ve', 'e\u0301le\u0300ve'),
+    ))
+    def test_normalize_new(self, text, answer):
+        assert ElectrumMnemonic.normalize_new(text) == answer
+
+    @pytest.mark.parametrize("mnemonic, passphrase, sane, electrum", (
+        ('foo bar', 'none',
+         '6cea46eb1b30006263e74a977ee932c9ea16fef2b7fb8dea4585a855245d3747'
+         '2ec75213f7533152568a3fcdb32960fc8b201e7c156962701fe24873c117f9a8',
+         '6cea46eb1b30006263e74a977ee932c9ea16fef2b7fb8dea4585a855245d3747'
+         '2ec75213f7533152568a3fcdb32960fc8b201e7c156962701fe24873c117f9a8'),
+        (' foo BAR ', 'NONE',
+         '854e1c995c9cae464403ec161981cae33912d1bf42835233d2f2b8abed7dd658'
+         '2c8b7cec2d4c4d1b2d1432c9a04afa93e36715e5c8cfb1237ea846d0a7c1305c',
+         '6cea46eb1b30006263e74a977ee932c9ea16fef2b7fb8dea4585a855245d3747'
+         '2ec75213f7533152568a3fcdb32960fc8b201e7c156962701fe24873c117f9a8'),
+        (' foo BAR ', ' NONE ',
+         'c676e45e5b3baae832c642b754f086fc644779f588bd60173df17b6fe651c47c'
+         '5d1185f599c58c05e125d499cbd59ff7cd0df754cdd5169a3625199b94b56c23',
+         '6cea46eb1b30006263e74a977ee932c9ea16fef2b7fb8dea4585a855245d3747'
+         '2ec75213f7533152568a3fcdb32960fc8b201e7c156962701fe24873c117f9a8'),
+        (' 東南 dog ', ' extension やきとり　きぎ ',
+         '0cd87aaee689bf8935af9fb44b8fb1b69cad74b8ecd8ef079468c6244883539c'
+         '9f912180f4f2b841df42269099fc482ef0fdbad7c9b0ee96ea0d6b1b63732165',
+         '066b52821f12dc1b40b687d811f9e8c9bf723ef8e1fb7e89c23ce624472e77ce'
+         '969760b2f7b697958fc0b484ea58ea4f7b93dfc25996b82b29ee94b3c0956802'
+        ),
+    ))
+    def test_new_to_seed(self, mnemonic, passphrase, sane, electrum):
+        assert ElectrumMnemonic.new_to_seed(mnemonic, passphrase).hex() == sane
+        assert ElectrumMnemonic.new_to_seed(mnemonic, passphrase, False).hex() == sane
+        assert ElectrumMnemonic.new_to_seed(mnemonic, passphrase, True).hex() == electrum
 
     def test_generate_new_bits(self):
         with pytest.raises(ValueError) as e:

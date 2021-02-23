@@ -25,7 +25,7 @@ from math import ceil, log
 
 from hashlib import pbkdf2_hmac
 from os import urandom
-from unicodedata import normalize
+from unicodedata import normalize, combining, east_asian_width
 
 from .hashes import sha256, hmac_sha512
 from .misc import int_to_be_bytes, be_bytes_to_int, chunks, data_file_path
@@ -220,11 +220,42 @@ class ElectrumMnemonic:
         return urandom(word_count * 4 // 3).hex()
 
     @classmethod
+    def normalize_new(cls, mnemonic):
+        '''Return the normalized mnemonic. Leading and trailing whitespace is removed, whitespace
+        is collapsed to a single space, and the mnemonic is converted to lower case.
+        '''
+        return ' '.join(_normalize_text(mnemonic).split()).lower()
+
+    @classmethod
     def is_valid_new(cls, mnemonic, prefix):
         '''Return True if mnemonic is a valid new-style mnemonic for the given prefix.'''
-        mnemonic = _normalize_text(mnemonic).lower()
+        mnemonic = cls.normalize_new(mnemonic)
         hmac = hmac_sha512(b'Seed version', mnemonic.encode())
         return hmac.hex().startswith(prefix)
+
+    @classmethod
+    def passphrase_mangler(cls, passphrase):
+        '''An Electrum-compatible passphrase mangler.  IMO this is a really bad idea.'''
+        # Ugh, this normalizes whitespace, lower-cases, and strips leading and trailing.
+        passphrase = cls.normalize_new(passphrase)
+        # Ugh, this totally changes the meaning of words and introduces collisions
+        passphrase = ''.join(c for c in passphrase if not combining(c))
+        # Ugh, remove spaces between CJK words.  why exactly?
+        return ''.join(c for i, c in enumerate(passphrase) if not
+                       (c == ' ' and east_asian_width(passphrase[i - 1]) == 'W'
+                        and east_asian_width(passphrase[i + 1]) == 'W'))
+
+    @classmethod
+    def new_to_seed(cls, mnemonic, passphrase, compatible=False):
+        '''Return a 512-bit seed generated from the new-style mnemonic and passphrase.  The
+        validity of the mnemonic is not checked.
+
+        To be compatible with Electrum passphrase mangling in a bad way, pass compatible=True.
+        '''
+        mnemonic = cls.normalize_new(mnemonic).encode()
+        passphrase_mangler = cls.passphrase_mangler if compatible else _normalize_text
+        passphrase = passphrase_mangler(passphrase).encode()
+        return pbkdf2_hmac('sha512', mnemonic, b'electrum' + passphrase, iterations=2048)
 
     @classmethod
     def normalize_old(cls, mnemonic):
