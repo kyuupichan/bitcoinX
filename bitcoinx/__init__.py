@@ -16,7 +16,7 @@ from .signature import *
 from .tx import *
 from .work import *
 
-_version_str = '0.4.0'
+_version_str = '0.4.1'
 _version = tuple(int(part) for part in _version_str.split('.'))
 
 __all__ = sum((
