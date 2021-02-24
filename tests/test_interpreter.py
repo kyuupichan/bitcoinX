@@ -23,7 +23,6 @@ from bitcoinx import (
 from .utils import random_txinput_context, random_tx, read_tx, zeroes, non_zeroes
 
 
-
 policies = [
     # A fairly restrictive policy
     MinerPolicy(100_000, 64, 20_000, 1_000, 16),
@@ -417,6 +416,7 @@ class TestInterpreterState:
             state.alt_stack.append(b'')
             with pytest.raises(StackSizeTooLarge):
                 state.validate_stack_size()
+
 
 reserved_ops = (OP_VER, OP_RESERVED, OP_RESERVED1, OP_RESERVED2)
 
@@ -2729,7 +2729,7 @@ class TestCrypto(TestEvaluateScriptBase):
         script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
                                                                 'nonnull_dummy')
         state.evaluate_script(script_sig)
-        if state.limits.flags  & InterpreterFlags.REQUIRE_NULLDUMMY:
+        if state.limits.flags & InterpreterFlags.REQUIRE_NULLDUMMY:
             with pytest.raises(NullDummyError):
                 state.evaluate_script(script_pubkey)
         else:

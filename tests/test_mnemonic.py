@@ -149,8 +149,7 @@ class TestElectrumMnemonic:
          '0cd87aaee689bf8935af9fb44b8fb1b69cad74b8ecd8ef079468c6244883539c'
          '9f912180f4f2b841df42269099fc482ef0fdbad7c9b0ee96ea0d6b1b63732165',
          '066b52821f12dc1b40b687d811f9e8c9bf723ef8e1fb7e89c23ce624472e77ce'
-         '969760b2f7b697958fc0b484ea58ea4f7b93dfc25996b82b29ee94b3c0956802'
-        ),
+         '969760b2f7b697958fc0b484ea58ea4f7b93dfc25996b82b29ee94b3c0956802'),
     ))
     def test_new_to_seed(self, mnemonic, passphrase, sane, electrum):
         assert ElectrumMnemonic.new_to_seed(mnemonic, passphrase).hex() == sane
