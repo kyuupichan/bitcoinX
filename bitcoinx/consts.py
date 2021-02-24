@@ -14,11 +14,9 @@ __all__ = (
 
 from enum import IntFlag
 
-from .packing import pack_varbytes, pack_byte
-
 
 ZERO = bytes(32)
-ONE = bytes(31) + pack_byte(1)
+ONE = bytes(31) + b'\x01'
 UINT32_MAX = 0xffffffff
 INT32_MAX = 0x7fffffff
 UINT64_MAX = 0xffffffffffffffff
@@ -32,7 +30,7 @@ SEQUENCE_LOCKTIME_TYPE_FLAG = 1 << 22
 
 CURVE_ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 HALF_CURVE_ORDER = CURVE_ORDER // 2
-SIGNED_MESSAGE_PREFIX = pack_varbytes('Bitcoin Signed Message:\n'.encode())
+SIGNED_MESSAGE_PREFIX = b'\x18Bitcoin Signed Message:\n'
 
 
 class JSONFlags(IntFlag):

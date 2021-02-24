@@ -4,12 +4,12 @@ from base64 import b64decode, b64encode
 import pytest
 
 from bitcoinx.coin import Bitcoin, BitcoinTestnet
-from bitcoinx.consts import CURVE_ORDER
+from bitcoinx.consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
 from bitcoinx.errors import InvalidSignature
 from bitcoinx.keys import *
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
-from bitcoinx import pack_byte, base58_encode_check, Address
+from bitcoinx import pack_byte, base58_encode_check, Address, pack_varbytes
 
 
 one = bytes(31) + bytes([1])
@@ -32,9 +32,10 @@ WIF_tests = [
 ]
 
 
-def test_CURVE_ORDER():
+def test_constants():
     assert CURVE_ORDER == \
         115792089237316195423570985008687907852837564279074904382605163141518161494337
+    assert SIGNED_MESSAGE_PREFIX == pack_varbytes('Bitcoin Signed Message:\n'.encode())
 
 
 class TestPrivateKey:
