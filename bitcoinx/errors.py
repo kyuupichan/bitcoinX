@@ -8,6 +8,8 @@
 '''Exception hierarchy.'''
 
 __all__ = (
+    'Base58Error', 'DecryptionError',
+    'ChainException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
     'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError', 'CleanStackError',
     'ScriptTooLarge', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
@@ -24,6 +26,46 @@ __all__ = (
 #
 # Exception Hierarchy
 #
+
+
+class Base58Error(ValueError):
+    '''Exception used for Base58 errors.'''
+
+
+class ChainException(Exception):
+    '''Base class of exceptions raised in chain.py.'''
+
+
+class MissingHeader(ChainException):
+    '''Raised by Headers.connect() when the previous header is missing.'''
+
+
+class IncorrectBits(ChainException):
+    '''Raised when a header has bits other than those required by the protocol.'''
+
+    def __init__(self, header, required_bits):
+        super().__init__(header, required_bits)
+        self.header = header
+        self.required_bits = required_bits
+
+    def __str__(self):
+        return f'header {self.header} requires bits 0x{self.required_bits}'
+
+
+class InsufficientPoW(ChainException):
+    '''Raised when a header has less PoW than required by the protocol.'''
+
+    def __init__(self, header):
+        super().__init__(header)
+        self.header = header
+
+    def __str__(self):
+        return (f'header f{self.header} hash value f{self.header.hash_value()} exceeds '
+                f'its target {self.header.target()}')
+
+
+class DecryptionError(ValueError):
+    '''Raised by PrivateKey.decrypt_message for various failures.'''
 
 
 class ScriptError(Exception):

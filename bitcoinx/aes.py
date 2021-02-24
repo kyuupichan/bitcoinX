@@ -8,20 +8,19 @@
 '''AES wrapper.'''
 
 __all__ = (
-    'aes_encrypt_with_iv', 'aes_decrypt_with_iv', 'BadPaddingError',
+    'aes_encrypt_with_iv', 'aes_decrypt_with_iv',
 )
 
 
 from pyaes import AESModeOfOperationCBC, Decrypter, Encrypter, PADDING_NONE
 
+from .errors import DecryptionError
+
+
 try:
     from Cryptodome.Cipher import AES
 except ImportError:
     AES = None
-
-
-class BadPaddingError(Exception):
-    pass
 
 
 def _append_PKCS7_padding(data):
@@ -31,12 +30,12 @@ def _append_PKCS7_padding(data):
 
 def _strip_PKCS7_padding(data):
     if not data or len(data) % 16:
-        raise BadPaddingError('wrong length')
+        raise DecryptionError('wrong length')
     padlen = data[-1]
     if not 0 < padlen <= 16:
-        raise BadPaddingError('invalid final padding byte')
+        raise DecryptionError('invalid final padding byte')
     if data[-padlen:] != bytes([padlen]) * padlen:
-        raise BadPaddingError('inconsistent padding bytes')
+        raise DecryptionError('inconsistent padding bytes')
     return data[:-padlen]
 
 
