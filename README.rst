@@ -26,6 +26,14 @@ In time.
 ChangeLog
 =========
 
+0.4.1
+-----
+
+- Script.to_asm(): for truncated scripts it now returns all words up to the truncation point,
+  for which it returns '[script error]' by default, but alternative text can be supplied.
+- new API pack_signed_message() related to message signing; this function was previously
+  internal.
+
 0.4.0
 -----
 
