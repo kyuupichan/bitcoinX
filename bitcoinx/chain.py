@@ -7,7 +7,6 @@
 
 __all__ = (
     'Chain', 'CheckPoint', 'Headers',
-    'ChainException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
 )
 
 import array
@@ -16,9 +15,10 @@ import logging
 import math
 from struct import Struct
 
-from bitcoinx.hashes import hash_to_hex_str
-from bitcoinx.packing import pack_le_uint32, unpack_le_uint32
-from bitcoinx.misc import map_file
+from .errors import MissingHeader, IncorrectBits, InsufficientPoW
+from .hashes import hash_to_hex_str
+from .packing import pack_le_uint32, unpack_le_uint32
+from .misc import map_file
 
 
 empty_header = bytes(80)
@@ -30,37 +30,8 @@ logger = logging.getLogger('chain')
 CheckPoint = namedtuple('CheckPoint', 'raw_header height prev_work')
 
 
-class ChainException(Exception):
-    pass
-
-
-class MissingHeader(ChainException):
-    pass
-
-
-class IncorrectBits(ChainException):
-
-    def __init__(self, header, required_bits):
-        super().__init__(header, required_bits)
-        self.header = header
-        self.required_bits = required_bits
-
-    def __str__(self):
-        return f'header {self.header} requires bits 0x{self.required_bits}'
-
-
-class InsufficientPoW(ChainException):
-    def __init__(self, header):
-        super().__init__(header)
-        self.header = header
-
-    def __str__(self):
-        return (f'header f{self.header} hash value f{self.header.hash_value()} exceeds '
-                f'its target {self.header.target()}')
-
-
 class _BadHeadersFile(Exception):
-    pass
+    '''An exception for internal use of this file.'''
 
 
 class Chain:

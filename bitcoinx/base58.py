@@ -12,16 +12,13 @@ __all__ = (
     'Base58Error', 'is_minikey',
 )
 
+from .errors import Base58Error
 from .hashes import double_sha256, sha256
 from .misc import int_to_be_bytes, be_bytes_to_int
 
 
 base58_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 base58_cmap = {c: n for n, c in enumerate(base58_chars)}
-
-
-class Base58Error(ValueError):
-    '''Exception used for Base58 errors.'''
 
 
 def base58_decode(txt):

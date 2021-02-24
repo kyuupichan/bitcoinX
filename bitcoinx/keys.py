@@ -7,7 +7,7 @@
 
 '''Public and Private keys of various kinds.'''
 
-__all__ = ('PrivateKey', 'PublicKey', 'DecryptionError', )
+__all__ = ('PrivateKey', 'PublicKey', )
 
 
 from base64 import b64decode, b64encode
@@ -21,7 +21,7 @@ from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
 from .consts import CURVE_ORDER
-from .errors import InvalidSignature
+from .errors import DecryptionError, InvalidSignature
 from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT, cachedproperty
 from .packing import pack_byte, pack_signed_message
@@ -32,10 +32,6 @@ from .signature import (
 
 EC_COMPRESSED = lib.SECP256K1_EC_COMPRESSED
 EC_UNCOMPRESSED = lib.SECP256K1_EC_UNCOMPRESSED
-
-
-class DecryptionError(ValueError):
-    pass
 
 
 def _to_32_bytes(value):
@@ -290,10 +286,11 @@ class PrivateKey:
         if hmac_digest(key_m, message[:-32], _sha256) != hmac:
             raise DecryptionError('bad HMAC')
 
+        # Convert exceptions to DecryptionError as the aes library itself can raise
         try:
             return aes_decrypt_with_iv(key_e, iv, ciphertext)
-        except Exception as e:  # aes library can raise Exception, unfortunately
-            raise DecryptionError(f'{e}') from None
+        except Exception as e:
+            raise DecryptionError(str(e)) from None
 
 
 class PublicKey:
