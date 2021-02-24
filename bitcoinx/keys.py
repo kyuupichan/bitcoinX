@@ -20,11 +20,11 @@ from .address import P2PKH_Address, P2PK_Output
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .coin import Bitcoin, Coin
-from .consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
+from .consts import CURVE_ORDER
 from .errors import InvalidSignature
 from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT, cachedproperty
-from .packing import pack_byte, pack_varbytes
+from .packing import pack_byte, pack_signed_message
 from .signature import (
     sign_der, sign_recoverable, verify_der_signature, verify_recoverable_signature,
     public_key_from_recoverable_signature, to_message_signature, to_recoverable_signature,
@@ -51,12 +51,6 @@ def _message_hash(message, hasher):
     if len(msg_hash) != 32:
         raise ValueError('hashed message must be 32 bytes')
     return msg_hash
-
-
-def _normalize_message(message):
-    if isinstance(message, str):
-        message = message.encode()
-    return SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
 
 
 class PrivateKey:
@@ -194,7 +188,7 @@ class PrivateKey:
         coin = coin or self._coin
         payload = pack_byte(coin.WIF_byte) + self._secret
         if (self._compressed if compressed is None else compressed):
-            payload += pack_byte(0x01)
+            payload += 'b\x01'
         return base58_encode_check(payload)
 
     def add(self, value):
@@ -241,7 +235,7 @@ class PrivateKey:
         '''
         if hasher is None:
             raise ValueError('hasher cannot be None')
-        message = _normalize_message(message)
+        message = pack_signed_message(message)
         recoverable_sig = self.sign_recoverable(message, hasher)
         # Compressed appears to be legacy and the signature is valid whether True or
         # False; in any case only the first byte (recid) of the signature changes.
@@ -386,7 +380,7 @@ class PublicKey:
         '''
         if hasher is None:
             raise ValueError('hasher cannot be None')
-        message = _normalize_message(message)
+        message = pack_signed_message(message)
         recoverable_sig = to_recoverable_signature(message_sig)
         return cls.from_recoverable_signature(recoverable_sig, message, hasher)
 
@@ -463,7 +457,7 @@ class PublicKey:
         '''
         if hasher is None:
             raise ValueError('hasher cannot be None')
-        message = _normalize_message(message)
+        message = pack_signed_message(message)
         recoverable_sig = to_recoverable_signature(message_sig)
         return self.verify_recoverable_signature(recoverable_sig, message, hasher)
 

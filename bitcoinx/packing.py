@@ -6,10 +6,10 @@
 #
 
 __all__ = (
-    'pack_le_int32', 'pack_le_int64',
-    'pack_le_uint16', 'pack_le_uint32', 'pack_le_uint64',
+    'pack_le_int32', 'pack_le_int64', 'pack_le_uint16', 'pack_le_uint32', 'pack_le_uint64',
     'pack_be_uint16', 'pack_be_uint32', 'pack_be_uint64',
     'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes', 'pack_list', 'varint_len',
+    'pack_signed_message',
     'unpack_le_int32', 'unpack_le_int32_from',
     'unpack_le_int64', 'unpack_le_int64_from',
     'unpack_le_uint16', 'unpack_le_uint16_from',
@@ -27,6 +27,8 @@ __all__ = (
 
 
 from struct import Struct, error as struct_error
+
+from .consts import SIGNED_MESSAGE_PREFIX
 
 
 struct_le_i = Struct('<i')
@@ -115,6 +117,16 @@ def pack_list(items, pack_one):
     parts = [pack_varint(len(items))]
     parts.extend(pack_one(item) for item in items)
     return b''.join(parts)
+
+
+def pack_signed_message(message):
+    '''Message is the raw bytes or text string to be signed in a bitcoin signed message.
+    Return it encoded as bytes to actually be signed.'''
+    # Covert text to UTF-8, covert the bytes to bitcoin varbytes and prefix that with the
+    # standard signed message prefix.
+    if isinstance(message, str):
+        message = message.encode()
+    return SIGNED_MESSAGE_PREFIX + pack_varbytes(message)
 
 
 # Stream operations
