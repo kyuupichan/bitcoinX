@@ -400,8 +400,6 @@ class TestScript:
         # This has value 1 (if bignums are re-enabled) but shows as hex
         (bytes([5, 1, 0, 0, 0, 0]), '0100000000'),
         (bytes(), ''),
-        # This is a truncated script
-        (bytes([5, 1, 1, 1, 1]), '[error]'),
         (bytes(range(OP_1NEGATE, 256)),
          "-1 OP_RESERVED 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 OP_NOP OP_VER OP_IF OP_NOTIF "
          "OP_VERIF OP_VERNOTIF OP_ELSE OP_ENDIF OP_VERIFY OP_RETURN OP_TOALTSTACK OP_FROMALTSTACK "
@@ -418,9 +416,18 @@ class TestScript:
          + "OP_UNKNOWN " * 69 + "OP_INVALIDOPCODE"),
     ), ids=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14",
             "15", "16", "-1", "6 -1", "16 16 16 16", "17 17 17", "0...256", "signed 32",
-            "1hex", "empty", "error", "many ops"])
+            "1hex", "empty", "many ops"])
     def test_to_asm(self, script, asm):
         assert Script(script).to_asm(False) == asm
+
+    @pytest.mark.parametrize("script, asm", (
+        (bytes([OP_DUP, 5, 1, 1, 1, 1]), 'OP_DUP [script error]'),
+        (bytes([OP_15, OP_1, OP_HASH160, 2, 2]), '15 1 OP_HASH160 [script error]'),
+    ))
+    def test_to_asm_truncated(self, script, asm):
+        assert Script(script).to_asm(False) == asm
+        text = '<wombat>'
+        assert Script(script).to_asm(False, text) == asm.replace('[script error]', text)
 
     @pytest.mark.parametrize("script,coin,json,extra", (
         # A P2PK output
@@ -505,7 +512,7 @@ class TestScript:
         (
             '006a403464373835363335363064663133393863', Bitcoin,
             {
-                'asm': '[error]'
+                'asm': '0 OP_RETURN [script error]'
             },
             {
                 'type': 'op_return',

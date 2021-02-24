@@ -567,17 +567,22 @@ class Script:
         except ValueError:
             return "OP_INVALIDOPCODE" if op == 0xff else "OP_UNKNOWN"
 
-    def to_asm(self, decode_sighash):
+    def _asm_words(self, decode_sighash, truncated_word):
+        '''A generator yielding ASM words; truncated scripts terminate with truncated_word.'''
+        op_to_asm_word = self.op_to_asm_word
+        try:
+            for op in self.ops():
+                yield op_to_asm_word(op, decode_sighash)
+        except TruncatedScriptError:
+            yield truncated_word
+
+    def to_asm(self, decode_sighash, truncated_word='[script error]'):
         '''Return a script converted to bitcoin's human-readable ASM format.
 
         If decode_sighash is true, pushdata that look like a signature are suffixed with
         the appropriate SIGHASH flags.
         '''
-        op_to_asm_word = self.op_to_asm_word
-        try:
-            return ' '.join(op_to_asm_word(op, decode_sighash) for op in self.ops())
-        except TruncatedScriptError:
-            return '[error]'
+        return ' '.join(self._asm_words(decode_sighash, truncated_word))
 
     def to_bytes(self):
         '''Return the script as a bytes() object.'''

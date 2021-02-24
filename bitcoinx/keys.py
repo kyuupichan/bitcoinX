@@ -188,7 +188,7 @@ class PrivateKey:
         coin = coin or self._coin
         payload = pack_byte(coin.WIF_byte) + self._secret
         if (self._compressed if compressed is None else compressed):
-            payload += 'b\x01'
+            payload += b'\x01'
         return base58_encode_check(payload)
 
     def add(self, value):
