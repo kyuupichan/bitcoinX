@@ -546,21 +546,26 @@ class Script:
 
     @classmethod
     def op_to_asm_word(cls, op, decode_sighash):
-        '''Convert a single opcode, or data push, as returned by ops(), to a human-readable
-        word.
+        '''Convert a single opcode, or data push, as returned by ops(), to a human-readable word.
+        The logic mirrors that of ScriptToAsmStr in bitcoin-sv/src/core_write.cpp.
 
         If decode_sighash is true, pushdata that look like a signature are suffixed with
         the appropriate SIGHASH flags.
         '''
         if isinstance(op, bytes):
+            # Data items of up to four bytes are output as decimal.  This also handles
+            # O_1NEGATE, OP_0 ... OP_16 the same as bitcoind's GetOpName.
             if len(op) <= 4:
                 return str(item_to_int(op))
+
             # Print signatures as strings showing the sighash text.
             if decode_sighash and op[0] == 0x30:
                 try:
                     return Signature.to_string(op)
                 except InvalidSignature:
                     pass
+
+            # All other data is output as hex.  Unfortunately this is ambiguous...
             return op.hex()
         try:
             return Ops(op).name
@@ -609,8 +614,16 @@ class Script:
 
     @classmethod
     def from_hex(cls, hex_str):
-        '''Instantiate from a hexadecimal string.'''
-        return cls(bytes.fromhex(hex_str))
+        '''Convert a hexadecimal string (without whitespace) into raw script.
+
+        Raises ValueError in the string cannot be converted.
+        '''
+        raw = bytes.fromhex(hex_str)
+        # Test to ensure it does not contain whitespace.  We want whitespace to separate
+        # asm words for Script.from_text() do not permit it in hex.
+        if raw.hex() != hex_str:
+            raise ValueError('hex_str is not pure hexadecimal')
+        return cls(raw)
 
     def to_hex(self):
         '''Return the script as a hexadecimal string.'''
@@ -637,11 +650,28 @@ class Script:
 
     @classmethod
     def from_asm(cls, asm):
-        '''Convert an ASM string to a script.'''
+        '''Convert an ASM string to a script.
+
+        Raises ScriptError if the text cannot be understood.
+        '''
         asm_word_to_bytes = cls.asm_word_to_bytes
         return cls(b''.join(asm_word_to_bytes(word) for word in asm.split()))
 
+    @classmethod
+    def from_text(cls, text):
+        '''Convert text to Bitcoin script.  First try Script.from_hex() and if that
+        fails try Script.from_asm().
+
+        Raises ScriptError if the text cannot be understood.
+        '''
+        try:
+            return cls.from_hex(text)
+        except ValueError:
+            pass
+        return cls.from_asm(text)
+
     def _stripped_ops(self):
+
         '''As for ops() except the result is a list, and operations that do not affect
         evaluation of the script are dropped.
 

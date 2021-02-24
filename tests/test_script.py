@@ -420,6 +420,18 @@ class TestScript:
     def test_to_asm(self, script, asm):
         assert Script(script).to_asm(False) == asm
 
+    def test_to_asm_extreme(self):
+        # Test a messy script full of corner cases; I have comfirmed the result is what
+        # bitcoind outputs.  Note how ASM output of the last 2 distinct numbers is the
+        # same...
+        s = (Script() << OP_1 << OP_1NEGATE << OP_RESERVED << OP_16 << 98 << 65538 <<
+             ((1 << 31) - 1) << -2147483647 << (1 << 31) << (1 << 32) <<
+             OP_CHECKSIG << Script(b'\xfe\xff') << 1_000_000_010 << 0x1000000010)
+        assert s.to_asm(False) == (
+            '1 -1 OP_RESERVED 16 98 65538 2147483647 -2147483647 0000008000 0000000001 '
+            'OP_CHECKSIG OP_UNKNOWN OP_INVALIDOPCODE 1000000010 1000000010'
+        )
+
     @pytest.mark.parametrize("script, asm", (
         (bytes([OP_DUP, 5, 1, 1, 1, 1]), 'OP_DUP [script error]'),
         (bytes([OP_15, OP_1, OP_HASH160, 2, 2]), '15 1 OP_HASH160 [script error]'),
@@ -591,6 +603,10 @@ class TestScript:
         script = Script.from_hex(data.hex())
         assert script.to_bytes() == data
 
+    def test_from_hex_space(self):
+        with pytest.raises(ValueError):
+            Script.from_hex(' 01 ab05 deadbeef ')
+
     @pytest.mark.parametrize("word,item", (
         ("OP_VERIF", pack_byte(OP_VERIF)),
         ("OP_NOP", pack_byte(OP_NOP)),
@@ -622,6 +638,27 @@ class TestScript:
     def test_asm_both_ways(self, asm):
         script = Script.from_asm(asm)
         assert script.to_asm(False) == asm
+
+    @pytest.mark.parametrize('text, answer', (
+        ('', Script()),
+        ('12020304', '12020304'),
+        # This is a decimal number followed by OP_15
+        ('12020304 OP_15', Script() << 12020304 << OP_15),
+        # This is two decimal numbers, not hex with a space
+        ('1202 0304', Script() << 1202 << 304),
+    ))
+    def test_from_text(self, text, answer):
+        if isinstance(answer, str):
+            answer = bytes.fromhex(answer)
+        assert Script.from_text(text) == answer
+
+    @pytest.mark.parametrize('text', (
+        'abc',
+        'OP_15 OP_OTHER',
+    ))
+    def test_from_text_error(self, text):
+        with pytest.raises(ScriptError):
+            Script.from_text(text)
 
     @pytest.mark.parametrize("script,answer", (
         (Script(), (b'', [])),
