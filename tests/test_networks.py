@@ -3,7 +3,7 @@ import pytest
 from bitcoinx import (
     hex_str_to_hash, bits_to_work, bits_to_target, hash_to_value, hash_to_hex_str,
 )
-from bitcoinx.coin import *
+from bitcoinx.networks import *
 
 
 header_400k = (
@@ -64,27 +64,27 @@ def test_Bitcoin(raw_header, header_hash, version, prev_hash, merkle_root,
 
 
 def test_from_WIF_byte():
-    for coin in all_coins:
-        if coin in (BitcoinScalingTestnet, BitcoinRegtest):
+    for network in all_networks:
+        if network in (BitcoinScalingTestnet, BitcoinRegtest):
             # Testnet has the same identifiers as scaling testnet, as the latter is dumbed down.
-            assert Coin.from_WIF_byte(coin.WIF_byte) is BitcoinTestnet
+            assert Network.from_WIF_byte(network.WIF_byte) is BitcoinTestnet
         else:
-            assert Coin.from_WIF_byte(coin.WIF_byte) is coin
+            assert Network.from_WIF_byte(network.WIF_byte) is network
     with pytest.raises(ValueError):
-        Coin.from_WIF_byte(0x01)
+        Network.from_WIF_byte(0x01)
 
 
 def test_lookup_xver_bytes():
-    for coin in all_coins:
-        if coin in (BitcoinScalingTestnet, BitcoinRegtest):
+    for network in all_networks:
+        if network in (BitcoinScalingTestnet, BitcoinRegtest):
             # Testnet has the same identifiers as scaling testnet, as the latter is dumbed down.
-            assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (BitcoinTestnet, True)
-            assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (BitcoinTestnet, False)
+            assert Network.lookup_xver_bytes(network.xpub_verbytes) == (BitcoinTestnet, True)
+            assert Network.lookup_xver_bytes(network.xprv_verbytes) == (BitcoinTestnet, False)
         else:
-            assert Coin.lookup_xver_bytes(coin.xpub_verbytes) == (coin, True)
-            assert Coin.lookup_xver_bytes(coin.xprv_verbytes) == (coin, False)
+            assert Network.lookup_xver_bytes(network.xpub_verbytes) == (network, True)
+            assert Network.lookup_xver_bytes(network.xprv_verbytes) == (network, False)
     with pytest.raises(ValueError):
-        Coin.lookup_xver_bytes(bytes.fromhex("043587ff"))
+        Network.lookup_xver_bytes(bytes.fromhex("043587ff"))
 
 
 def test_P2SH_verbyte():

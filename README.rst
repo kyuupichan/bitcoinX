@@ -26,6 +26,18 @@ In time.
 ChangeLog
 =========
 
+0.4.2
+-----
+
+- Coin renamed to Network; all_coins to all_networks.  Those two symbols are deprecated and
+  will be removed in 0.5.
+- Network constructor requires names be used
+- network.name renamed network.full_name; network.name is now a short name
+- networks have new attribtes: BIP65_height, BIP66_height, CSV_height, UAHF_height, DAA_height,
+  genesis_height and magic.
+- new symbol networks_by_name
+
+
 0.4.1
 -----
 

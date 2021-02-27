@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from bitcoinx import cashaddr
 from .hashes import hash160 as calc_hash160
 from .base58 import base58_decode_check, base58_encode_check
-from .coin import Bitcoin
+from .networks import Bitcoin
 from .packing import pack_byte
 from .script import Script, Ops, push_item, push_int, item_to_int
 
