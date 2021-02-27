@@ -19,10 +19,10 @@ import re
 import attr
 
 from .base58 import base58_decode_check, base58_encode_check
-from .coin import Bitcoin, Coin
 from .hashes import hmac_sha512_halves, hash160
 from .keys import PrivateKey, PublicKey
 from .misc import cachedproperty
+from .networks import Bitcoin, Network
 from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
 
 HARDENED = 1 << 31
@@ -37,13 +37,13 @@ class BIP32Derivation:
     depth = attr.ib()
     parent_fingerprint = attr.ib()
 
-    def extended_key(self, coin, raw_serkey):
+    def extended_key(self, network, raw_serkey):
         '''Return the 78-byte extended key bytes.'''
         if len(raw_serkey) == 32:
             raw_serkey = b'\0' + raw_serkey
-            ver_bytes = coin.xprv_verbytes
+            ver_bytes = network.xprv_verbytes
         else:
-            ver_bytes = coin.xpub_verbytes
+            ver_bytes = network.xpub_verbytes
 
         assert len(raw_serkey) == 33
 
@@ -73,24 +73,24 @@ class BIP32PrivateKey(PrivateKey):
        - the classmethod from_seed
        - from an existing instance with the child() function
     '''
-    def __init__(self, secret, derivation, coin):
-        super().__init__(secret, True, coin)
+    def __init__(self, secret, derivation, network):
+        super().__init__(secret, True, network)
         self._derivation = derivation
 
     def _extended_key(self):
         '''Return a raw extended private key.'''
-        return self._derivation.extended_key(self._coin, self._secret)
+        return self._derivation.extended_key(self._network, self._secret)
 
     @classmethod
-    def _from_parts(cls, privkey, chain_code, coin):
+    def _from_parts(cls, privkey, chain_code, network):
         derivation = BIP32Derivation(chain_code, 0, 0, bytes(4))
-        return cls(privkey, derivation, coin)
+        return cls(privkey, derivation, network)
 
     @classmethod
-    def from_seed(cls, seed, coin):
-        # This hard-coded message string seems to be coin-independent...
+    def from_seed(cls, seed, network):
+        # This hard-coded message string seems to be network-independent...
         privkey, chain_code = hmac_sha512_halves(b'Bitcoin seed', seed)
-        return cls._from_parts(privkey, chain_code, coin)
+        return cls._from_parts(privkey, chain_code, network)
 
     @classmethod
     def from_random(cls, *, source=urandom):
@@ -105,7 +105,7 @@ class BIP32PrivateKey(PrivateKey):
     @cachedproperty
     def public_key(self):
         '''Return the corresponding BIP32PublicKey object.'''
-        return BIP32PublicKey(self._secp256k1_public_key(), self._derivation, self._coin)
+        return BIP32PublicKey(self._secp256k1_public_key(), self._derivation, self._network)
 
     def child(self, n):
         '''Return the derived child extended privkey at index N.'''
@@ -121,7 +121,7 @@ class BIP32PrivateKey(PrivateKey):
         L, R = hmac_sha512_halves(self._derivation.chain_code, msg)
         child_derivation = self._derivation.child(R, n, self.fingerprint())
 
-        return BIP32PrivateKey(self.add(L).to_bytes(), child_derivation, self._coin)
+        return BIP32PrivateKey(self.add(L).to_bytes(), child_derivation, self._network)
 
     def child_safe(self, n):
         '''Return a child but increment n if the child derivation is invalid.'''
@@ -164,15 +164,15 @@ class BIP32PublicKey(PublicKey):
        - from a BIP32PrivateKey via its public_key attribute
     '''
 
-    def __init__(self, public_key, derivation, coin):
+    def __init__(self, public_key, derivation, network):
         if isinstance(public_key, PublicKey):
             public_key = public_key._public_key
-        super().__init__(public_key, True, coin)
+        super().__init__(public_key, True, network)
         self._derivation = derivation
 
     def _extended_key(self):
         '''Return a raw extended private key.'''
-        return self._derivation.extended_key(self._coin, self.to_bytes())
+        return self._derivation.extended_key(self._network, self.to_bytes())
 
     def child(self, n):
         '''Return the derived child extended pubkey at index N.'''
@@ -183,7 +183,7 @@ class BIP32PublicKey(PublicKey):
         L, R = hmac_sha512_halves(self._derivation.chain_code, msg)
         child_derivation = self._derivation.child(R, n, self.fingerprint())
 
-        return BIP32PublicKey(self.add(L), child_derivation, self._coin)
+        return BIP32PublicKey(self.add(L), child_derivation, self._network)
 
     def child_safe(self, n):
         '''Return a child but increment n if the child derivation is invalid.'''
@@ -223,15 +223,15 @@ def _from_extended_key(ekey):
     if len(ekey) != 78:
         raise ValueError('extended key must have length 78')
 
-    coin, is_public_key = Coin.lookup_xver_bytes(ekey[:4])
+    network, is_public_key = Network.lookup_xver_bytes(ekey[:4])
     n, = unpack_be_uint32(ekey[9:13])
     derivation = BIP32Derivation(ekey[13:45], n, ekey[4], ekey[5:9])
     if is_public_key:
-        key = BIP32PublicKey(PublicKey.from_bytes(ekey[45:]), derivation, coin)
+        key = BIP32PublicKey(PublicKey.from_bytes(ekey[45:]), derivation, network)
     else:
         if ekey[45] != 0:
             raise ValueError(f'invalid extended private key prefix byte {ekey[45]}')
-        key = BIP32PrivateKey(ekey[46:], derivation, coin)
+        key = BIP32PrivateKey(ekey[46:], derivation, network)
 
     return key
 

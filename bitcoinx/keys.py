@@ -19,11 +19,11 @@ from electrumsv_secp256k1 import ffi, lib
 from .address import P2PKH_Address, P2PK_Output
 from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
-from .coin import Bitcoin, Coin
 from .consts import CURVE_ORDER
 from .errors import DecryptionError, InvalidSignature
 from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT, cachedproperty
+from .networks import Bitcoin, Network
 from .packing import pack_byte, pack_signed_message
 from .signature import (
     sign_der, sign_recoverable, verify_der_signature, verify_recoverable_signature,
@@ -51,16 +51,16 @@ def _message_hash(message, hasher):
 
 class PrivateKey:
 
-    def __init__(self, secret, compressed=True, coin=None):
+    def __init__(self, secret, compressed=True, coin=None, network=None):
         '''Construct a PrivateKey from 32 big-endian bytes.
 
         compressed is passed on to the PublicKey constructor to indicate whether the
         public key should return an compressed serialization.
 
-        A private key exists independently of any coin.  However it is useful to have a
-        default coin for certain methods, such as to_WIF().  A PrivateKey may be created
-        with an implicit coin (e.g. if created from WIF), so in such cases we remember it.
-        If there is no implicit coin and client code does specify one, Bitcoin is used.
+        A private key exists independently of any network.  However it is useful to have a
+        default network for certain methods, such as to_WIF().  A PrivateKey may be created
+        with an implicit network (e.g. if created from WIF), so in such cases we remember it.
+        If there is no implicit network and client code does specify one, Bitcoin is used.
         '''
         if isinstance(secret, bytes):
             if len(secret) != 32:
@@ -73,7 +73,7 @@ class PrivateKey:
         else:
             raise TypeError('private key must be bytes')
         self._compressed = compressed
-        self._coin = coin or Bitcoin
+        self._network = network or coin or Bitcoin
 
     def _secp256k1_public_key(self):
         '''Construct a wrapped secp256k1 PublicKey.'''
@@ -100,8 +100,12 @@ class PrivateKey:
         return sha256(self._secret).hex()
 
     def coin(self):
-        '''Returns an implied coin if there is one, otherwise Bitcoin.'''
-        return self._coin
+        '''Deprecated.'''
+        return self._network
+
+    def network(self):
+        '''The implied network.'''
+        return self._network
 
     def is_compressed(self):
         '''Return true if the public key serializes to 33 bytes.'''
@@ -110,7 +114,7 @@ class PrivateKey:
     @cachedproperty
     def public_key(self):
         '''Return a PublicKey corresponding to this private key.'''
-        return PublicKey(self._secp256k1_public_key(), self._compressed, self._coin)
+        return PublicKey(self._secp256k1_public_key(), self._compressed, self._network)
 
     def to_int(self):
         '''Return the private key's representation as an integer.'''
@@ -163,7 +167,7 @@ class PrivateKey:
         '''Construct a PriveKey from WIF text.'''
         raw = base58_decode_check(txt)
         if len(raw) == 33 or len(raw) == 34 and raw[-1] == 0x01:
-            return cls(raw[1:33], len(raw) == 34, Coin.from_WIF_byte(raw[0]))
+            return cls(raw[1:33], len(raw) == 34, Network.from_WIF_byte(raw[0]))
         raise ValueError('invalid WIF private key')
 
     @classmethod
@@ -175,14 +179,14 @@ class PrivateKey:
             return cls.from_minikey(txt)
         return cls.from_WIF(txt)
 
-    def to_WIF(self, *, compressed=None, coin=None):
-        '''Return the WIF form of the private key for the given coin.
+    def to_WIF(self, *, compressed=None, network=None, coin=None):
+        '''Return the WIF form of the private key for the given network.
 
         Set compressed to True to indicate the corresponding public key should be the
         compressed form.
         '''
-        coin = coin or self._coin
-        payload = pack_byte(coin.WIF_byte) + self._secret
+        network = network or coin or self._network
+        payload = pack_byte(network.WIF_byte) + self._secret
         if (self._compressed if compressed is None else compressed):
             payload += b'\x01'
         return base58_encode_check(payload)
@@ -192,14 +196,14 @@ class PrivateKey:
         secret = ffi.new('unsigned char [32]', self._secret)
         if not lib.secp256k1_ec_privkey_tweak_add(CONTEXT, secret, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PrivateKey(secret, self._compressed, self._coin)
+        return PrivateKey(secret, self._compressed, self._network)
 
     def multiply(self, value):
         '''Return a new PrivateKey instance multiplying value by our secret.'''
         secret = ffi.new('unsigned char [32]', self._secret)
         if not lib.secp256k1_ec_privkey_tweak_mul(CONTEXT, secret, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PrivateKey(secret, self._compressed, self._coin)
+        return PrivateKey(secret, self._compressed, self._network)
 
     def sign(self, message, hasher=sha256):
         '''Sign a message (more correctly its hash) and return a DER-encoded signature.
@@ -295,7 +299,7 @@ class PrivateKey:
 
 class PublicKey:
 
-    def __init__(self, public_key, compressed, coin=None):
+    def __init__(self, public_key, compressed, network=None, coin=None):
         '''Construct a PublicKey.
 
         This function is not intended to be called directly by user code; use instead one
@@ -303,15 +307,15 @@ class PublicKey:
 
         compressed is True if to_bytes() serializations yield public keys of 33 bytes.
 
-        A public key exists independently of any coin.  However it is useful to have a
-        default coin for certain methods, such as __str__().
-        If there is no implicit coin and client code does specify one, Bitcoin is used.
+        A public key exists independently of any network.  However it is useful to have a
+        default network for certain methods, such as __str__().
+        If there is no implicit network and client code does specify one, Bitcoin is used.
         '''
         if not repr(public_key).startswith("<cdata 'secp256k1_pubkey *'"):
             raise TypeError('PublicKey constructor requires a secp256k1_pubkey')
         self._public_key = public_key
         self._compressed = compressed
-        self._coin = coin or Bitcoin
+        self._network = network or coin or Bitcoin
 
     # Public methods
 
@@ -328,8 +332,12 @@ class PublicKey:
         return self.to_hex()
 
     def coin(self):
-        '''Returns an implied coin if there is one, otherwise Bitcoin.'''
-        return self._coin
+        '''Deprecated.'''
+        return self._network
+
+    def network(self):
+        '''The implied network.'''
+        return self._network
 
     def is_compressed(self):
         '''Return true if it serializes to 33 bytes.'''
@@ -404,10 +412,10 @@ class PublicKey:
         y_bytes = int_to_be_bytes(y, 32)
         return cls.from_bytes(b''.join((b'\x04', x_bytes, y_bytes)))
 
-    def to_address(self, *, compressed=None, coin=None):
+    def to_address(self, *, compressed=None, network=None, coin=None):
         '''Return the public key as a bitcoin P2PKH address.'''
-        coin = coin or self._coin
-        return P2PKH_Address(self.hash160(compressed=compressed), coin)
+        network = network or coin or Bitcoin
+        return P2PKH_Address(self.hash160(compressed=compressed), network)
 
     def add(self, value):
         '''Return a new PublicKey instance formed by adding value*G to this one.
@@ -416,7 +424,7 @@ class PublicKey:
         public_key = ffi.new('secp256k1_pubkey *', self._public_key[0])
         if not lib.secp256k1_ec_pubkey_tweak_add(CONTEXT, public_key, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PublicKey(public_key, self._compressed, self._coin)
+        return PublicKey(public_key, self._compressed, self._network)
 
     def multiply(self, value):
         '''Return a new PublicKey instance formed by multiplying this one by value (i.e. adding
@@ -427,13 +435,13 @@ class PublicKey:
         public_key = ffi.new('secp256k1_pubkey *', self._public_key[0])
         if not lib.secp256k1_ec_pubkey_tweak_mul(CONTEXT, public_key, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PublicKey(public_key, self._compressed, self._coin)
+        return PublicKey(public_key, self._compressed, self._network)
 
     @classmethod
     def combine_keys(cls, public_keys):
         '''Return a new PublicKey equal to the sum of the given PublicKeys.
 
-        The result takes its default compressed and coin attributes from the first public key.
+        The result takes its default compressed and network attributes from the first public key.
         '''
         lib_keys = [pk._public_key for pk in public_keys]
         if not lib_keys:
@@ -441,7 +449,7 @@ class PublicKey:
         public_key = ffi.new('secp256k1_pubkey *')
         if not lib.secp256k1_ec_pubkey_combine(CONTEXT, public_key, lib_keys, len(lib_keys)):
             raise ValueError('the sum of the public keys is invalid')
-        return cls(public_key, public_keys[0]._compressed, public_keys[0]._coin)
+        return cls(public_key, public_keys[0]._compressed, public_keys[0]._network)
 
     def verify_message(self, message_sig, message, hasher=double_sha256):
         '''Verify a message signed with bitcoind (and ElectrumSV).
@@ -516,11 +524,11 @@ class PublicKey:
 
     def complement(self):
         '''Returns a compressed public key if uncompressed, or vice versa.'''
-        return PublicKey(self._public_key, not self._compressed, self._coin)
+        return PublicKey(self._public_key, not self._compressed, self._network)
 
     def P2PK_script(self):
         '''Return a Script instance representing the P2PK script.'''
-        return P2PK_Output(self, self._coin).to_script()
+        return P2PK_Output(self, self._network).to_script()
 
     def P2PKH_script(self):
         '''Return a Script instance representing the P2PKH script.'''
