@@ -13,6 +13,7 @@ __all__ = (
 import attr
 import datetime
 from io import BytesIO
+from typing import List
 
 from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
 from .hashes import hash_to_hex_str, double_sha256
@@ -27,10 +28,10 @@ from .signature import SigHash
 @attr.s(slots=True)
 class Tx:
     '''A bitcoin transaction.'''
-    version = attr.ib()
-    inputs = attr.ib()
-    outputs = attr.ib()
-    locktime = attr.ib()
+    version: int = attr.ib()
+    inputs: List["TxInput"] = attr.ib()
+    outputs: List["TxOutput"] = attr.ib()
+    locktime: int = attr.ib()
 
     def is_coinbase(self):
         '''Return True iff the tx is a coinbase transaction.'''
@@ -248,10 +249,10 @@ class Tx:
 @attr.s(slots=True, repr=False)
 class TxInput:
     '''A bitcoin transaction input.'''
-    prev_hash = attr.ib()
-    prev_idx = attr.ib()
-    script_sig = attr.ib()
-    sequence = attr.ib()
+    prev_hash: bytes = attr.ib()
+    prev_idx: int = attr.ib()
+    script_sig: Script = attr.ib()
+    sequence: int = attr.ib()
 
     def is_coinbase(self):
         '''Return True iff the input is the single input of a coinbase transaction.'''
@@ -333,8 +334,8 @@ class TxInput:
 @attr.s(slots=True, repr=False)
 class TxOutput:
     '''A bitcoin transaction output.'''
-    value = attr.ib()
-    script_pubkey = attr.ib()
+    value: int = attr.ib()
+    script_pubkey: Script = attr.ib()
 
     @classmethod
     def read(cls, read):
