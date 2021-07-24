@@ -20,7 +20,7 @@ from bitcoinx.hashes import double_sha256, hash_to_hex_str, hash_to_value
 from bitcoinx.packing import unpack_header, unpack_le_uint32
 from bitcoinx.work import (
     bits_to_work, bits_to_target, required_bits_mainnet, required_bits_testnet,
-    required_bits_scaling_testnet
+    required_bits_regtest, required_bits_scaling_testnet
 )
 
 
@@ -204,8 +204,8 @@ BitcoinRegtest = Network(
     full_name='Bitcoin regression testnet',
     magic_hex='dab5bffa',
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
-    '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
-    required_bits=required_bits_testnet,
+    '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000',
+    required_bits=required_bits_regtest,
     BIP65_height=1_351,
     BIP66_height=1_251,
     CSV_height=576,
