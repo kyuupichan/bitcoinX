@@ -167,3 +167,9 @@ def required_bits_scaling_testnet(headers, chain, height, timestamp):
     # The `fPowAllowMinDifficultyBlocks` setting is disabled on STN, so we no longer
     # check it and adjust min pow after the DAA height.
     return _required_bits_testnet(headers, chain, height, timestamp, 2200, False)
+
+
+def required_bits_regtest(headers, chain, height, _timestamp):
+    # Regtest has no retargeting.
+    prior_raw_header = headers.raw_header_at_height(chain, height - 1)
+    return headers.coin.header_bits(prior_raw_header)
