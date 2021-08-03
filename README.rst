@@ -36,6 +36,7 @@ ChangeLog
 - networks have new attribtes: BIP65_height, BIP66_height, CSV_height, UAHF_height, DAA_height,
   genesis_height and magic.
 - new symbol networks_by_name
+- get attrs to play nicely with type checking.  Fix regtest data. (Roger Taylor)
 
 
 0.4.1
