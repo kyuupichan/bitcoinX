@@ -6,10 +6,13 @@
 #
 
 __all__ = (
-    'bits_to_target', 'target_to_bits', 'bits_to_work',
+    'bits_to_target', 'target_to_bits', 'bits_to_work', 'grind_header',
 )
 
 from functools import lru_cache
+
+from .hashes import double_sha256, hash_to_value
+from .packing import pack_header, pack_le_uint32
 
 
 @lru_cache()
@@ -173,3 +176,18 @@ def required_bits_regtest(headers, chain, height, _timestamp):
     # Regtest has no retargeting.
     prior_raw_header = headers.raw_header_at_height(chain, height - 1)
     return headers.coin.header_bits(prior_raw_header)
+
+
+def grind_header(version, prev_hash, merkle_root, timestamp, bits):
+    '''Grind the nonce until a header meeting the PoW target is found.  Return the header
+    bytes once found, otherwise None.'''
+    target = bits_to_target(bits)
+
+    header = bytearray(pack_header(version, prev_hash, merkle_root, timestamp, bits, 0))
+    for nonce in range(1 << 32):
+        header[76:80] = pack_le_uint32(nonce)
+        value = hash_to_value(double_sha256(header))
+        if value <= target:
+            return bytes(header)
+
+    return None

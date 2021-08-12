@@ -1,12 +1,14 @@
 import array
 import io
 import os
+import random
+import time
 
 import pytest
 
 from bitcoinx import (
     CheckPoint, Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet,
-    unpack_le_uint16, unpack_le_uint32, pack_le_uint32,
+    unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
 )
 from bitcoinx.work import *
 
@@ -227,3 +229,23 @@ def test_scalingtestnet(tmpdir):
         header = headers.header_at_height(chain, height)
         required_bits = headers.required_bits(chain, height, header.timestamp)
         assert required_bits == header.bits
+
+
+def test_grind_header():
+    target = 1 << 252
+    bits = target_to_bits(target)
+    version = 4
+    prev_hash = os.urandom(32)
+    tx_hashes = [os.urandom(32) for _ in range(random.randrange(1, 9))]
+    tx_merkle_root = merkle_root(tx_hashes)
+    timestamp = int(time.time())
+
+    raw = grind_header(version, prev_hash, tx_merkle_root, timestamp, bits)
+    header = BitcoinTestnet.deserialized_header(raw, 1)
+
+    assert header.version == version
+    assert header.prev_hash == prev_hash
+    assert header.merkle_root == tx_merkle_root
+    assert header.timestamp == timestamp
+    assert header.bits == bits
+    assert header.hash_value() <= target
