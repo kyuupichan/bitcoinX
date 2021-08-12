@@ -9,7 +9,7 @@ __all__ = (
     'pack_le_int32', 'pack_le_int64', 'pack_le_uint16', 'pack_le_uint32', 'pack_le_uint64',
     'pack_be_uint16', 'pack_be_uint32', 'pack_be_uint64',
     'pack_byte', 'pack_port', 'pack_varint', 'pack_varbytes', 'pack_list', 'varint_len',
-    'pack_signed_message',
+    'pack_signed_message', 'pack_header',
     'unpack_le_int32', 'unpack_le_int32_from',
     'unpack_le_int64', 'unpack_le_int64_from',
     'unpack_le_uint16', 'unpack_le_uint16_from',
@@ -51,6 +51,7 @@ pack_be_uint16 = struct_be_H.pack
 pack_be_uint32 = struct_be_I.pack
 pack_be_uint64 = struct_be_Q.pack
 pack_byte = structB.pack
+pack_header = struct_header.pack
 
 unpack_le_int32 = struct_le_i.unpack
 unpack_le_int32_from = struct_le_i.unpack_from
