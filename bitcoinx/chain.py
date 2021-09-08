@@ -258,20 +258,36 @@ class Headers:
 
     max_cache_size = 1000
 
-    def __init__(self, coin, storage, checkpoint):
-        self.coin = coin
-        self.checkpoint = checkpoint
-        self._storage = storage
+    def __init__(self, coin, file_path, checkpoint):
+        self.common_setup(coin, file_path, checkpoint)
         self._chains = []
         self._short_hashes = bytearray()
         self._heights = array.array('I')
         self._chain_indices = array.array('H')
-        self._cache = {}
 
         # Create the base chain out to the checkpoint
         self._add_chain(Chain.from_checkpoint(coin, checkpoint))
         # Read in chains from storage
         self._read_headers()
+
+    def common_setup(self, coin, file_path, checkpoint) -> None:
+        # `set_state` instantiates an object without calling `__init__`. This prepares the common
+        # state that `__init__` also needs to set.
+        self.coin = coin
+        self.checkpoint = checkpoint
+        self._storage = _HeaderStorage(file_path)
+        self._storage.open_or_create(checkpoint)
+        self._cache = {}
+
+    def __getstate__(self):
+        return (1, self._chains, self._short_hashes, self._heights, self._chain_indices)
+
+    def __setstate__(self, state):
+        # Note that `__init__` is not called here. Users should call `common_setup` on the
+        # object that `pickle.load(...)` returns to fully initialize it.
+        assert state[0] == 1
+        _version, self._chains, self._short_hashes, self._heights, self._chain_indices = \
+            state
 
     def _add_chain(self, chain):
         chain.index = len(self._chains)
@@ -331,12 +347,6 @@ class Headers:
     #
     # External API
     #
-
-    @classmethod
-    def from_file(cls, coin, file_path, checkpoint):
-        storage = _HeaderStorage(file_path)
-        storage.open_or_create(checkpoint)
-        return cls(coin, storage, checkpoint)
 
     def set_one(self, height, raw_header):
         '''Set the raw header for a height before the checkpoint.
