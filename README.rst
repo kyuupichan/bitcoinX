@@ -26,8 +26,15 @@ In time.
 ChangeLog
 =========
 
-0.4.2
+0.5.0
 -----
+
+- add merkle_root() and grind_header()
+- add pickling support for the Headers object (rt121212121)
+
+
+0.4.2/0.4.3
+-----------
 
 - Coin renamed to Network; all_coins to all_networks.  Those two symbols are deprecated and
   will be removed in 0.5.
