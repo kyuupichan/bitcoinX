@@ -56,7 +56,7 @@ class Wordlists:
 
     @classmethod
     def _read_wordlist(cls, filename, expected_count):
-        with open(data_file_path(filename)) as f:
+        with open(data_file_path(filename), encoding='utf-8') as f:
             text = f.read()
         return cls._text_to_wordlist(text, expected_count)
 
