@@ -1,10 +1,12 @@
 from os import urandom, path
+import pickle
 import random
 
 import pytest
 
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, pack_le_uint32, double_sha256, IncorrectBits, InsufficientPoW,
+    Bitcoin, BitcoinTestnet, pack_le_uint32, double_sha256, hex_str_to_hash, IncorrectBits,
+    InsufficientPoW,
 )
 from bitcoinx.chain import _HeaderStorage, Chain, Headers, CheckPoint, MissingHeader
 
@@ -42,7 +44,7 @@ def create_or_open_storage(tmpdir, checkpoint=None):
 
 def create_headers(tmpdir, checkpoint=None, coin=Bitcoin):
     checkpoint = checkpoint or genesis_checkpoint
-    return Headers.from_file(coin, storage_filename(tmpdir), checkpoint)
+    return Headers(coin, storage_filename(tmpdir), checkpoint)
 
 
 def create_chain(headers_obj, count, prior=None, good_bits=None):
@@ -426,3 +428,62 @@ class TestHeaders:
         with pytest.raises(InsufficientPoW) as e:
             headers_obj.connect(bad_header)
         assert 'exceeds its target' in str(e.value)
+
+    def test_pickle(self, tmpdir):
+        testnet_genesis_checkpoint = CheckPoint(BitcoinTestnet.genesis_header, 0, 0)
+        headers_obj = create_headers(tmpdir, testnet_genesis_checkpoint)
+
+        header1 = bytes.fromhex(
+            '0100000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea330900000000bac8b0fa'
+            '927c0ac8234287e33c5f74d38d354820e24756ad709d7038fc5f31f020e7494dffff001d03e4b672'
+        )
+        header2 = bytes.fromhex(
+            '0100000006128e87be8b1b4dea47a7247d5528d2702c96826c7a648497e773b800000000e241352e'
+            '3bec0a95a6217e10c3abb54adfa05abb12c126695595580fb92e222032e7494dffff001d00d23534'
+        )
+
+        headers_obj.connect(header1)
+        headers_obj.connect(header2)
+
+        pickle_bytes = pickle.dumps(headers_obj)
+
+        headers_obj2 = pickle.loads(pickle_bytes)
+        assert headers_obj._short_hashes == headers_obj2._short_hashes
+        assert headers_obj._heights == headers_obj2._heights
+        assert headers_obj._chain_indices == headers_obj2._chain_indices
+        assert len(headers_obj._chains) == len(headers_obj2._chains)
+
+        # Chain objects cannot be directly compared, so we need to do the legwork.
+        # This goes beyond what is needed here as it might be reused for a wider variety of
+        # cases if necessary.
+        for i in range(len(headers_obj._chains)):
+            original_chain = headers_obj._chains[i]
+            unpickled_chain = headers_obj2._chains[i]
+            assert original_chain.tip == unpickled_chain.tip
+            assert original_chain.work == unpickled_chain.work
+            assert original_chain.first_height == unpickled_chain.first_height
+            assert original_chain._header_indices == unpickled_chain._header_indices
+            if original_chain.parent is None:
+                assert unpickled_chain.parent is None
+            else:
+                assert unpickled_chain.parent is not None
+                original_index = headers_obj._chains.index(original_chain.parent)
+                unpickled_index = headers_obj2._chains.index(unpickled_chain.parent)
+                assert original_index == unpickled_index
+
+        header_1_hash_hex = '00000000b873e79784647a6c82962c70d228557d24a747ea4d1b8bbe878e1206'
+        header_1_hash = hex_str_to_hash(header_1_hash_hex)
+
+        headers_obj2.common_setup(headers_obj.coin, storage_filename(tmpdir),
+            testnet_genesis_checkpoint)
+
+        original_header, original_chain = headers_obj.lookup(header_1_hash)
+        unpickled_header, unpickled_chain = headers_obj2.lookup(header_1_hash)
+        assert original_header == unpickled_header
+
+        header_2_hash_hex = '000000006c02c8ea6e4ff69651f7fcde348fb9d557a06e6957b65552002a7820'
+        header_2_hash = hex_str_to_hash(header_2_hash_hex)
+
+        original_header, original_chain = headers_obj.lookup(header_2_hash)
+        unpickled_header, unpickled_chain = headers_obj2.lookup(header_2_hash)
+        assert original_header == unpickled_header
