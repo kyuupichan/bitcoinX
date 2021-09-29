@@ -228,13 +228,13 @@ class Tx:
         '''Return the sum of the output values.'''
         return sum(output.value for output in self.outputs)
 
-    def to_json(self, flags, coin):
+    def to_json(self, flags, network):
         result = {
             'version': self.version,
             'nInputs': len(self.inputs),
             'vin': [input.to_json(flags, index) for index, input in enumerate(self.inputs)],
             'nOutputs': len(self.outputs),
-            'vout': [output.to_json(flags, coin, index)
+            'vout': [output.to_json(flags, network, index)
                      for index, output in enumerate(self.outputs)],
             'locktime': self.locktime,
             'hash': self.hex_hash(),
@@ -371,10 +371,10 @@ class TxOutput:
     def from_hex(cls, hex_str):
         return cls.from_bytes(bytes.fromhex(hex_str))
 
-    def to_json(self, flags, coin, index=None):
+    def to_json(self, flags, network, index=None):
         result = {
             'value': self.value,
-            'script': self.script_pubkey.to_json(flags, False, coin),
+            'script': self.script_pubkey.to_json(flags, False, network),
         }
         if flags & JSONFlags.ENUMERATE_OUTPUTS and index is not None:
             result['nOutput'] = index

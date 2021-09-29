@@ -51,7 +51,7 @@ def _message_hash(message, hasher):
 
 class PrivateKey:
 
-    def __init__(self, secret, compressed=True, coin=None, network=None):
+    def __init__(self, secret, compressed=True, network=None):
         '''Construct a PrivateKey from 32 big-endian bytes.
 
         compressed is passed on to the PublicKey constructor to indicate whether the
@@ -73,7 +73,7 @@ class PrivateKey:
         else:
             raise TypeError('private key must be bytes')
         self._compressed = compressed
-        self._network = network or coin or Bitcoin
+        self._network = network or Bitcoin
 
     def _secp256k1_public_key(self):
         '''Construct a wrapped secp256k1 PublicKey.'''
@@ -98,10 +98,6 @@ class PrivateKey:
         '''Return a hash of the private key, out of an abundance of caution.
         To get a real string call to_hex() explicitly.'''
         return sha256(self._secret).hex()
-
-    def coin(self):
-        '''Deprecated.'''
-        return self._network
 
     def network(self):
         '''The implied network.'''
@@ -179,13 +175,13 @@ class PrivateKey:
             return cls.from_minikey(txt)
         return cls.from_WIF(txt)
 
-    def to_WIF(self, *, compressed=None, network=None, coin=None):
+    def to_WIF(self, *, compressed=None, network=None):
         '''Return the WIF form of the private key for the given network.
 
         Set compressed to True to indicate the corresponding public key should be the
         compressed form.
         '''
-        network = network or coin or self._network
+        network = network or self._network
         payload = pack_byte(network.WIF_byte) + self._secret
         if (self._compressed if compressed is None else compressed):
             payload += b'\x01'
@@ -299,7 +295,7 @@ class PrivateKey:
 
 class PublicKey:
 
-    def __init__(self, public_key, compressed, network=None, coin=None):
+    def __init__(self, public_key, compressed, network=None):
         '''Construct a PublicKey.
 
         This function is not intended to be called directly by user code; use instead one
@@ -315,7 +311,7 @@ class PublicKey:
             raise TypeError('PublicKey constructor requires a secp256k1_pubkey')
         self._public_key = public_key
         self._compressed = compressed
-        self._network = network or coin or Bitcoin
+        self._network = network or Bitcoin
 
     # Public methods
 
@@ -330,10 +326,6 @@ class PublicKey:
 
     def __str__(self):
         return self.to_hex()
-
-    def coin(self):
-        '''Deprecated.'''
-        return self._network
 
     def network(self):
         '''The implied network.'''
@@ -412,9 +404,9 @@ class PublicKey:
         y_bytes = int_to_be_bytes(y, 32)
         return cls.from_bytes(b''.join((b'\x04', x_bytes, y_bytes)))
 
-    def to_address(self, *, compressed=None, network=None, coin=None):
+    def to_address(self, *, compressed=None, network=None):
         '''Return the public key as a bitcoin P2PKH address.'''
-        network = network or coin or Bitcoin
+        network = network or Bitcoin
         return P2PKH_Address(self.hash160(compressed=compressed), network)
 
     def add(self, value):

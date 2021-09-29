@@ -25,19 +25,19 @@ from .script import Script, Ops, push_item, push_int, item_to_int
 
 class Address(ABC):
 
-    def __init__(self, coin):
-        self._coin = coin
+    def __init__(self, network):
+        self._network = network
 
     @abstractmethod
     def to_string(self):
         pass
 
     @classmethod
-    def from_string(cls, text, coin):
+    def from_string(cls, text, network):
         '''Construct from an address string.'''
         if len(text) > 35:
             try:
-                return cls._from_cashaddr_string(text, coin)
+                return cls._from_cashaddr_string(text, network)
             except ValueError:
                 pass
 
@@ -47,18 +47,18 @@ class Address(ABC):
             raise ValueError(f'invalid address: {text}')
 
         verbyte, hash160 = raw[0], raw[1:]
-        if verbyte == coin.P2PKH_verbyte:
-            return P2PKH_Address(hash160, coin)
-        if verbyte == coin.P2SH_verbyte:
-            return P2SH_Address(hash160, coin)
+        if verbyte == network.P2PKH_verbyte:
+            return P2PKH_Address(hash160, network)
+        if verbyte == network.P2SH_verbyte:
+            return P2SH_Address(hash160, network)
 
-        raise ValueError(f'unknown version byte {verbyte} for coin {coin.name}')
+        raise ValueError(f'unknown version byte {verbyte} for network {network.name}')
 
     @classmethod
-    def _from_cashaddr_string(cls, text, coin):
+    def _from_cashaddr_string(cls, text, network):
         '''Construct from a cashaddress string.'''
-        coin = coin or Bitcoin
-        prefix = coin.cashaddr_prefix
+        network = network or Bitcoin
+        prefix = network.cashaddr_prefix
         if text.upper() == text:
             prefix = prefix.upper()
         if not text.startswith(prefix + ':'):
@@ -67,11 +67,11 @@ class Address(ABC):
         assert prefix == addr_prefix
 
         if kind == cashaddr.PUBKEY_TYPE:
-            return P2PKH_Address(hash160, coin)
-        return P2SH_Address(hash160, coin)
+            return P2PKH_Address(hash160, network)
+        return P2SH_Address(hash160, network)
 
-    def coin(self):
-        return self._coin
+    def network(self):
+        return self._network
 
     def __str__(self):
         return self.to_string()
@@ -81,8 +81,8 @@ class P2PKH_Address(Address):
 
     KIND = 'pubkeyhash'
 
-    def __init__(self, hash160, coin):
-        super().__init__(coin)
+    def __init__(self, hash160, network):
+        super().__init__(network)
         self._hash160 = _validate_hash160(hash160)
 
     def __eq__(self, other):
@@ -92,7 +92,7 @@ class P2PKH_Address(Address):
         return hash(self._hash160) + 2
 
     def to_string(self):
-        return base58_encode_check(pack_byte(self._coin.P2PKH_verbyte) + self._hash160)
+        return base58_encode_check(pack_byte(self._network.P2PKH_verbyte) + self._hash160)
 
     def hash160(self):
         return self._hash160
@@ -110,8 +110,8 @@ class P2PKH_Address(Address):
 
 class P2SH_Address(Address):
 
-    def __init__(self, hash160, coin):
-        super().__init__(coin)
+    def __init__(self, hash160, network):
+        super().__init__(network)
         self._hash160 = _validate_hash160(hash160)
 
     def __eq__(self, other):
@@ -121,7 +121,7 @@ class P2SH_Address(Address):
         return hash(self._hash160) + 3
 
     def to_string(self):
-        return base58_encode_check(pack_byte(self._coin.P2SH_verbyte) + self._hash160)
+        return base58_encode_check(pack_byte(self._network.P2SH_verbyte) + self._hash160)
 
     def hash160(self):
         return self._hash160
@@ -138,9 +138,9 @@ class P2PK_Output:
 
     KIND = 'pubkey'
 
-    def __init__(self, public_key, coin):
+    def __init__(self, public_key, network):
         self.public_key = _to_public_key(public_key)
-        self._coin = coin
+        self._network = network
 
     def __eq__(self, other):
         return isinstance(other, P2PK_Output) and self.public_key == other.public_key
@@ -152,7 +152,7 @@ class P2PK_Output:
         return self.public_key.hash160()
 
     def to_address(self):
-        return self.public_key.to_address(coin=self._coin)
+        return self.public_key.to_address(network=self._network)
 
     def to_script_bytes(self):
         return push_item(self.public_key.to_bytes()) + pack_byte(Ops.OP_CHECKSIG)

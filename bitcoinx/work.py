@@ -65,7 +65,7 @@ def bits_to_work(bits):
 def _required_bits_fortnightly(headers, chain, height):
     '''Bitcoin's original DAA.'''
     if height == 0:
-        return headers.coin.genesis_bits
+        return headers.network.genesis_bits
     prev = headers.header_at_height(chain, height - 1)
     if height % 2016:
         return prev.bits
@@ -78,7 +78,7 @@ def _required_bits_fortnightly(headers, chain, height):
 
     prior_target = bits_to_target(prev.bits)
     new_target = (prior_target * adj_period) // target_period
-    return target_to_bits(min(new_target, headers.coin.max_target))
+    return target_to_bits(min(new_target, headers.network.max_target))
 
 
 def _required_bits_DAA(headers, chain, height):
@@ -104,7 +104,7 @@ def _required_bits_DAA(headers, chain, height):
 
     Wn = (period_work * 600) // period_time
     new_target = (1 << 256) // Wn - 1
-    return target_to_bits(min(new_target, headers.coin.max_target))
+    return target_to_bits(min(new_target, headers.network.max_target))
 
 
 def _required_bits_EDA(headers, chain, height):
@@ -121,7 +121,7 @@ def _required_bits_EDA(headers, chain, height):
     # Increase target by 25% (reducing difficulty by 20%).
     new_target = bits_to_target(bits)
     new_target += new_target >> 2
-    return target_to_bits(min(new_target, headers.coin.max_target))
+    return target_to_bits(min(new_target, headers.network.max_target))
 
 
 def required_bits_mainnet(headers, chain, height, _timestamp=None):
@@ -136,9 +136,9 @@ def required_bits_mainnet(headers, chain, height, _timestamp=None):
 
 def _required_bits_testnet(headers, chain, height, timestamp, daa_height, has_daa_minpow):
     def prior_non_special_bits():
-        genesis_bits = headers.coin.genesis_bits
+        genesis_bits = headers.network.genesis_bits
         raw_header = headers.raw_header_at_height
-        header_bits = headers.coin.header_bits
+        header_bits = headers.network.header_bits
         for test_height in range(height - 1, -1, -1):
             bits = header_bits(raw_header(chain, test_height))
             if test_height % 2016 == 0 or bits != genesis_bits:
@@ -146,7 +146,7 @@ def _required_bits_testnet(headers, chain, height, timestamp, daa_height, has_da
         # impossible to fall through here
 
     prior_raw_header = headers.raw_header_at_height(chain, height - 1)
-    prior_timestamp = headers.coin.header_timestamp(prior_raw_header)
+    prior_timestamp = headers.network.header_timestamp(prior_raw_header)
     is_slow = (timestamp - prior_timestamp) > 20 * 60
 
     if height <= daa_height:
@@ -154,11 +154,11 @@ def _required_bits_testnet(headers, chain, height, timestamp, daa_height, has_da
         if height % 2016 == 0:
             return _required_bits_fortnightly(headers, chain, height)
         if is_slow:
-            return headers.coin.genesis_bits
+            return headers.network.genesis_bits
         return prior_non_special_bits()
     else:
         if has_daa_minpow and is_slow:
-            return headers.coin.genesis_bits
+            return headers.network.genesis_bits
         return _required_bits_DAA(headers, chain, height)
 
 
@@ -175,7 +175,7 @@ def required_bits_scaling_testnet(headers, chain, height, timestamp):
 def required_bits_regtest(headers, chain, height, _timestamp):
     # Regtest has no retargeting.
     prior_raw_header = headers.raw_header_at_height(chain, height - 1)
-    return headers.coin.header_bits(prior_raw_header)
+    return headers.network.header_bits(prior_raw_header)
 
 
 def grind_header(version, prev_hash, merkle_root, timestamp, bits):

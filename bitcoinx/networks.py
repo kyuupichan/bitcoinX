@@ -10,8 +10,6 @@
 __all__ = (
     'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'BitcoinRegtest',
     'Network', 'Header', 'all_networks', 'networks_by_name',
-    # deprecated
-    'all_coins', 'Coin',
 )
 
 import attr
@@ -116,20 +114,20 @@ class Network:
 
     @classmethod
     def from_WIF_byte(cls, WIF_byte):
-        '''Return the coin using the given WIF byte.'''
-        for coin in all_coins:
-            if WIF_byte == coin.WIF_byte:
-                return coin
+        '''Return the network using the given WIF byte.'''
+        for network in all_networks:
+            if WIF_byte == network.WIF_byte:
+                return network
         raise ValueError(f'invalid WIF byte {WIF_byte}')
 
     @classmethod
     def lookup_xver_bytes(cls, xver_bytes):
-        '''Returns a (coin, is_public_key) pair.'''
-        for coin in all_coins:
-            if xver_bytes == coin.xpub_verbytes:
-                return coin, True
-            if xver_bytes == coin.xprv_verbytes:
-                return coin, False
+        '''Returns a (network, is_public_key) pair.'''
+        for network in all_networks:
+            if xver_bytes == network.xpub_verbytes:
+                return network, True
+            if xver_bytes == network.xprv_verbytes:
+                return network, False
         raise ValueError(f'invalid xver_bytes {xver_bytes}')
 
 
@@ -224,7 +222,4 @@ BitcoinRegtest = Network(
 all_networks = (Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, BitcoinRegtest)
 networks_by_name = {network.name: network for network in all_networks}
 
-# Legacy; deprecated
-Coin = Network
 # rt12 -- Scaling testnet has same settings as regular testnet, so will cause conflicts.
-all_coins = all_networks
