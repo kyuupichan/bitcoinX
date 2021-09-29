@@ -13,22 +13,22 @@ from bitcoinx.address import *
 
 class TestAddress:
 
-    @pytest.mark.parametrize("string,kind,coin,equal", (
+    @pytest.mark.parametrize("string,kind,network,equal", (
         ('1111111111111111111114oLvT2', P2PKH_Address, Bitcoin, P2PKH_Address(bytes(20), Bitcoin)),
         ('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', P2PKH_Address, BitcoinTestnet,
-         P2PKH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)),
+         P2PKH_Address(int_to_be_bytes(1, 20), network=BitcoinTestnet)),
         ('31h1vYVSYuKP6AhS86fbRdMw9XHieotbST', P2SH_Address, Bitcoin,
          P2SH_Address(bytes(20), Bitcoin)),
         ('2MsFDzHRUAMpjHxKyoEHU3aMCMsVtXMsfu8', P2SH_Address, BitcoinTestnet,
-         P2SH_Address(int_to_be_bytes(1, 20), coin=BitcoinTestnet)),
+         P2SH_Address(int_to_be_bytes(1, 20), network=BitcoinTestnet)),
     ))
-    def test_from_string(self, string, kind, coin, equal):
-        address = Address.from_string(string, coin)
+    def test_from_string(self, string, kind, network, equal):
+        address = Address.from_string(string, network)
         assert isinstance(address, kind)
-        assert address.coin() is coin
+        assert address.network() is network
         assert address == equal
 
-    def test_from_string_coin(self):
+    def test_from_string_network(self):
         assert Address.from_string('1111111111111111111114oLvT2', Bitcoin).to_string() == \
             '1111111111111111111114oLvT2'
         assert Address.from_string('mfWxJ45yp2SFn7UciZyNpvDKrzbi36LaVX', BitcoinTestnet) \
@@ -49,7 +49,7 @@ class TestAddress:
         with pytest.raises(ValueError):
             Address.from_string('mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib', Bitcoin)
 
-    @pytest.mark.parametrize("string,kind,coin,equal", (
+    @pytest.mark.parametrize("string,kind,network,equal", (
         ('qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', P2PKH_Address, Bitcoin,
          '1CQGN9WnzdYeFhT2YDS4xkm94PVzwFByC8'),
         ('pqcnpyfktqzkm9su04empn3ju8e2k4j74q2zzn7h0f', P2SH_Address, Bitcoin,
@@ -57,10 +57,10 @@ class TestAddress:
         ('PQCNPYFKTQZKM9SU04EMPN3JU8E2K4J74Q2ZZN7H0F', P2SH_Address, Bitcoin,
          '36B7DTHvi58L3rq9Ni3jRVxBkeJa3R5EC1'),
     ))
-    def test_cashaddr(self, string, kind, coin, equal):
-        address = Address.from_string(string, coin)
+    def test_cashaddr(self, string, kind, network, equal):
+        address = Address.from_string(string, network)
         assert isinstance(address, kind)
-        assert address.coin() is coin
+        assert address.network() is network
         assert address.to_string() == equal
 
     def test_cashaddr_bad(self):
@@ -92,9 +92,9 @@ class TestP2PKH_Address:
         with pytest.raises(ValueError):
             P2PKH_Address(bytes(19), Bitcoin)
 
-    def test_coin(self):
+    def test_network(self):
         address = P2PKH_Address(bytes(20), BitcoinTestnet)
-        assert address.coin() is BitcoinTestnet
+        assert address.network() is BitcoinTestnet
 
     def test_hash160(self):
         data = os.urandom(20)
@@ -147,9 +147,9 @@ class TestP2SH_Address:
         with pytest.raises(ValueError):
             P2SH_Address(bytes(19), Bitcoin)
 
-    def test_coin(self):
+    def test_network(self):
         address = P2SH_Address(bytes(20), BitcoinTestnet)
-        assert address.coin() is BitcoinTestnet
+        assert address.network() is BitcoinTestnet
 
     def test_hash160(self):
         data = os.urandom(20)

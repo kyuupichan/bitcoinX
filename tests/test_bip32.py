@@ -54,7 +54,7 @@ class TestBIP32Derivation:
 class TestBIP32PublicKey:
 
     def test_from_to_extended_key_string(self):
-        assert mpubkey.coin() is Bitcoin
+        assert mpubkey.network() is Bitcoin
         d = mpubkey.derivation()
         assert d.n == 0
         assert d.depth == 0
@@ -71,7 +71,7 @@ class TestBIP32PublicKey:
         assert mpubkey_testnet.to_extended_key_string() == MXPUB_TESTNET
         chg_master = mpubkey.child(1)
         chg5 = chg_master.child(5)
-        assert chg5.to_address(coin=Bitcoin) == Address.from_string(
+        assert chg5.to_address(network=Bitcoin) == Address.from_string(
             '1BsEFqGtcZnVBbPeimcfAFTitQdTLvUXeX', Bitcoin)
         assert chg5.to_extended_key_string() == (
             'xpub6AzPNZ1SAS7zmSnj6gakQ6tAKPzRVdQzieL3eCnoeT3A89nJaJKuUYW'
@@ -101,7 +101,7 @@ class TestBIP32PublicKey:
         rec19 = rec_master.child(19)
         assert rec19.to_address().to_string() == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
         chg0 = chg_master.child(0)
-        assert chg0.to_address(coin=Bitcoin).to_string() == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
+        assert chg0.to_address(network=Bitcoin).to_string() == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
 
         with pytest.raises(ValueError):
             mpubkey.child(-1)
@@ -117,11 +117,11 @@ class TestBIP32PublicKey:
         chg_master = mpubkey.child_safe(1)
         assert chg_master.to_address().to_string() == '1G8YpbkZd7bySHjpdQK3kMcHhc6BvHr5xy'
         rec0 = rec_master.child_safe(0)
-        assert rec0.to_address(coin=Bitcoin).to_string() == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
+        assert rec0.to_address(network=Bitcoin).to_string() == '13nASW7rdE2dnSycrAP9VePhRmaLg9ziaw'
         rec19 = rec_master.child_safe(19)
-        assert rec19.to_address(coin=Bitcoin).to_string() == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
+        assert rec19.to_address(network=Bitcoin).to_string() == '15QrXnPQ8aS8yCpA5tJkyvXfXpw8F8k3fB'
         chg0 = chg_master.child_safe(0)
-        assert chg0.to_address(coin=Bitcoin).to_string() == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
+        assert chg0.to_address(network=Bitcoin).to_string() == '1L6fNSVhWjuMKNDigA99CweGEWtcqqhzDj'
 
         with pytest.raises(ValueError):
             mpubkey.child_safe(-1)
@@ -154,7 +154,7 @@ class TestBIP32PublicKey:
         BIP32PublicKey.child = saved_child
 
     def test_address(self):
-        assert mpubkey.to_address(coin=Bitcoin) == Address.from_string(
+        assert mpubkey.to_address(network=Bitcoin) == Address.from_string(
             '1ENCpq6mbb1KYcaodGG7eTpSpYvPnDjFmU', Bitcoin)
 
     def test_identifier(self):
@@ -179,7 +179,7 @@ class TestPrivKey:
     def test_from_to_extended_key_string(self):
         d = mprivkey.derivation()
         assert d == mpubkey.derivation()
-        assert mprivkey.coin() is Bitcoin
+        assert mprivkey.network() is Bitcoin
         assert mprivkey.public_key == mpubkey
 
     def test_to_int(self):
@@ -218,7 +218,8 @@ class TestPrivKey:
         assert mprivkey_testnet.to_extended_key_string() == MXPRV_TESTNET
         chg_master = mprivkey.child(1)
         chg5 = chg_master.child(5)
-        assert chg5.to_WIF(coin=Bitcoin) == 'L5kTYMuajTGWdYiMoD4V8k6LS4Bg3HFMA5UGTfxG9Wh7UKu9CHFC'
+        assert chg5.to_WIF(network=Bitcoin) == \
+            'L5kTYMuajTGWdYiMoD4V8k6LS4Bg3HFMA5UGTfxG9Wh7UKu9CHFC'
         ext_key_base58 = chg5.to_extended_key_string()
         assert ext_key_base58 == (
             'xprv9x12y3UYL4ZhYxiFzf3k2xwRmN9w6Ah9MRQSqpPC67WBFMTA2m1evkCKi'

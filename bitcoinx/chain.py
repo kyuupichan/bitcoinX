@@ -56,8 +56,8 @@ class Chain:
         self._header_indices.append(tip_header_index)
 
     @classmethod
-    def from_checkpoint(cls, coin, checkpoint):
-        tip = coin.deserialized_header(checkpoint.raw_header, checkpoint.height)
+    def from_checkpoint(cls, network, checkpoint):
+        tip = network.deserialized_header(checkpoint.raw_header, checkpoint.height)
         return cls(None, tip, tip.height, checkpoint.prev_work)
 
     def append(self, header, header_index):
@@ -258,22 +258,22 @@ class Headers:
 
     max_cache_size = 1000
 
-    def __init__(self, coin, file_path, checkpoint):
-        self.common_setup(coin, file_path, checkpoint)
+    def __init__(self, network, file_path, checkpoint):
+        self.common_setup(network, file_path, checkpoint)
         self._chains = []
         self._short_hashes = bytearray()
         self._heights = array.array('I')
         self._chain_indices = array.array('H')
 
         # Create the base chain out to the checkpoint
-        self._add_chain(Chain.from_checkpoint(coin, checkpoint))
+        self._add_chain(Chain.from_checkpoint(network, checkpoint))
         # Read in chains from storage
         self._read_headers()
 
-    def common_setup(self, coin, file_path, checkpoint) -> None:
+    def common_setup(self, network, file_path, checkpoint) -> None:
         # `set_state` instantiates an object without calling `__init__`. This prepares the common
         # state that `__init__` also needs to set.
-        self.coin = coin
+        self.network = network
         self.checkpoint = checkpoint
         self._storage = _HeaderStorage(file_path)
         self._storage.open_or_create(checkpoint)
@@ -316,7 +316,7 @@ class Headers:
             if index % 4 == 0:
                 our_index = index // 4
                 raw_header = self._storage[our_index + self.checkpoint.height]
-                if self.coin.header_hash(raw_header) == header_hash:
+                if self.network.header_hash(raw_header) == header_hash:
                     return raw_header, our_index
             if index == -1:
                 raise MissingHeader(f'no header with hash {hash_to_hex_str(header_hash)}')
@@ -332,7 +332,7 @@ class Headers:
         '''Read a single header from storage.  The header must connect, either to extend an
         existing chain or create a new one.  Return the chain the header lies on.
         '''
-        new_tip = self.coin.deserialized_header(self._storage[header_index], -1)
+        new_tip = self.network.deserialized_header(self._storage[header_index], -1)
         prev_header, chain = self.lookup(new_tip.prev_hash)
         new_tip.height = prev_header.height + 1
         if chain.tip.hash == prev_header.hash:
@@ -360,7 +360,7 @@ class Headers:
         '''Returns the chainwork for the half-open range [start_height, end_height).'''
         raw_header = self._storage.__getitem__
         get_header_index = chain.header_index
-        header_work = self.coin.header_work
+        header_work = self.network.header_work
         return sum(header_work(raw_header(get_header_index(h)))
                    for h in range(start_height, end_height))
 
@@ -373,14 +373,14 @@ class Headers:
 
     def header_at_height(self, chain, height):
         raw_header = self.raw_header_at_height(chain, height)
-        return self.coin.deserialized_header(raw_header, height)
+        return self.network.deserialized_header(raw_header, height)
 
     def lookup(self, header_hash):
         result = self._cache.get(header_hash)
         if result:
             return result
         raw_header, our_index = self._header_index_slow(header_hash)
-        header = self.coin.deserialized_header(raw_header, self._heights[our_index])
+        header = self.network.deserialized_header(raw_header, self._heights[our_index])
         return header, self._chains[self._chain_indices[our_index]]
 
     def connect(self, raw_header):
@@ -395,7 +395,7 @@ class Headers:
         header's bits don't meet the chain's rules, and InsufficientPow if the header's
         hash doesn't meet the target.
         '''
-        header = self.coin.deserialized_header(raw_header, -1)
+        header = self.network.deserialized_header(raw_header, -1)
         prev_header, chain = self.lookup(header.prev_hash)
         header.height = prev_header.height + 1
         # If the chain tip is the prior header then this header is new.  Otherwise we must
@@ -436,7 +436,7 @@ class Headers:
     def median_time_past(self, chain, height):
         '''Returns the median time past on chain at height.'''
         raw_header = self.raw_header_at_height
-        timestamp = self.coin.header_timestamp
+        timestamp = self.network.header_timestamp
         timestamps = [timestamp(raw_header(chain, h))
                       for h in range(height, max(-1, height - 11), -1)]
         return sorted(timestamps)[len(timestamps) // 2]
@@ -444,7 +444,7 @@ class Headers:
     def required_bits(self, chain, height, timestamp=None):
         '''Returns the required bits for a new header at the given height with the
         given timestamp.  Testnet uses the timestamp; mainnet does not.'''
-        return self.coin.required_bits(self, chain, height, timestamp)
+        return self.network.required_bits(self, chain, height, timestamp)
 
     def flush(self):
         self._storage.flush()

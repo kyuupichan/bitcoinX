@@ -126,7 +126,7 @@ def test_mainnet_2016_headers(tmpdir):
     assert headers.required_bits(chain, height, ) == bounded_bits
 
 
-def setup_compressed_headers(tmpdir, headers_file, ts_offset, coin):
+def setup_compressed_headers(tmpdir, headers_file, ts_offset, network):
     with open(os.path.join(data_dir, headers_file), 'rb') as f:
         raw_data = f.read()
 
@@ -163,7 +163,7 @@ def setup_compressed_headers(tmpdir, headers_file, ts_offset, coin):
     raw_header[0] = 1
 
     checkpoint = CheckPoint(raw_header, first_height + header_count - 1, 0)
-    headers = create_headers(tmpdir, checkpoint, coin=coin)
+    headers = create_headers(tmpdir, checkpoint, network=network)
 
     for height, (bits, timestamp) in enumerate(zip(all_bits, all_times), start=first_height):
         raw_header[68:72] = pack_le_uint32(timestamp)
@@ -173,7 +173,7 @@ def setup_compressed_headers(tmpdir, headers_file, ts_offset, coin):
     return headers
 
 
-def setup_gzipped_headers(tmpdir, headers_file, coin):
+def setup_gzipped_headers(tmpdir, headers_file, network):
     import gzip
     with gzip.open(os.path.join(data_dir, headers_file), 'rb') as f:
         first_height = unpack_le_uint32(f.read(4))[0]
@@ -183,7 +183,7 @@ def setup_gzipped_headers(tmpdir, headers_file, coin):
         raw_header[0] = 1
 
         checkpoint = CheckPoint(raw_header, first_height + header_count - 1, 0)
-        headers = create_headers(tmpdir, checkpoint, coin=coin)
+        headers = create_headers(tmpdir, checkpoint, network=network)
 
         for height in range(first_height, header_count):
             headers.set_one(height, f.read(80))

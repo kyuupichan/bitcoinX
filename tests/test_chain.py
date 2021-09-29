@@ -42,9 +42,9 @@ def create_or_open_storage(tmpdir, checkpoint=None):
     return hs
 
 
-def create_headers(tmpdir, checkpoint=None, coin=Bitcoin):
+def create_headers(tmpdir, checkpoint=None, network=Bitcoin):
     checkpoint = checkpoint or genesis_checkpoint
-    return Headers(coin, storage_filename(tmpdir), checkpoint)
+    return Headers(network, storage_filename(tmpdir), checkpoint)
 
 
 def create_chain(headers_obj, count, prior=None, good_bits=None):
@@ -262,7 +262,7 @@ class TestHeaders:
 
     def test_constructor(self, tmpdir):
         headers = create_headers(tmpdir)
-        assert headers.coin is Bitcoin
+        assert headers.network is Bitcoin
         assert len(headers) == len(headers._storage)
         assert len(headers.chains()) == 1
         chain = headers.chains()[0]
@@ -474,7 +474,7 @@ class TestHeaders:
         header_1_hash_hex = '00000000b873e79784647a6c82962c70d228557d24a747ea4d1b8bbe878e1206'
         header_1_hash = hex_str_to_hash(header_1_hash_hex)
 
-        headers_obj2.common_setup(headers_obj.coin, storage_filename(tmpdir),
+        headers_obj2.common_setup(headers_obj.network, storage_filename(tmpdir),
             testnet_genesis_checkpoint)
 
         original_header, original_chain = headers_obj.lookup(header_1_hash)

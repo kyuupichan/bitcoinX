@@ -339,17 +339,17 @@ def _classify_script(script, templates, unknown_class):
     return unknown_class()
 
 
-def _coin_output_script_templates(coin):
+def _network_output_script_templates(network):
     from .address import (P2PKH_Address, P2SH_Address, P2PK_Output, OP_RETURN_Output,
                           P2MultiSig_Output)
 
-    # Addresses have Coin-specific constructors
+    # Addresses have Network-specific constructors
     return (
         (bytes((Ops.OP_DUP, Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUALVERIFY,
-                Ops.OP_CHECKSIG)), partial(P2PKH_Address, coin=coin)),
+                Ops.OP_CHECKSIG)), partial(P2PKH_Address, network=network)),
         (bytes((Ops.OP_HASH160, Ops.OP_PUSHDATA1, Ops.OP_EQUAL)),
-         partial(P2SH_Address, coin=coin)),
-        (bytes((Ops.OP_PUSHDATA1, Ops.OP_CHECKSIG)), partial(P2PK_Output, coin=coin)),
+         partial(P2SH_Address, network=network)),
+        (bytes((Ops.OP_PUSHDATA1, Ops.OP_CHECKSIG)), partial(P2PK_Output, network=network)),
         # Note this loses script ops other than pushdata
         (re.compile(pack_byte(Ops.OP_PUSHDATA1) + b'*' + pack_byte(Ops.OP_RETURN)),
          OP_RETURN_Output.from_template),
@@ -358,12 +358,12 @@ def _coin_output_script_templates(coin):
     )
 
 
-def classify_output_script(script, coin):
+def classify_output_script(script, network):
     from .address import Unknown_Output
 
-    templates = coin.output_script_templates
+    templates = network.output_script_templates
     if templates is None:
-        templates = coin.output_script_templates = _coin_output_script_templates(coin)
+        templates = network.output_script_templates = _network_output_script_templates(network)
     return _classify_script(script, templates, Unknown_Output)
 
 
@@ -593,9 +593,9 @@ class Script:
         '''Return the script as a bytes() object.'''
         return self._script
 
-    def to_json(self, flags, is_script_sig, coin):
+    def to_json(self, flags, is_script_sig, network):
         '''Return the script as an (unconverted) json object; flags controls the output and is a
-        JSONFlags instance.  Coin is used when displaying addresses.'''
+        JSONFlags instance.  Network is used when displaying addresses.'''
         result = {
             'asm': self.to_asm(decode_sighash=is_script_sig),
             'hex': self.to_hex(),
@@ -603,7 +603,7 @@ class Script:
         if not is_script_sig and flags & JSONFlags.CLASSIFY_OUTPUT_SCRIPT:
             from .address import P2PKH_Address, P2PK_Output
 
-            output = classify_output_script(self, coin)
+            output = classify_output_script(self, network)
             result['type'] = output.KIND
             if isinstance(output, P2PKH_Address):
                 result['address'] = output.to_string()
