@@ -26,6 +26,12 @@ In time.
 ChangeLog
 =========
 
+0.6.0
+-----
+
+- remove deprecated symbols and remaining references to coin; they are now networks
+
+
 0.5.0
 -----
 
