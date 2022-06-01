@@ -19,6 +19,7 @@ import hashlib
 import hmac
 
 from .misc import chunks
+from Cryptodome.Hash import RIPEMD160
 
 
 _sha1 = hashlib.sha1
@@ -46,7 +47,7 @@ def sha512(x):
 
 def ripemd160(x):
     '''Simple wrapper of hashlib ripemd160.'''
-    h = _new_hash('ripemd160')
+    h = RIPEMD160.new()
     h.update(x)
     return h.digest()
 
