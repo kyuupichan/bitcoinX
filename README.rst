@@ -26,6 +26,12 @@ In time.
 ChangeLog
 =========
 
+0.7.0
+-----
+
+- as OpenSSL has removed ripemd160, take it from pycryptodomex, now a required package.  Remove
+  dependency on pyaes as a result as pycryptodomex can do AES too.
+
 0.6.0
 -----
 
