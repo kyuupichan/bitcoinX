@@ -1,4 +1,5 @@
 from .address import *
+from .aes import *
 from .base58 import *
 from .bip32 import *
 from .chain import *
@@ -21,6 +22,7 @@ _version = tuple(int(part) for part in _version_str.split('.'))
 
 __all__ = sum((
     address.__all__,
+    aes.__all__,
     base58.__all__,
     bip32.__all__,
     chain.__all__,

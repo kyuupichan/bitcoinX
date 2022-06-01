@@ -5,7 +5,7 @@ from bitcoinx import aes
 
 class TestAES:
 
-    def test_encrypt_decrypt(self, AES_impl):
+    def test_encrypt_decrypt(self):
         aeskey = os.urandom(32)
         aes_key = aeskey[:16]
         aes_iv = aeskey[16:]

@@ -461,7 +461,7 @@ class TestPrivateKey:
 
         assert our_P == their_P
 
-    def test_decrypt_message_fails(self, AES_impl):
+    def test_decrypt_message_fails(self):
         priv = PrivateKey(bytes(range(32)))
         P = priv.public_key
         msg = b'BitcoinSV'
@@ -970,7 +970,7 @@ class TestPublicKey:
             with pytest.raises(InvalidSignature):
                 P.verify_message(bytes(msg_sig), msg)
 
-    def test_encrypt_message_and_to_base64(self, AES_impl):
+    def test_encrypt_message_and_to_base64(self):
         bmsg = b'BitcoinSV'
         # Test both compressed and uncompressed pubkeys
         for msg in (bmsg, bmsg.decode()):
@@ -991,7 +991,7 @@ class TestPublicKey:
                 # This tests the default magic of both functions is b'BIE1'
                 assert priv.decrypt_message(enc_msg, magic=b'BIE1') == bmsg
 
-    def test_encrypt_message_magic(self, AES_impl):
+    def test_encrypt_message_magic(self):
         priv = PrivateKey.from_random()
         P = priv.public_key
         msg = b'BitcoinSV'
