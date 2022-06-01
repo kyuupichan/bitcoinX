@@ -12,15 +12,9 @@ __all__ = (
 )
 
 
-from pyaes import AESModeOfOperationCBC, Decrypter, Encrypter, PADDING_NONE
-
 from .errors import DecryptionError
 
-
-try:
-    from Cryptodome.Cipher import AES
-except ImportError:
-    AES = None
+from Cryptodome.Cipher import AES
 
 
 def _append_PKCS7_padding(data):
@@ -41,20 +35,10 @@ def _strip_PKCS7_padding(data):
 
 def aes_encrypt_with_iv(key, iv, data):
     data = _append_PKCS7_padding(data)
-    if AES:
-        return AES.new(key, AES.MODE_CBC, iv).encrypt(data)
-
-    aes_cbc = AESModeOfOperationCBC(key, iv=iv)
-    aes = Encrypter(aes_cbc, padding=PADDING_NONE)
-    return aes.feed(data) + aes.feed()  # empty aes.feed() flushes buffer
+    return AES.new(key, AES.MODE_CBC, iv).encrypt(data)
 
 
 def aes_decrypt_with_iv(key, iv, data):
-    if AES:
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        data = cipher.decrypt(data)
-    else:
-        aes_cbc = AESModeOfOperationCBC(key, iv=iv)
-        aes = Decrypter(aes_cbc, PADDING_NONE)
-        data = aes.feed(data) + aes.feed()  # empty aes.feed() flushes buffer
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    data = cipher.decrypt(data)
     return _strip_PKCS7_padding(data)
