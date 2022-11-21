@@ -320,7 +320,7 @@ class Headers:
                     return raw_header, our_index
             if index == -1:
                 raise MissingHeader(f'no header with hash {hash_to_hex_str(header_hash)}')
-            start += 1
+            start = index + 1
 
     def _read_headers(self):
         '''Read in all the headers from storage.'''
