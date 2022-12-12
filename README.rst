@@ -26,6 +26,11 @@ In time.
 ChangeLog
 =========
 
+0.7.1
+-----
+
+- fix a typo that resulted in inefficient block header searching in rare cases
+
 0.7.0
 -----
 
