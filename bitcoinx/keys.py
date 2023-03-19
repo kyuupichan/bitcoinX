@@ -331,6 +331,10 @@ class PublicKey:
         '''The implied network.'''
         return self._network
 
+    @property
+    def public_key(self):
+        return self
+
     def is_compressed(self):
         '''Return true if it serializes to 33 bytes.'''
         return self._compressed

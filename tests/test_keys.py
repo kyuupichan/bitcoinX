@@ -544,6 +544,10 @@ class TestPublicKey:
         assert pub1 != 0
         assert pub1 != 'foo'
 
+    def test_public_key(self):
+        pub = PrivateKey.from_random().public_key
+        assert pub.public_key is pub
+
     def test_hashable(self):
         secret = os.urandom(32)
         p1 = PrivateKey(secret, True, Bitcoin)

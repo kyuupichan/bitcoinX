@@ -53,6 +53,9 @@ class TestBIP32Derivation:
 
 class TestBIP32PublicKey:
 
+    def test_public_key(self):
+        assert mpubkey.public_key is mpubkey
+
     def test_from_to_extended_key_string(self):
         assert mpubkey.network() is Bitcoin
         d = mpubkey.derivation()
