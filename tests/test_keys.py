@@ -8,7 +8,7 @@ from bitcoinx.errors import DecryptionError, InvalidSignature
 from bitcoinx.keys import *
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
-from bitcoinx.networks import Bitcoin, BitcoinTestnet
+from bitcoinx import Bitcoin, BitcoinTestnet
 from bitcoinx import pack_byte, base58_encode_check, Address, pack_varbytes
 
 

@@ -20,9 +20,9 @@ import attr
 
 from .base58 import base58_decode_check, base58_encode_check
 from .hashes import hmac_sha512_halves, hash160
+from .headers import Bitcoin, Network
 from .keys import PrivateKey, PublicKey
 from .misc import cachedproperty
-from .networks import Bitcoin, Network
 from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
 
 HARDENED = 1 << 31
