@@ -1,4 +1,4 @@
-# Copyright (c) 2018-2021, Neil Booth
+# Copyright (c) 2018-2023, Neil Booth
 #
 # All right reserved.
 #
