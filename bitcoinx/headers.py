@@ -204,6 +204,9 @@ class Chain:
     def desc(self):
         return f'tip={self.tip()} log2_chainwork={round(log2_work(self.chainwork), 8)}'
 
+    def __lt__(self, other):
+        return self.first_height < other.first_height
+
 
 class Headers:
     '''A collection of block headers arranged into chains.  Each header header belongs to
@@ -290,8 +293,8 @@ class Headers:
         return len(self.hashes)
 
     def chains(self):
-        '''Returns a list of chain objects.'''
-        return list(self.tips.keys())
+        '''Return an iterable of chains in arbitrary order.'''
+        return self.tips.keys()
 
     def chain_count(self):
         '''The number of chains.'''
@@ -323,7 +326,7 @@ class Headers:
     def write_to_file(self, file_name, cursor):
         '''Append headers added after the cursor to the file.  Return an updated cusor.'''
         with open(file_name, 'ab') as f:
-            for chain in self.tips:
+            for chain in sorted(self.chains()):
                 f.write(chain.unpersisted_headers(cursor.get(chain, chain.first_height - 1)))
         return self.cursor()
 

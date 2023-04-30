@@ -162,6 +162,12 @@ class TestChainAndHeaders:
         with pytest.raises(ValueError):
             self.base_chain.unpersisted_headers(self.base_chain.height + 1)
 
+    def test_lt(self):
+        assert self.base_chain < self.fork_chain
+        assert not (self.fork_chain < self.base_chain)
+
+    # Headers
+
     def test_headers_len(self):
         assert len(self.headers) == self.N * 2
 
