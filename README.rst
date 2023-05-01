@@ -12,8 +12,8 @@ bitcoinX
 A Python Bitcoin library that will grow to encompass network protocol,
 consensus, transactions, scripting and signing.
 
-  :Licence: MIT
-  :Language: Python (>= 3.7)
+  :Licence: OpenBSV
+  :Language: Python (>= 3.8)
   :Author: Neil Booth
 
 
@@ -25,6 +25,11 @@ In time.
 
 ChangeLog
 =========
+
+0.8.0
+-----
+
+Replace old Headers implementation
 
 0.7.1
 -----
