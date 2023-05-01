@@ -122,7 +122,7 @@ def test_mainnet_2016_headers():
     # Mainnet headers 0, 2015, 2016, 4031, 4032, ... 4249808
     headers, max_height = setup_headers(Bitcoin, 'mainnet-headers-2016')
 
-    chain = headers.chains()[0]
+    chain = next(iter(headers.chains()))
     for height in range(0, max_height + 1, 2016):
         header = headers.header_at_height(chain, height)
         assert headers.required_bits(chain, height, None) == header.bits
@@ -233,7 +233,7 @@ def test_mainnet_EDA_and_DAA():
     headers, max_height = setup_compressed_headers('mainnet-headers-compressed', 300, Bitcoin)
 
     EDA_height = 478558
-    chain = headers.chains()[0]
+    chain = next(iter(headers.chains()))
 
     for height in range(EDA_height - 3, max_height + 1):
         header = headers.header_at_height(chain, height)
@@ -249,7 +249,7 @@ def test_mainnet_EDA_and_DAA():
 def test_testnet(filename, first_height):
     headers, max_height = setup_compressed_headers(filename, 3600, BitcoinTestnet)
 
-    chain = headers.chains()[0]
+    chain = next(iter(headers.chains()))
     for height in range(first_height, max_height + 1):
         header = chain.header_at_height(height)
         required_bits = headers.required_bits(chain, height, header.timestamp)
@@ -260,7 +260,7 @@ def test_scalingtestnet():
     headers, max_height = setup_gzipped_headers("stnheaders.gz", BitcoinScalingTestnet)
 
     first_height = 150
-    chain = headers.chains()[0]
+    chain = next(iter(headers.chains()))
     for height in range(first_height, max_height + 1):
         header = headers.header_at_height(chain, height)
         required_bits = headers.required_bits(chain, height, header.timestamp)
