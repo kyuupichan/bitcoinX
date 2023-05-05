@@ -1,5 +1,6 @@
-from os import urandom, path
+import copy
 import random
+from os import urandom, path
 
 import pytest
 
@@ -214,15 +215,15 @@ class TestChainAndHeaders:
     def test_cursor(self):
         assert self.headers.cursor() == {chain: chain.height for chain in self.headers.chains()}
 
-    def test_read_write(self, tmpdir):
-        file_name = path.join(tmpdir, 'headers')
-        write_cursor = self.headers.write_to_file(file_name, {})
-        assert self.headers.cursor() == write_cursor
-        assert self.headers.write_to_file(file_name, write_cursor) == write_cursor
+    def test_persistence(self):
+        cursor = {}
+        raw_headers = self.headers.unpersisted_headers(cursor)
+        assert len(raw_headers) == 80 * len(self.headers)
 
-        new_headers, cursor = Headers.read_from_file(file_name, Bitcoin)
-        assert new_headers.cursor() == cursor
-        assert len(self.headers) == len(new_headers)
+        new_headers = Headers(self.headers.network)
+        cursor = new_headers.connect_many(raw_headers)
+        assert cursor == new_headers.cursor()
+        assert len(new_headers) == len(self.headers)
 
         new_chains_by_tip = {hash: chain for chain, hash in new_headers.tips.items()}
         for chain in self.headers.chains():
@@ -232,3 +233,30 @@ class TestChainAndHeaders:
             assert chain.chainwork == new_chain.chainwork
             for height in range(chain.height + 1):
                 assert chain.raw_header_at_height(height) == new_chain.raw_header_at_height(height)
+
+    def test_persistence_sorting(self):
+        # Add a new fork at height 1 than the fork chain
+        headers = copy.copy(self.headers)
+        raw_header = random_raw_header(header_hash(headers.network.genesis_header))
+        chain = headers.connect(raw_header, check_work=False)
+        assert headers.chain_count() == 3
+        assert chain.first_height == 1
+
+        # Check unpersisted headers are topologically sorted
+        raw_headers = headers.unpersisted_headers({})
+        assert raw_headers == (b''.join(self.base_headers)
+                               + raw_header
+                               + b''.join(self.fork_headers))
+
+        # Add a new fork after the base of the fork fork chain
+        raw_header2 = random_raw_header(header_hash(self.fork_headers[0]))
+        chain = headers.connect(raw_header2, check_work=False)
+        assert headers.chain_count() == 4
+        assert chain.first_height == self.fork_chain.first_height + 1
+
+        # Check unpersisted headers are topologically sorted
+        raw_headers = headers.unpersisted_headers({})
+        assert raw_headers == (b''.join(self.base_headers)
+                               + raw_header
+                               + b''.join(self.fork_headers)
+                               + raw_header2)

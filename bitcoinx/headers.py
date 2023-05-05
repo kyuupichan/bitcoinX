@@ -308,27 +308,45 @@ class Headers:
                 longest = chain
         return longest
 
+
+    #
     # Persistence
+    #
+
+    # Example of intended use (supposing headers are persisted to a file):
+    #
+    #  # Initially read in headers and record persisted state in a cursor
+    #  with open(file_name, 'rb') as f:
+    #      raw_headers = f.read()
+    #  headers = Headers(network)
+    #  cursor = headers.connect_many(raw_headers)
+    #
+    #  After headers are connect()-ed when provided by a source, persist them:
+    #
+    #  # Open file for appending
+    #  with open(file_name, 'ab') as f:
+    #      f.write(headers.unpersisted_headers(cursor))
+    #  # Update cursor
+    #  cursor = headers.cursor()
+
+    def connect_many(self, raw_headers, check_work=False):
+
+        '''Connect many headers.  Return a cursor.'''
+        connect = self.connect
+        for raw_header in chunks(raw_headers, 80):
+            connect(raw_header, check_work)
+        return self.cursor()
+
     def cursor(self):
-        '''A cursor which indicates what headers are persisted.'''
+        '''A cursor which contains all chains and their heights.'''
         return {chain: chain.height for chain in self.tips}
 
-    @classmethod
-    def read_from_file(cls, file_name, network, check_work=False):
-        '''Read headers from a file.  Return a (Headers, cursor) pair.'''
-        headers = cls(network)
-        with open(file_name, 'rb') as f:
-            raw_headers = f.read()
-        for raw_header in chunks(raw_headers, 80):
-            headers.connect(raw_header, check_work)
-        return headers, headers.cursor()
-
-    def write_to_file(self, file_name, cursor):
-        '''Append headers added after the cursor to the file.  Return an updated cusor.'''
-        with open(file_name, 'ab') as f:
-            for chain in sorted(self.chains()):
-                f.write(chain.unpersisted_headers(cursor.get(chain, chain.first_height - 1)))
-        return self.cursor()
+    def unpersisted_headers(self, cursor):
+        '''Return a concatenation of all headers added since the cursor.'''
+        return b''.join(
+            chain.unpersisted_headers(cursor.get(chain, chain.first_height - 1))
+            for chain in sorted(self.chains())
+        )
 
 
 ##########
