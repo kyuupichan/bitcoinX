@@ -154,6 +154,10 @@ class Chain:
             return self.parent.raw_header_at_height(height)
         raise MissingHeader(f'no header at height {height}')
 
+    def header_hash_at_height(self, height):
+        '''Return the hash of the header.'''
+        return header_hash(self.raw_header_at_height(height))
+
     def header_at_height(self, height):
         '''Returns a deserialized Header object.'''
         return deserialized_header(self.raw_header_at_height(height), height)
@@ -200,6 +204,18 @@ class Chain:
         else:
             raise ValueError(f'invalid cursor height {cursor_height:,d}')
         return self._raw_headers[start * 80:]
+
+    def block_locator(self):
+        '''Returns a block locator: a list of block hashes starting from the chain tip back
+        to the genesis block, that become increasingly sparse.'''
+        def block_heights(height, stop=0, step=-1):
+            while height > stop:
+                yield height
+                height += step
+                step += step
+            yield stop
+
+        return [self.header_hash_at_height(height) for height in block_heights(self.height)]
 
     def desc(self):
         return f'tip={self.tip()} log2_chainwork={round(log2_work(self.chainwork), 8)}'
@@ -308,6 +324,9 @@ class Headers:
                 longest = chain
         return longest
 
+    def block_locator(self):
+        '''Return a block locator for the longest chain.'''
+        return self.longest_chain().block_locator()
 
     #
     # Persistence

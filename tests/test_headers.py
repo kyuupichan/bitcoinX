@@ -1,4 +1,5 @@
 import copy
+import math
 import random
 from os import urandom, path
 
@@ -199,6 +200,12 @@ class TestChainAndHeaders:
         with pytest.raises(IncorrectBits):
             self.headers.connect(header)
 
+    def test_header_hash_at_height(self):
+        for chain in self.headers.chains():
+            for height in range(chain.height):
+                assert (chain.header_hash_at_height(height) ==
+                        header_hash(chain.raw_header_at_height(height)))
+
     def test_insufficient_pow(self):
         prev_hash = header_hash(Bitcoin.genesis_header)
         header = random_raw_header(prev_hash, [header_bits(Bitcoin.genesis_header)])
@@ -260,3 +267,16 @@ class TestChainAndHeaders:
                                + raw_header
                                + b''.join(self.fork_headers)
                                + raw_header2)
+
+    def test_block_locator(self):
+        for chain in (self.base_chain, self.fork_chain):
+            locator = chain.block_locator()
+            log2h = math.log(chain.height + 1, 2)
+            assert log2h <= len(locator) <= log2h + 2
+
+            heights = [self.headers.lookup(header_hash)[1] for header_hash in locator]
+            for n, height in enumerate(heights):
+                assert chain.header_hash_at_height(height) == locator[n]
+            assert sorted(heights) == list(reversed(heights))
+
+        assert self.headers.block_locator() == self.headers.longest_chain().block_locator()
