@@ -378,6 +378,7 @@ class Headers:
 class Network:
 
     def __init__(self, *, name, full_name, magic_hex, genesis_header_hex, required_bits,
+                 default_port, seeds,
                  BIP65_height, BIP66_height, CSV_height, UAHF_height, DAA_height,
                  genesis_height, P2PKH_verbyte, P2SH_verbyte, WIF_byte,
                  xpub_verbytes_hex, xprv_verbytes_hex, cashaddr_prefix):
@@ -390,6 +391,8 @@ class Network:
         self.max_target = bits_to_target(self.genesis_bits)
         # Signature:  def required_bits(self, headers, chain, height, timestamp=None)
         self.required_bits = required_bits
+        self.default_port = default_port
+        self.seeds = seeds
         self.BIP65_height = BIP65_height,
         self.BIP66_height = BIP66_height
         self.CSV_height = CSV_height
@@ -548,6 +551,12 @@ Bitcoin = Network(
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c',
     required_bits=required_bits_mainnet,
+    default_port=8333,
+    seeds=[
+        'seed.bitcoinsv.io',
+        'seed.satoshisvision.network',
+        'seed.bitcoinseed.directory',
+    ],
     BIP65_height=388_381,
     BIP66_height=363_725,
     CSV_height=419_328,
@@ -570,6 +579,11 @@ BitcoinScalingTestnet = Network(
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
     required_bits=required_bits_scaling_testnet,
+    default_port=9333,
+    seeds=[
+        'stn-seed.bitcoinsv.io',
+        'stn-seed.bitcoinseed.directory',
+    ],
     BIP65_height=0,
     BIP66_height=0,
     CSV_height=0,
@@ -592,6 +606,12 @@ BitcoinTestnet = Network(
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
     required_bits=required_bits_testnet,
+    default_port=18333,
+    seeds=[
+        'testnet-seed.bitcoinsv.io',
+        'testnet-seed.bitcoincloud.net',
+        'testnet-seed.bitcoinseed.directory',
+    ],
     BIP65_height=581_885,
     BIP66_height=330_776,
     CSV_height=770_112,
@@ -614,6 +634,8 @@ BitcoinRegtest = Network(
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000',
     required_bits=required_bits_regtest,
+    default_port=18444,
+    seeds = [],
     BIP65_height=1_351,
     BIP66_height=1_251,
     CSV_height=576,
@@ -631,5 +653,3 @@ BitcoinRegtest = Network(
 
 all_networks = (Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, BitcoinRegtest)
 networks_by_name = {network.name: network for network in all_networks}
-
-# rt12 -- Scaling testnet has same settings as regular testnet, so will cause conflicts.
