@@ -245,6 +245,8 @@ class Headers:
         self.tips = {}
         # Map from block hash to (chain, height) pair
         self.hashes = {}
+        # Connect the genesis block
+        self.connect(network.genesis_header)
 
     def raw_header_at_height(self, chain, height):
         return chain.raw_header_at_height(height)
@@ -274,7 +276,7 @@ class Headers:
                 raise MissingHeader(f'previous header {hash_to_hex_str(prev_hash)} not present')
             # Handle duplicate genesis block
             if self.hashes:
-                chain, _ = hashes.get(hdr_hash)
+                chain, _ = hashes[hdr_hash]
                 return chain
             chain = Chain(None, height)
         elif tips[chain] != prev_hash:

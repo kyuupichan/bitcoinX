@@ -5,11 +5,10 @@ from os import urandom, path
 
 import pytest
 
-from bitcoinx import (
-    Bitcoin, BitcoinTestnet, pack_le_uint32, double_sha256, hex_str_to_hash, IncorrectBits,
-    InsufficientPoW, MissingHeader, Chain, Headers, deserialized_header,
-    header_work, header_hash, header_bits
-)
+from bitcoinx.errors import MissingHeader, IncorrectBits, InsufficientPoW
+from bitcoinx.headers import *
+
+from bitcoinx import pack_le_uint32, double_sha256, hex_str_to_hash
 
 
 some_good_bits = [486604799, 472518933, 453281356, 436956491]
@@ -280,3 +279,8 @@ class TestChainAndHeaders:
             assert sorted(heights) == list(reversed(heights))
 
         assert self.headers.block_locator() == self.headers.longest_chain().block_locator()
+
+    @pytest.mark.parametrize('network', all_networks)
+    def test_block_locator_empty_headers(self, network):
+        headers = Headers(network)
+        assert headers.block_locator() == [header_hash(network.genesis_header)]
