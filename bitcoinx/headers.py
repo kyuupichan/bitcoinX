@@ -637,7 +637,7 @@ BitcoinRegtest = Network(
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000',
     required_bits=required_bits_regtest,
     default_port=18444,
-    seeds = [],
+    seeds=[],
     BIP65_height=1_351,
     BIP66_height=1_251,
     CSV_height=576,
