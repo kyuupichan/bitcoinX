@@ -5,6 +5,21 @@ pr:
 jobs:
 - template: run-tests.yml
   parameters:
+    name: Py312_Ubuntu
+    vmImage: 'ubuntu-latest'
+    pythonVersion: '3.12'
+- template: run-tests.yml
+  parameters:
+    name: Py312_Mac
+    vmImage: 'macOS-latest'
+    pythonVersion: '3.12'
+- template: run-tests.yml
+  parameters:
+    name: Py312_Win
+    vmImage: 'windows-latest'
+    pythonVersion: '3.12'
+- template: run-tests.yml
+  parameters:
     name: Py311_Ubuntu
     vmImage: 'ubuntu-latest'
     pythonVersion: '3.11'
