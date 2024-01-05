@@ -13,7 +13,7 @@ __all__ = (
 import attr
 import datetime
 from io import BytesIO
-from typing import List
+from typing import List, Optional
 
 from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
 from .hashes import hash_to_hex_str, double_sha256
@@ -33,22 +33,39 @@ class Tx:
     outputs: List["TxOutput"] = attr.ib()
     locktime: int = attr.ib()
 
+    EXTENDED_MARKER = b'\0\0\0\0\0\xef'
+
     def is_coinbase(self):
         '''Return True iff the tx is a coinbase transaction.'''
         return self.inputs[0].is_coinbase()
 
+    def is_extended(self):
+        '''Return True iff this is an extended transaction.'''
+        return all(txin.is_extended() for txin in self.inputs)
+
     @classmethod
     def read(cls, read):
-        return cls(
+        tx = cls(
             read_le_int32(read),
             read_list(read, TxInput.read),
             read_list(read, TxOutput.read),
             read_le_uint32(read),
         )
+        # Transparently read BIP 239 extended format
+        if not tx.inputs and not tx.outputs and tx.locktime == 4009754624:
+            # extended format
+            tx.inputs = read_list(read, TxInput.read_extended)
+            tx.outputs = read_list(read, TxOutput.read)
+            tx.locktime = read_le_uint32(read)
+        return tx
 
     @classmethod
     def from_bytes(cls, raw):
         return cls.read(BytesIO(raw).read)
+
+    @classmethod
+    def from_hex(cls, hex_str):
+        return cls.from_bytes(bytes.fromhex(hex_str))
 
     def to_bytes(self):
         return b''.join((
@@ -58,12 +75,45 @@ class Tx:
             pack_le_uint32(self.locktime),
         ))
 
-    @classmethod
-    def from_hex(cls, hex_str):
-        return cls.from_bytes(bytes.fromhex(hex_str))
-
     def to_hex(self):
         return self.to_bytes().hex()
+
+    # BIP 239 extended serialization support
+
+    @classmethod
+    def read_extended(cls, read):
+        version = read_le_int32(read)
+        if read(6) != cls.EXTENDED_MARKER:
+            raise RuntimeError('transaction is not in extended format')
+        return cls(
+            version,
+            read_list(read, TxInput.read_extended),
+            read_list(read, TxOutput.read),
+            read_le_uint32(read),
+        )
+
+    @classmethod
+    def from_bytes_extended(cls, raw):
+        return cls.read_extended(BytesIO(raw).read)
+
+    def to_bytes_extended(self):
+        '''Return BIP-239 serialization of the input.'''
+        return b''.join((
+            pack_le_int32(self.version),
+            self.EXTENDED_MARKER,
+            pack_list(self.inputs, TxInput.to_bytes_extended),
+            pack_list(self.outputs, TxOutput.to_bytes),
+            pack_le_uint32(self.locktime),
+        ))
+
+    def to_hex_extended(self):
+        '''Return BIP-239 serialization of the input.'''
+        return self.to_bytes_extended().hex()
+
+    @classmethod
+    def from_hex_extended(cls, hex_str):
+        '''Return BIP-239 serialization of the input.'''
+        return cls.from_bytes_extended(bytes.fromhex(hex_str))
 
     def _hash_prevouts(self):
         preimage = b''.join(txin.prevout_bytes() for txin in self.inputs)
@@ -225,8 +275,24 @@ class Tx:
         return self.size_io(self.inputs, self.outputs)
 
     def total_output_value(self):
-        '''Return the sum of the output values.'''
+        '''Return the sum of the output values in satoshis.'''
         return sum(output.value for output in self.outputs)
+
+    def total_input_value(self):
+        '''Return the sum of the input values in satoshis.
+
+        Only works for extended (or coinbase) transactions.'''
+        if self.is_extended():
+            return sum(txin.txo.value for txin in self.inputs)
+        if self.is_coinbase():
+            return self.total_output_value()
+        raise RuntimeError('transaction input values are not available')
+
+    def fee(self):
+        '''Return the transaction fee in satoshis.
+
+        Only works for extended (or coinbase) transactions.'''
+        return self.total_input_value() - self.total_output_value()
 
     def to_json(self, flags, network):
         result = {
@@ -253,10 +319,16 @@ class TxInput:
     prev_idx: int = attr.ib()
     script_sig: Script = attr.ib()
     sequence: int = attr.ib()
+    # The TXO it spends (for an extended input)
+    txo: Optional['TxOutput'] = attr.ib(default=None)
 
     def is_coinbase(self):
         '''Return True iff the input is the single input of a coinbase transaction.'''
         return self.prev_idx == 0xffffffff and self.prev_hash == ZERO
+
+    def is_extended(self):
+        '''Return True iff this is an extended input.'''
+        return bool(self.txo)
 
     @classmethod
     def read(cls, read):
@@ -265,6 +337,7 @@ class TxInput:
             read_le_uint32(read),           # prev_idx
             Script(read_varbytes(read)),    # script_sig
             read_le_uint32(read),           # sequence
+            None,                           # txo
         )
 
     def prevout_bytes(self):
@@ -295,6 +368,28 @@ class TxInput:
     @classmethod
     def from_hex(cls, hex_str):
         return cls.from_bytes(bytes.fromhex(hex_str))
+
+    # BIP 239 extended serialization support
+
+    @classmethod
+    def read_extended(cls, read):
+        return cls(
+            read(32),                       # prev_hash
+            read_le_uint32(read),           # prev_idx
+            Script(read_varbytes(read)),    # script_sig
+            read_le_uint32(read),           # sequence
+            TxOutput.read(read),            # txo
+        )
+
+    @classmethod
+    def from_bytes_extended(cls, raw):
+        return cls.read_extended(BytesIO(raw).read)
+
+    def to_bytes_extended(self):
+        return self.to_bytes() + self.txo.to_bytes()
+
+    def to_hex_extended(self):
+        return self.to_bytes_extended().hex()
 
     def size(self):
         '''Return the serialized size of the input in bytes.'''

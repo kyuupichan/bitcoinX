@@ -104,7 +104,7 @@ STANDARD_SCRIPT_VERIFY_FLAGS = (
 
 @attr.s(slots=True)
 class MinerPolicy:
-    '''Miner policy rules.
+    '''Miner policy rules for transaction acceptance.
 
     Generally fixed over the node session and apply to non-consensus post-genesis
     transactions for e.g. mempool acceptance.
@@ -128,8 +128,7 @@ class MinerPolicy:
 
 
 class InterpreterLimits:
-    '''Limits to apply to a particular invocation of the interpreter.  Use the from_policy()
-    method to initialize appropriately for a given miner policy and context.
+    '''Limits to apply to a particular invocation of the interpreter.
 
     Note: all attributes should be considered read-only, do not set them directly.'''
 

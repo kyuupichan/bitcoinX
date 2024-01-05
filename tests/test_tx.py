@@ -5,6 +5,7 @@ import pytest
 
 from bitcoinx import (
     Script, PublicKey, SigHash, hash_to_hex_str, Bitcoin, BitcoinTestnet, JSONFlags,
+    MinerPolicy, InterpreterLimits, TxInputContext,
 )
 from bitcoinx.tx import *
 from bitcoinx.tx import LOCKTIME_THRESHOLD
@@ -95,17 +96,31 @@ def test_signatures(filename):
         assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
 
 
+def verify_tx_inputs(tx):
+    policy = MinerPolicy(100_000, 64, 20_000, 1_000, 16)
+    limits = InterpreterLimits(policy, True, True, 'standard')
+
+    for n, txin in enumerate(tx.inputs):
+        txin_context = TxInputContext(tx, n, txin.txo, True)
+        try:
+            if not txin_context.verify_input(limits):
+                raise ValueError(f'bad input {n}')
+        except:
+            raise ValueError(f'bad input {n}')
+
+
 class TestTx:
 
     def test_is_coinbase(self):
         tx = read_tx('afda808f.txn')
         assert tx.is_coinbase()
+        assert not tx.is_extended()
 
     def test_are_inputs_final(self):
         tx = read_tx('b59de025.txn')
+        assert not tx.is_extended()
         assert tx.are_inputs_final()
         tx.inputs[4].sequence += 1
-        assert not tx.are_inputs_final()
 
     @pytest.mark.parametrize("nin, nout", ((1, 1), (1, 253), (253, 65536), (65536, 1)))
     def test_size(self, nin, nout):
@@ -155,6 +170,66 @@ class TestTx:
     def test_total_output(self):
         tx = read_tx('b59de025.txn')
         assert tx.total_output_value() == 59_999_999_818
+
+    def test_total_input(self):
+        coinbase = read_tx('afda808f.txn')
+        assert coinbase.total_input_value() == coinbase.total_output_value()
+
+        tx = read_tx('b59de025.txn')
+        with pytest.raises(RuntimeError):
+            tx.total_input_value()
+
+    def test_fee(self):
+        coinbase = read_tx('afda808f.txn')
+        assert coinbase.fee() == 0
+
+        tx = read_tx('b59de025.txn')
+        with pytest.raises(RuntimeError):
+            tx.fee()
+
+    def read_extended_tx(self):
+        return read_tx('9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6_ext.hex')
+
+    def test_extended(self):
+        tx = self.read_extended_tx()
+        assert tx.hex_hash() == '9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6'
+        assert tx.is_extended()
+        assert tx.are_inputs_final()
+
+        # Test the transaction signatures
+        verify_tx_inputs(tx)
+
+    def test_non_extended_streaming_of_extended(self):
+        tx = self.read_extended_tx()
+        tx2 = Tx.from_bytes(tx.to_bytes())
+        assert not tx2.is_extended()
+        assert tx2 != tx
+        assert tx2.hex_hash() == tx.hex_hash()
+
+    def test_extended_streaming_out(self):
+        tx = self.read_extended_tx()
+        tx2 = Tx.from_hex(tx.to_hex_extended())
+        assert tx2.is_extended()
+        assert tx2 == tx
+        assert tx2.hex_hash() == tx.hex_hash()
+
+    def test_extended_streaming_in(self):
+        tx = self.read_extended_tx()
+        tx2 = Tx.from_hex_extended(tx.to_hex_extended())
+        assert tx2.is_extended()
+        assert tx2 == tx
+        assert tx2.hex_hash() == tx.hex_hash()
+
+    def test_invalid_extended(self):
+        tx = self.read_extended_tx()
+        raw = bytearray(tx.to_bytes_extended())
+        assert raw[4:10] == tx.EXTENDED_MARKER
+        for n in range(4, 10):
+            raw[n] = raw[n] + 1
+            with pytest.raises(RuntimeError):
+                Tx.from_bytes_extended(raw)
+            raw[n] = raw[n] - 1
+        assert raw[4:10] == tx.EXTENDED_MARKER
 
     @pytest.mark.parametrize("script,coin,json", (
         # Genesis tx
