@@ -662,13 +662,13 @@ class TestVerifyInput(TestEvaluateScriptBase):
         tx = random_tx(False)
         tx.inputs[0].script_sig = Script() << OP_0 << OP_DROP << int(result)
         utxo = TxOutput(0, Script())
-        context = TxInputContext(tx, 0, utxo, False)
+        context = TxInputContext(tx, 0, utxo)
 
         if verify_limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY:
             with pytest.raises(PushOnlyError):
-                context.verify_input(verify_limits)
+                context.verify_input(verify_limits, False)
         else:
-            assert context.verify_input(verify_limits) is result
+            assert context.verify_input(verify_limits, False) is result
 
     @pytest.mark.parametrize('script_sig, script_pubkey, triggers, result', (
         (Script(), Script(), False, False),
@@ -684,13 +684,13 @@ class TestVerifyInput(TestEvaluateScriptBase):
         tx = random_tx(False)
         tx.inputs[0].script_sig = script_sig
         utxo = TxOutput(1, script_pubkey)
-        context = TxInputContext(tx, 0, utxo, False)
+        context = TxInputContext(tx, 0, utxo)
 
         if verify_limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and triggers:
             with pytest.raises(CleanStackError):
-                context.verify_input(verify_limits)
+                context.verify_input(verify_limits, False)
         else:
-            assert context.verify_input(verify_limits) is result
+            assert context.verify_input(verify_limits, False) is result
 
     @pytest.mark.parametrize('succeed', (True, False))
     def test_P2SH_spend(self, P2SH_limits, succeed):
@@ -699,29 +699,29 @@ class TestVerifyInput(TestEvaluateScriptBase):
         script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
         utxo = TxOutput(10_000_000, script_pubkey)
         tx = read_tx('4d8eabfc.txn')
-        context = TxInputContext(tx, 2, utxo, False)
+        context = TxInputContext(tx, 2, utxo)
         # Test success and failure by modifying an output
         if succeed:
-            assert context.verify_input(P2SH_limits)
+            assert context.verify_input(P2SH_limits, False)
         else:
             tx.outputs[0].value += 1
             if P2SH_limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
                 with pytest.raises(NullFailError):
-                    context.verify_input(P2SH_limits)
+                    context.verify_input(P2SH_limits, False)
             else:
-                assert not context.verify_input(P2SH_limits)
+                assert not context.verify_input(P2SH_limits, False)
 
     def test_P2SH_push_only(self, P2SH_limits):
         script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
         utxo = TxOutput(10_000_000, script_pubkey)
         tx = read_tx('4d8eabfc.txn')
-        context = TxInputContext(tx, 2, utxo, False)
+        context = TxInputContext(tx, 2, utxo)
 
         # Append an OP_NOP to the script_sig
         tx.inputs[2].script_sig <<= OP_NOP
 
         with pytest.raises(PushOnlyError) as e:
-            context.verify_input(P2SH_limits)
+            context.verify_input(P2SH_limits, False)
         if P2SH_limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY:
             assert 'script_sig is not pushdata only' == str(e.value)
         else:

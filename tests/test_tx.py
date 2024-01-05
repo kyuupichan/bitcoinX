@@ -101,9 +101,9 @@ def verify_tx_inputs(tx):
     limits = InterpreterLimits(policy, True, True, 'standard')
 
     for n, txin in enumerate(tx.inputs):
-        txin_context = TxInputContext(tx, n, txin.txo, True)
+        txin_context = TxInputContext(tx, n, txin.txo)
         try:
-            if not txin_context.verify_input(limits):
+            if not txin_context.verify_input(limits, True):
                 raise ValueError(f'bad input {n}')
         except:
             raise ValueError(f'bad input {n}')

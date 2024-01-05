@@ -65,9 +65,8 @@ def random_txinput_context():
     tx = random_tx(False)
     input_index = randrange(0, len(tx.inputs))
     utxo = random_output()
-    is_utxo_after_genesis = random_bool()
 
-    return TxInputContext(tx, input_index, utxo, is_utxo_after_genesis)
+    return TxInputContext(tx, input_index, utxo)
 
 
 def read_tx_hex(filename):

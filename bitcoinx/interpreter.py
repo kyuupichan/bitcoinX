@@ -369,13 +369,11 @@ class TxInputContext:
     input_index = attr.ib()
     # The previous output it is spending, an instance of TxOutput
     utxo = attr.ib()
-    # True if the UTXO was created after the Genesis upgrade
-    is_utxo_after_genesis = attr.ib()
 
-    def verify_input(self, limits):
+    def verify_input(self, limits, is_utxo_after_genesis):
         '''Return the boolean result of validating the input subject to limits.'''
         # Update limits appropriately for the UTXO state
-        limits.set_utxo_state(self.is_utxo_after_genesis)
+        limits.set_utxo_state(is_utxo_after_genesis)
 
         script_sig = self.tx.inputs[self.input_index].script_sig
         if limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY and not script_sig.is_push_only():
