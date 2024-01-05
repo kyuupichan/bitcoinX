@@ -1134,3 +1134,41 @@ def shift_right(value, count):
 
 
 InterpreterState.bind_handlers()
+
+
+# A fairly restrictive miner policy
+MinerPolicy.RESTRICTIVE = MinerPolicy(
+    max_script_size=100_000,
+    max_script_num_length=64,
+    max_stack_memory_usage=20_000,
+    max_ops_per_script=10_000,
+    max_pubkeys_per_multisig=16,
+    # Transactions in blocks must pass script verification with these flags
+    consensus_flags=MANDATORY_SCRIPT_VERIFY_FLAGS,
+    # Standard transactions must comply with these flags
+    standard_flags=STANDARD_SCRIPT_VERIFY_FLAGS,
+)
+
+
+# A fairly loose miner policy
+MinerPolicy.LOOSE = MinerPolicy(
+    max_script_size=10_000_000,
+    max_script_num_length=256,
+    max_stack_memory_usage=10_000_000,
+    max_ops_per_script=1_000_000,
+    max_pubkeys_per_multisig=256,
+    # Transactions in blocks must pass script verification with these flags
+    consensus_flags=MANDATORY_SCRIPT_VERIFY_FLAGS,
+    # Standard transactions must comply with these flags
+    standard_flags=STANDARD_SCRIPT_VERIFY_FLAGS,
+)
+
+
+InterpreterLimits.RESTRICTIVE = InterpreterLimits(
+    policy=MinerPolicy.RESTRICTIVE,
+    is_genesis_enabled=True,
+    # Apply mempool rules not block rules
+    is_consensus=False,
+    # Standard transactions
+    base_flags='standard',
+)

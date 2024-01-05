@@ -23,12 +23,7 @@ from bitcoinx import (
 from .utils import random_txinput_context, random_tx, read_tx, zeroes, non_zeroes
 
 
-policies = [
-    # A fairly restrictive policy
-    MinerPolicy(100_000, 64, 20_000, 1_000, 16),
-    # A loose policy
-    MinerPolicy(10_000_000, 256, 10_000_000, 32_000, 256),
-]
+policies = [ MinerPolicy.RESTRICTIVE, MinerPolicy.LOOSE ]
 
 
 @pytest.fixture(params=policies)
