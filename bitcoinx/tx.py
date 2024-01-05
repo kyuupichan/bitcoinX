@@ -16,7 +16,9 @@ from io import BytesIO
 from typing import List, Optional
 
 from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
+from .errors import InterpreterError
 from .hashes import hash_to_hex_str, double_sha256
+from .interpreter import InterpreterLimits, TxInputContext
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
     read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list
@@ -114,6 +116,32 @@ class Tx:
     def from_hex_extended(cls, hex_str):
         '''Return BIP-239 serialization of the input.'''
         return cls.from_bytes_extended(bytes.fromhex(hex_str))
+
+    def verify_inputs(self, limits=None, utxos_after_genesis=None):
+        '''For an extended transaction, check the inputs validly spend their previous outputs with
+        the given interpreter limits (which default to some restrictive limits).
+
+        Amongst other things this veifies any signatures in the input scripts.
+
+        utxos_after_genesis is an array of booleans, one per input, indicating if that UTXO is
+        after genesis was enabled.  Defaults to all being True.
+        '''
+        if not self.is_extended():
+            raise RuntimeError('verify_inputs requires previous transaction outputs')
+
+        if limits is None:
+            limits = InterpreterLimits.RESTRICTIVE
+
+        if utxos_after_genesis is None:
+            utxos_after_genesis = [True] * len(self.inputs)
+
+        for n, txin in enumerate(self.inputs):
+            context = TxInputContext(self, n, txin.txo)
+            try:
+                if not context.verify_input(limits, utxos_after_genesis[n]):
+                    raise InterpreterError(f'input {n} evaluates to false')
+            except InterpreterError as e:
+                raise InterpreterError(f'input {n} failed to verify') from e
 
     def _hash_prevouts(self):
         preimage = b''.join(txin.prevout_bytes() for txin in self.inputs)

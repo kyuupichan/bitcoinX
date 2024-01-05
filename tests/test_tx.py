@@ -5,7 +5,7 @@ import pytest
 
 from bitcoinx import (
     Script, PublicKey, SigHash, hash_to_hex_str, Bitcoin, BitcoinTestnet, JSONFlags,
-    MinerPolicy, InterpreterLimits, TxInputContext,
+    InterpreterError
 )
 from bitcoinx.tx import *
 from bitcoinx.tx import LOCKTIME_THRESHOLD
@@ -96,19 +96,6 @@ def test_signatures(filename):
         assert pubkey.verify_der_signature(signature[:-1], signature_hash, None)
 
 
-def verify_tx_inputs(tx):
-    policy = MinerPolicy(100_000, 64, 20_000, 1_000, 16)
-    limits = InterpreterLimits(policy, True, True, 'standard')
-
-    for n, txin in enumerate(tx.inputs):
-        txin_context = TxInputContext(tx, n, txin.txo)
-        try:
-            if not txin_context.verify_input(limits, True):
-                raise ValueError(f'bad input {n}')
-        except:
-            raise ValueError(f'bad input {n}')
-
-
 class TestTx:
 
     def test_is_coinbase(self):
@@ -188,16 +175,27 @@ class TestTx:
             tx.fee()
 
     def read_extended_tx(self):
-        return read_tx('9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6_ext.hex')
-
-    def test_extended(self):
-        tx = self.read_extended_tx()
-        assert tx.hex_hash() == '9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6'
+        tx = read_tx('9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6_ext.hex')
         assert tx.is_extended()
         assert tx.are_inputs_final()
+        return tx
 
+    def test_verify_inputs(self):
         # Test the transaction signatures
-        verify_tx_inputs(tx)
+        tx = self.read_extended_tx()
+        tx.verify_inputs()
+
+    def test_verify_inputs_fail(self):
+        tx = self.read_extended_tx()
+        tx.inputs[0].txo.value += 1
+        with pytest.raises(InterpreterError):
+            tx.verify_inputs()
+
+    def test_verify_inputs_not_extended(self):
+        # Test we require an extended tx to verify
+        tx = read_tx('b59de025.txn')
+        with pytest.raises(RuntimeError):
+            tx.verify_inputs()
 
     def test_non_extended_streaming_of_extended(self):
         tx = self.read_extended_tx()
