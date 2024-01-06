@@ -178,6 +178,7 @@ class TestTx:
         tx = read_tx('9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6_ext.hex')
         assert tx.is_extended()
         assert tx.are_inputs_final()
+        assert tx.fee() == 339
         return tx
 
     def test_verify_inputs(self):
