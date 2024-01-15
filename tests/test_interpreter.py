@@ -15,7 +15,7 @@ from bitcoinx.interpreter import *
 from bitcoinx.interpreter import MANDATORY_SCRIPT_VERIFY_FLAGS, STANDARD_SCRIPT_VERIFY_FLAGS
 from bitcoinx.script import *
 from bitcoinx import (
-    TxOutput, pack_varint, PrivateKey, pack_byte, varint_len, SigHash,
+    TxOutput, PrivateKey, pack_byte, varint_len, SigHash,
     compact_signature_to_der, der_signature_to_compact, CURVE_ORDER, be_bytes_to_int,
     int_to_be_bytes,
 )
@@ -736,12 +736,12 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
         script = Script() << OP_1NEGATE << OP_CHECKLOCKTIMEVERIFY
         with pytest.raises(LockTimeError) as e:
             state.evaluate_script(script)
-        assert f'locktime -1 is negative' in str(e.value)
+        assert 'locktime -1 is negative' in str(e.value)
 
     def test_CLTV_number_length(self, checklocktime_state):
         state = checklocktime_state
         script = Script() << bytes(6) << OP_CHECKLOCKTIMEVERIFY
-        with pytest.raises(InvalidNumber) as e:
+        with pytest.raises(InvalidNumber):
             state.evaluate_script(script)
 
     def test_CLTV_minimal(self, checklocktime_state):
@@ -787,12 +787,12 @@ class TestObsoleteCoreGarbage(TestEvaluateScriptBase):
         script = Script() << OP_1NEGATE << OP_CHECKSEQUENCEVERIFY
         with pytest.raises(LockTimeError) as e:
             state.evaluate_script(script)
-        assert f'sequence -1 is negative' in str(e.value)
+        assert 'sequence -1 is negative' in str(e.value)
 
     def test_CSV_number_length(self, checklocktime_state):
         state = checklocktime_state
         script = Script() << bytes(6) << OP_CHECKSEQUENCEVERIFY
-        with pytest.raises(InvalidNumber) as e:
+        with pytest.raises(InvalidNumber):
             state.evaluate_script(script)
 
     def test_CSV_minimal(self, checklocktime_state):
@@ -1178,7 +1178,7 @@ class TestNumeric(TestEvaluateScriptBase):
         assert state.stack == [int_to_item(div), int_to_item(-mod)]
 
         for value in a, b:
-            for zeroes in ('00', '80', '0000', '0080'):
+            for _zeroes in ('00', '80', '0000', '0080'):
                 state.stack.clear()
                 script = Script().push_many((value, 0, OP_DIV))
                 with pytest.raises(DivisionByZero) as e:
@@ -2376,8 +2376,8 @@ class TestCrypto(TestEvaluateScriptBase):
         context = state._txin_context
         sighash = random_sighash(state)
 
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
-                                                                'wrong_order', min_m=2)
+        script_sig, script_pubkey, m, _n = checkmultisig_scripts(context, sighash, op,
+                                                                 'wrong_order', min_m=2)
 
         # The sigs are good but in the wrong order
         state.evaluate_script(script_sig)
@@ -2528,8 +2528,8 @@ class TestCrypto(TestEvaluateScriptBase):
         state = checksig_state
         context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op, 'bad_hash',
-                                                                min_m=1)
+        script_sig, script_pubkey, m, _n = checkmultisig_scripts(context, sighash, op, 'bad_hash',
+                                                                 min_m=1)
 
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
@@ -2646,8 +2646,8 @@ class TestCrypto(TestEvaluateScriptBase):
         state = checksig_state
         context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
-                                                                'empty_sig', min_m=1)
+        script_sig, script_pubkey, m, _n = checkmultisig_scripts(context, sighash, op,
+                                                                 'empty_sig', min_m=1)
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL and m > 1:
             with pytest.raises(NullFailError):
@@ -2667,8 +2667,8 @@ class TestCrypto(TestEvaluateScriptBase):
         state = checksig_state
         context = state._txin_context
         sighash = random_sighash(state)
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
-                                                                'invalid_pubkey', min_m=1)
+        script_sig, script_pubkey, m, _n = checkmultisig_scripts(context, sighash, op,
+                                                                 'invalid_pubkey', min_m=1)
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
             with pytest.raises(NullFailError):
@@ -2685,8 +2685,8 @@ class TestCrypto(TestEvaluateScriptBase):
         state.stack.clear()
 
         # If the pubkey is not used, its invalid state is missed
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
-                                                                'invalid_pubkey_missed', min_m=1)
+        script_sig, script_pubkey, m, _n = checkmultisig_scripts(context, sighash, op,
+                                                                 'invalid_pubkey_missed', min_m=1)
         state.evaluate_script(script_sig)
         state.evaluate_script(script_pubkey)
 
@@ -2697,8 +2697,8 @@ class TestCrypto(TestEvaluateScriptBase):
         sighash = random_sighash(state)
 
         # The tests above cover NULLFAIL for normal sigs; try all empty sigs
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
-                                                                'all_empty_sig', min_m=1)
+        script_sig, script_pubkey, _m, _n = checkmultisig_scripts(context, sighash, op,
+                                                                  'all_empty_sig', min_m=1)
         state.evaluate_script(script_sig)
         if op == OP_CHECKMULTISIG:
             state.evaluate_script(script_pubkey)
@@ -2714,15 +2714,15 @@ class TestCrypto(TestEvaluateScriptBase):
         sighash = random_sighash(state)
 
         # Test we need a dummy
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op, 'no_dummy')
+        script_sig, script_pubkey, _m, _n = checkmultisig_scripts(context, sighash, op, 'no_dummy')
         state.evaluate_script(script_sig)
         with pytest.raises(InvalidStackOperation):
             state.evaluate_script(script_pubkey)
         state.stack.clear()
 
         # Test non-null dummy
-        script_sig, script_pubkey, m, n = checkmultisig_scripts(context, sighash, op,
-                                                                'nonnull_dummy')
+        script_sig, script_pubkey, _m, _n = checkmultisig_scripts(context, sighash, op,
+                                                                  'nonnull_dummy')
         state.evaluate_script(script_sig)
         if state.limits.flags & InterpreterFlags.REQUIRE_NULLDUMMY:
             with pytest.raises(NullDummyError):
@@ -2903,13 +2903,13 @@ class TestByteStringOperations(TestEvaluateScriptBase):
         # Even though it failed the result is on the stack
         assert state.stack == [result]
 
-    @pytest.mark.parametrize("value,size", (
-        (b'', 0),
-        (b'\x00', 1),
-        (b'\x00\x80', 2),
-        (bytes(20), 20),
+    @pytest.mark.parametrize("value", (
+        b'',
+        b'\x00',
+        b'\x00\x80',
+        bytes(20),
     ))
-    def test_SIZE(self, state, value, size):
+    def test_SIZE(self, state, value):
         script = Script() << value << OP_SIZE
         state.evaluate_script(script)
         assert state.stack == [value, int_to_item(len(value))]

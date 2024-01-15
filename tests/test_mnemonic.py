@@ -1,5 +1,4 @@
 import json
-import os
 
 import pytest
 
@@ -109,13 +108,13 @@ class TestBIP39Mnemonic:
 
 class TestElectrumMnemonic:
 
-    @pytest.mark.parametrize("bits, prefix, execution_count", (
+    @pytest.mark.parametrize("bits, prefix, _execution_count", (
         (bits, prefix, n)
         for bits in (132, 264)
         for prefix in ('01', '02')
         for n in range(10))
     )
-    def test_generate_new(self, bits, prefix, execution_count):
+    def test_generate_new(self, bits, prefix, _execution_count):
         mnemonic = ElectrumMnemonic.generate_new(english_wordlist, prefix=prefix, bits=bits)
         assert ElectrumMnemonic.is_valid_new(mnemonic, prefix)
 
@@ -166,12 +165,12 @@ class TestElectrumMnemonic:
             ElectrumMnemonic.generate_new(['bar'] * 2000)
         assert 'too short' in str(e.value)
 
-    @pytest.mark.parametrize("word_count, execution_count", (
+    @pytest.mark.parametrize("word_count, _execution_count", (
         (word_count, n)
         for word_count in (12, 24)
         for n in range(10))
     )
-    def test_generate_old_seed(self, word_count, execution_count):
+    def test_generate_old_seed(self, word_count, _execution_count):
         hex_seed = ElectrumMnemonic.generate_old_seed(word_count=word_count)
         mnemonic = ElectrumMnemonic.hex_seed_to_old(hex_seed)
         assert len(mnemonic.split()) == word_count

@@ -98,12 +98,12 @@ class TestCashAddrAddress:
             cashaddr.decode(b'foobar')
 
     def test_emcode_bad_hash_size(self):
-        with pytest.raises(ValueError) as e:
+        with pytest.raises(ValueError):
             _encode_full(BSV_PREFIX, 2, bytes(10))
 
     def test_decode_bad_kind(self):
         addr = _encode_full(BSV_PREFIX, 2, bytes(20))
-        with pytest.raises(ValueError) as e:
+        with pytest.raises(ValueError):
             cashaddr.decode(addr)
 
     def test_bad_decode_size(self):

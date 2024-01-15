@@ -4,7 +4,7 @@ import pytest
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes, PrivateKey, PublicKey,
-    Signature, Script, pack_byte, push_int, push_item,
+    Script, pack_byte, push_int, push_item,
     OP_RETURN, OP_CHECKMULTISIG, OP_0, OP_1, OP_DROP, OP_2DROP, OP_NOP, OP_CHECKSIG,
     hash160, classify_output_script
 )
@@ -65,7 +65,7 @@ class TestAddress:
 
     def test_cashaddr_bad(self):
         with pytest.raises(ValueError):
-            address = Address.from_string('bitcoinCash:isamaurysbitcoinandtherealbcash', Bitcoin)
+            Address.from_string('bitcoinCash:isamaurysbitcoinandtherealbcash', Bitcoin)
         with pytest.raises(ValueError):
             Address.from_string('bcash:qp7sl3kxvswe33zmm4mmm2chc22asud3j5g5p6g6u9', Bitcoin)
         with pytest.raises(ValueError):
@@ -84,7 +84,7 @@ class TestP2PKH_Address:
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
-            P2PKH_Address(bytes(20))
+            P2PKH_Address(bytes(20))   # pylint:disable=no-value-for-parameter
         with pytest.raises(TypeError):
             P2PKH_Address(bytearray(20), Bitcoin)
         with pytest.raises(ValueError):
@@ -139,7 +139,7 @@ class TestP2SH_Address:
 
     def test_constructor_bad(self):
         with pytest.raises(TypeError):
-            P2SH_Address(bytes(20))
+            P2SH_Address(bytes(20))  # pylint:disable=no-value-for-parameter
         with pytest.raises(TypeError):
             P2SH_Address(bytearray(20), Bitcoin)
         with pytest.raises(ValueError):
@@ -324,9 +324,9 @@ class TestP2MultiSig_Output:
     def test_from_template_bad(self):
         public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
         with pytest.raises(ValueError):
-            script = P2MultiSig_Output.from_template(pack_byte(1), *public_keys, pack_byte(1))
+            P2MultiSig_Output.from_template(pack_byte(1), *public_keys, pack_byte(1))
         with pytest.raises(ValueError):
-            script = P2MultiSig_Output.from_template(pack_byte(1), *public_keys, pack_byte(3))
+            P2MultiSig_Output.from_template(pack_byte(1), *public_keys, pack_byte(3))
 
 
 MS_SIGS = [bytes.fromhex(sig_hex) for sig_hex in (

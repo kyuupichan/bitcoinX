@@ -934,8 +934,8 @@ def test_cast_to_bool_non_zeros(non_zero):
     assert cast_to_bool(non_zero)
 
 
-'''The testcases from bitcoin-sv/src/test/script_tests.cpp where the script to delete is
-not truncated.'''
+# The testcases from bitcoin-sv/src/test/script_tests.cpp where the script to delete is
+# not truncated.
 find_and_delete_tests = [
     (Script() << OP_1 << OP_2, Script(), None),
     (Script() << OP_1 << OP_2 << OP_3, Script() << OP_2, Script() << OP_1 << OP_3),

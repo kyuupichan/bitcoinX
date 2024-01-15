@@ -1,10 +1,9 @@
-from io import BytesIO
 import random
 
 import pytest
 
 from bitcoinx import (
-    Script, PublicKey, SigHash, hash_to_hex_str, Bitcoin, BitcoinTestnet, JSONFlags,
+    PublicKey, SigHash, Bitcoin, BitcoinTestnet, JSONFlags,
     InterpreterError
 )
 from bitcoinx.tx import *
@@ -61,7 +60,7 @@ def test_signature_hash(filename):
     correct_hashes = read_signature_hashes(filename.replace('.txn', '.sig_hashes'))
 
     n = 0
-    for input_index, (value, pk_script, txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
+    for input_index, (value, pk_script, _txin) in enumerate(zip(values, pk_scripts, tx.inputs)):
         for sighash in range(256):
             sighash = SigHash(sighash)
             if sighash.has_forkid():

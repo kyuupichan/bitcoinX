@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from bitcoinx.base58 import *

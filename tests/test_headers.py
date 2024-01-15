@@ -1,14 +1,14 @@
 import copy
 import math
 import random
-from os import urandom, path
+from os import urandom
 
 import pytest
 
 from bitcoinx.errors import MissingHeader, IncorrectBits, InsufficientPoW
 from bitcoinx.headers import *
 
-from bitcoinx import pack_le_uint32, double_sha256, hex_str_to_hash
+from bitcoinx import pack_le_uint32, double_sha256
 
 
 some_good_bits = [486604799, 472518933, 453281356, 436956491]
@@ -174,12 +174,12 @@ class TestChainAndHeaders:
 
     def test_lookup(self):
         for height, header in enumerate(self.base_headers):
-            hash = header_hash(header)
-            assert self.headers.lookup(hash) == (self.base_chain, height)
+            hash_ = header_hash(header)
+            assert self.headers.lookup(hash_) == (self.base_chain, height)
 
         for height, header in enumerate(self.fork_headers, start=self.common_height + 1):
-            hash = header_hash(header)
-            assert self.headers.lookup(hash) == (self.fork_chain, height)
+            hash_ = header_hash(header)
+            assert self.headers.lookup(hash_) == (self.fork_chain, height)
 
     def test_failed_lookup(self):
         assert self.headers.lookup(bytes(32)) == (None, -1)

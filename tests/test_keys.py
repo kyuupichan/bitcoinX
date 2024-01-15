@@ -1,6 +1,6 @@
 import os
 
-from base64 import b64decode, b64encode
+from base64 import b64encode
 import pytest
 
 from bitcoinx.consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
@@ -65,7 +65,7 @@ class TestPrivateKey:
         int_to_be_bytes(CURVE_ORDER - 1),
     ))
     def test_good(self, good_key):
-        p = PrivateKey(good_key)
+        PrivateKey(good_key)
 
     def test_constructor(self):
         secret = os.urandom(32)
@@ -122,7 +122,7 @@ class TestPrivateKey:
         priv = PrivateKey.from_random()
         priv._secret = bytes(32)
         with pytest.raises(RuntimeError):
-            priv.public_key
+            priv.public_key   # pylint:disable=pointless-statement
 
     def test_to_int(self):
         secret = os.urandom(32)
@@ -271,8 +271,8 @@ class TestPrivateKey:
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
 
-    @pytest.mark.parametrize("network,WIF,hex_str,compressed", WIF_tests)
-    def test_add_preserves_attributes(self, network, WIF, hex_str, compressed):
+    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
+    def test_add_preserves_attributes(self, network, WIF, _hex_str, compressed):
         p = PrivateKey.from_WIF(WIF).add(one)
         assert p.network() is network
         assert p.is_compressed() is compressed
@@ -307,8 +307,8 @@ class TestPrivateKey:
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
 
-    @pytest.mark.parametrize("network,WIF,hex_str,compressed", WIF_tests)
-    def test_mult_preserves_attributes(self, network, WIF, hex_str, compressed):
+    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
+    def test_mult_preserves_attributes(self, network, WIF, _hex_str, compressed):
         p = PrivateKey.from_WIF(WIF).multiply(one)
         assert p.network() is network
         assert p.is_compressed() is compressed
@@ -422,7 +422,6 @@ class TestPrivateKey:
     def test_sign_message_long(self):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
         priv = PrivateKey.from_WIF(secret)
-        P = priv.public_key
         msg = (
             'A purely peer-to-peer version of electronic cash would allow online payments to be se'
             'nt directly from one party to another without going through a financial institution. '
@@ -489,7 +488,7 @@ class TestPrivateKey:
         # Bad padding.  Triggering this is work...
         ephemeral_pubkey = PublicKey.from_bytes(enc_msg[4: 37])
         key = sha512(priv.ecdh_shared_secret(ephemeral_pubkey).to_bytes())
-        iv, key_e, key_m = key[0:16], key[16:32], key[32:]
+        _iv, _key_e, key_m = key[0:16], key[16:32], key[32:]
 
         encrypted_data = bytearray(enc_msg[:-32])
         encrypted_data[-1] ^= 1    # Bad padding
@@ -670,8 +669,8 @@ class TestPublicKey:
         assert P2 == priv2.public_key
         assert P == priv.public_key
 
-    @pytest.mark.parametrize("network,WIF,hex_str,compressed", WIF_tests)
-    def test_add_preserves_attributes(self, network, WIF, hex_str, compressed):
+    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
+    def test_add_preserves_attributes(self, network, WIF, _hex_str, compressed):
         P = PrivateKey.from_WIF(WIF).public_key.add(one)
         assert P.network() is network
         assert P.is_compressed() is compressed
@@ -700,8 +699,8 @@ class TestPublicKey:
         assert P2 == priv2.public_key
         assert P == priv.public_key
 
-    @pytest.mark.parametrize("network,WIF,hex_str,compressed", WIF_tests)
-    def test_multiply_preserves_attributes(self, network, WIF, hex_str, compressed):
+    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
+    def test_multiply_preserves_attributes(self, network, WIF, _hex_str, compressed):
         P = PrivateKey.from_WIF(WIF).public_key.multiply(one)
         assert P.network() is network
         assert P.is_compressed() is compressed
@@ -884,7 +883,6 @@ class TestPublicKey:
         address_comp = P.to_address()
         address_uncomp = P.to_address(compressed=False)
         assert address_comp != address_uncomp
-        base_msg = b'BitcoinSV'
 
         msg_sig = priv.sign_message(msg)
         msg_sig2 = bytearray(msg_sig)

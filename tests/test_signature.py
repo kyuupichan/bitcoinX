@@ -2,7 +2,7 @@ import pytest
 import random
 
 from bitcoinx import (
-    pack_byte, be_bytes_to_int, Script, InvalidSignature, int_to_be_bytes, CURVE_ORDER,
+    pack_byte, be_bytes_to_int, InvalidSignature, int_to_be_bytes, CURVE_ORDER,
 )
 from bitcoinx.signature import *
 

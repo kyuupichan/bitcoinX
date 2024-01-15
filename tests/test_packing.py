@@ -124,8 +124,8 @@ def test_read_varbytes(varbyte_len):
     assert read_varbytes(io.read) == value
 
 
-@pytest.mark.parametrize("read_func,data,value", read_tests())
-def test_read_short(read_func, data, value):
+@pytest.mark.parametrize("read_func,data,_value", read_tests())
+def test_read_short(read_func, data, _value):
     io = BytesIO(data[:-1])
     with pytest.raises(struct_error):
         read_func(io.read)

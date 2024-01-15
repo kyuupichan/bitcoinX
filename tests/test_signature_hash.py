@@ -55,8 +55,8 @@ def ref_sighash(script_code, tx, input_index, hash_type):
     return double_sha256(preimage)
 
 
-@pytest.mark.parametrize('execution_count', range(1000))
-def test_sighash(execution_count):
+@pytest.mark.parametrize('_execution_count', range(1000))
+def test_sighash(_execution_count):
     '''Tests the original Satoshi signature_hash on random transactions.'''
     hash_type = random.randrange(0, 1 << 32)
     sighash_type = SigHash(hash_type)

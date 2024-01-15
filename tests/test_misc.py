@@ -1,7 +1,7 @@
 import io
 from os.path import join
 
-import pytest
+# import pytest
 
 from bitcoinx.misc import *
 from bitcoinx.misc import map_file
@@ -33,11 +33,11 @@ def test_map_file_basic(tmpdir):
     data2 = b'efgh'
     with open(file_name, 'wb+') as f:
         f.write(data)
-    mmap = map_file(file_name)
-    assert len(mmap) == len(data)
-    assert mmap[:] == data
-    mmap[:] = data2
-    mmap.close()
+    mmap_ = map_file(file_name)
+    assert len(mmap_) == len(data)
+    assert mmap_[:] == data
+    mmap_[:] = data2
+    mmap_.close()
     with open(file_name, 'rb+') as f:
         assert f.read() == data2
 
@@ -48,12 +48,12 @@ def test_map_file_expand(tmpdir):
     data2 = b'efgh'
     with open(file_name, 'wb+') as f:
         f.write(data)
-    mmap = map_file(file_name, 10000)
-    assert len(mmap) == 10000
-    assert mmap[:4] == data
-    assert mmap[-4:] == bytes(4)
-    mmap[-4:] = data2
-    mmap.close()
+    mmap_ = map_file(file_name, 10000)
+    assert len(mmap_) == 10000
+    assert mmap_[:4] == data
+    assert mmap_[-4:] == bytes(4)
+    mmap_[-4:] = data2
+    mmap_.close()
     with open(file_name, 'rb+') as f:
         assert f.read(4) == data
         f.seek(-4, io.SEEK_END)

@@ -95,8 +95,8 @@ def setup_headers(network, headers_file):
     with open(os.path.join(data_dir, headers_file), 'rb') as f:
         raw_data = f.read()
 
-    last_height, = unpack_le_uint32(raw_data[-84:-80])
-    last_raw = raw_data[-80:]
+    # last_height, = unpack_le_uint32(raw_data[-84:-80])
+    # last_raw = raw_data[-80:]
     headers = Headers(network)
     chain = headers.connect(network.genesis_header)
 
@@ -154,7 +154,7 @@ def setup_compressed_headers(headers_file, ts_offset, network):
     # Timestamps
     first_time, = unpack_le_uint32(read(4))
     all_times.append(first_time)
-    for n in range(1, header_count):
+    for _ in range(1, header_count):
         diff, = unpack_le_uint16(read(2))
         all_times.append(all_times[-1] + diff - ts_offset)
     # Bits

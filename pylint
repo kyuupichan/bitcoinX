@@ -1,1 +1,2 @@
 pylint --rcfile=.pylintrc bitcoinx/*.py
+pylint --rcfile=.pylintrc-tests tests/*.py

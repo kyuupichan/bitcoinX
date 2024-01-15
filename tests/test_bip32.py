@@ -2,7 +2,7 @@ import pytest
 
 from bitcoinx.bip32 import *
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check, PrivateKey,
+    Bitcoin, Base58Error, base58_decode_check, base58_encode_check, PrivateKey,
     Address
 )
 
@@ -66,7 +66,7 @@ class TestBIP32PublicKey:
             b'>V\x83\x92`\r\x17\xb3"\xa6\x7f\xaf\xc0\x930\xf7\x1e\xdc\x12i'
             b'\x9c\xe4\xc0,a\x1a\x04\xec\x16\x19\xaeK'
         )
-        x, y = mpubkey.to_point()
+        x, _y = mpubkey.to_point()
         assert x == 44977109961578369385937116592536468905742111247230478021459394832226142714624
 
     def test_extended_key(self):
