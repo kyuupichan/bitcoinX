@@ -2,8 +2,9 @@ from io import BytesIO
 
 import pytest
 
+from bitcoinx.errors import PackingError
 from bitcoinx.packing import *
-from struct import error as struct_error
+
 
 pack_cases = [
     ('pack_le_int32', -258, b'\xfe\xfe\xff\xff'),
@@ -54,7 +55,7 @@ def test_varint_len_bad(value):
 ])
 def test_pack_negative(pack_func):
     pack_func = globals()[pack_func]
-    with pytest.raises(struct_error):
+    with pytest.raises(PackingError):
         pack_func(-127)
 
 
@@ -62,9 +63,9 @@ def test_pack_negative(pack_func):
 def test_oversized(pack_func):
     big = 1 << 64
     func = globals()[pack_func]
-    with pytest.raises(struct_error):
+    with pytest.raises(PackingError):
         assert func(big)
-    with pytest.raises(struct_error):
+    with pytest.raises(PackingError):
         assert func(-big)
 
 
@@ -127,7 +128,7 @@ def test_read_varbytes(varbyte_len):
 @pytest.mark.parametrize("read_func,data,_value", read_tests())
 def test_read_short(read_func, data, _value):
     io = BytesIO(data[:-1])
-    with pytest.raises(struct_error):
+    with pytest.raises(PackingError):
         read_func(io.read)
 
 
@@ -136,7 +137,7 @@ def test_read_varbytes_short(varbyte_len):
     value = b'7' * varbyte_len
     data = pack_varbytes(value)
     io = BytesIO(data[:-1])
-    with pytest.raises(struct_error):
+    with pytest.raises(PackingError):
         read_varbytes(io.read)
 
 

@@ -25,10 +25,10 @@ __all__ = (
     'read_varint', 'read_varbytes', 'read_list',
 )
 
-
-from struct import Struct, error as struct_error
+from struct import Struct
 
 from .consts import SIGNED_MESSAGE_PREFIX
+from .errors import PackingError
 
 
 struct_le_i = Struct('<i')
@@ -189,7 +189,7 @@ def read_varbytes(read):
     n = read_varint(read)
     result = read(n)
     if len(result) != n:
-        raise struct_error(f'varbytes requires a buffer of {n:,d} bytes')
+        raise PackingError(f'varbytes requires a buffer of {n:,d} bytes')
     return result
 
 

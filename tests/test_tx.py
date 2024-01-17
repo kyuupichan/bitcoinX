@@ -9,7 +9,7 @@ from bitcoinx import (
 from bitcoinx.tx import *
 from bitcoinx.tx import LOCKTIME_THRESHOLD
 
-from .utils import read_tx, read_tx_hex, read_signature_hashes, read_json_tx
+from .utils import read_tx, read_text_file, read_signature_hashes, read_json_tx
 
 
 def test_tx_read():
@@ -22,19 +22,19 @@ def test_tx_read():
 
 
 def test_from_bytes():
-    tx_bytes = bytes.fromhex(read_tx_hex('b59de025.txn'))
+    tx_bytes = bytes.fromhex(read_text_file('b59de025.txn'))
     tx = Tx.from_bytes(tx_bytes)
     assert tx.to_bytes() == tx_bytes
 
 
 def test_from_hex():
-    tx_hex = read_tx_hex('b59de025.txn')
+    tx_hex = read_text_file('b59de025.txn')
     tx = Tx.from_hex(tx_hex)
     assert tx.to_hex() == tx_hex
 
 
 def test_to_bytes_to_hex():
-    tx_hex = read_tx_hex('b59de025.txn')
+    tx_hex = read_text_file('b59de025.txn')
     tx = Tx.from_hex(tx_hex)
     assert tx.to_bytes() == bytes.fromhex(tx_hex)
     assert tx.to_hex() == tx_hex

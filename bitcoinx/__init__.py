@@ -8,6 +8,7 @@ from .hashes import *
 from .headers import *
 from .interpreter import *
 from .keys import *
+from .merkle import *
 from .misc import *
 from .mnemonic import *
 from .packing import *
@@ -30,6 +31,7 @@ __all__ = sum((
     headers.__all__,
     interpreter.__all__,
     keys.__all__,
+    merkle.__all__,
     misc.__all__,
     mnemonic.__all__,
     packing.__all__,

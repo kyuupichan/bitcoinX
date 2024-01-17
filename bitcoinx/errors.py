@@ -19,8 +19,10 @@ __all__ = (
     'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
     'NumEqualVerifyFailed', 'InvalidSignatureCount', 'PushOnlyError', 'LockTimeError',
-    'StackMemoryUsageError',
+    'StackMemoryUsageError', 'MerkleError', 'PackingError',
 )
+
+from struct import error as PackingError
 
 
 #
@@ -62,6 +64,10 @@ class InsufficientPoW(ChainException):
     def __str__(self):
         return (f'header f{self.header} hash value f{self.header.hash_value()} exceeds '
                 f'its target {self.header.target()}')
+
+
+class MerkleError(Exception):
+    '''Raised on errors in merkle path validation.'''
 
 
 class DecryptionError(ValueError):

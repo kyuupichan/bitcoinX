@@ -69,13 +69,17 @@ def random_txinput_context():
     return TxInputContext(tx, input_index, utxo)
 
 
-def read_tx_hex(filename):
+def read_file(filename):
     with open(path.join(data_dir, filename)) as f:
-        return f.read().strip()
+        return f.read()
+
+
+def read_text_file(filename):
+    return read_file(filename).strip()
 
 
 def read_tx(filename):
-    return Tx.from_hex(read_tx_hex(filename))
+    return Tx.from_hex(read_text_file(filename))
 
 
 def read_signature_hashes(filename):
