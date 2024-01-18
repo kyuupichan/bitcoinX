@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from os import urandom
 
@@ -361,6 +362,17 @@ class TestBUMP:
         height, bump = BUMP.from_bytes(bytes.fromhex(bump_a))
         text = bump.to_json(height)
         assert text == answer
+
+    def test_to_json_is_sorted(self):
+        tx_hashes = testcases[1]
+        bump = BUMP.create(tx_hashes, tx_hashes)
+        level = bump.path[0]
+        if sorted(level.keys()) == list(level.keys()):
+            level = {offset: level[offset] for offset in reversed(level.keys())}
+            bump.path[0] = level
+        text = bump.to_json(1)
+        data = json.loads(text)
+        assert data['path'][0][0]['offset'] == 0
 
     def test_from_json(self):
         orig_height, orig_bump = BUMP.from_bytes(bytes.fromhex(bump_a))

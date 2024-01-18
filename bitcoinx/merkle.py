@@ -81,7 +81,7 @@ def uplift_level(level, length):
 
 
 def validate_path(path):
-    '''Check the path is good and return the merkle root.
+    '''Check the path is good and return a (merkle root, tx count, canonical path) triple.
 
     Rejects offsets that are out of range, extraneous leaves, and missing leaves.
     Removes redundant leaves.'''
@@ -181,18 +181,14 @@ class BUMP:
         return b''.join(parts())
 
     def to_json(self, height):
+        def level_json(level):
+            # Lowest offsets first
+            pairs = sorted((offset, hash_) for offset, hash_ in level.items())
+            return [{'offset': offset, 'hash': hash_to_hex_str(hash_)} for offset, hash_ in pairs]
+
         return json.dumps({
             'blockHeight': height,
-            'path': [
-                [
-                    {
-                        'offset': offset,
-                        'hash': hash_to_hex_str(hash_),
-                    }
-                    for offset, hash_ in level.items()
-                ]
-                for level in self.path
-            ]
+            'path': [level_json(level) for level in self.path],
         })
 
     @classmethod
