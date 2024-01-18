@@ -51,12 +51,12 @@ def calc_level(hashes, in_offsets, is_first):
     else:
         offsets = set(offset ^ 1 for offset in in_offsets).difference(in_offsets)
     offsets.discard(len(hashes))
-    level = {offset: hashes[offset] for offset in sorted(offsets)}
+    level = {offset: hashes[offset] for offset in offsets}
     return level, {offset // 2 for offset in in_offsets}
 
 
 def level_map(level):
-    result = {offset: hash_ for offset, hash_ in sorted(level)}
+    result = {offset: hash_ for offset, hash_ in level}
     if any(result[offset] != hash_ for offset, hash_ in level):
         raise MerkleError('conflicting leaves in path')
     return result
@@ -144,11 +144,13 @@ class BUMP:
         self.root, self.tx_count, self.path = validate_path(path)
 
     def __eq__(self, other):
+        return self.is_compatible(other) and self.path == other.path
+
+    def is_compatible(self, other):
+        '''Return True if other is a BUMP for the same block.'''
         if not isinstance(other, BUMP):
             raise TypeError('other must be of type BUMP')
-        return (self.root == other.root and
-                self.tx_count == other.tx_count and
-                self.path == other.path)
+        return self.root == other.root and self.tx_count == other.tx_count
 
     def tx_hashes(self):
         '''Returns a map of transaction_hash -> pos_in_block proven by this BUMP.'''
@@ -156,9 +158,7 @@ class BUMP:
 
     def merge(self, other):
         '''Return a new BUMP representing the merger of this one with another.'''
-        if not isinstance(other, BUMP):
-            raise TypeError('other must be a BUMP')
-        if self.root != other.root or self.tx_count != other.tx_count:
+        if not self.is_compatible(other):
             raise MerkleError('cannot merge with a BUMP of a different block')
 
         def merge_level(lhs, rhs):
@@ -166,7 +166,6 @@ class BUMP:
             result.update(rhs)
             return result
 
-        # Return a new BUMP from the merged paths
         return BUMP([merge_level(lhs, rhs) for lhs, rhs in zip(self.path, other.path)])
 
     def to_bytes(self, height):
@@ -200,10 +199,9 @@ class BUMP:
     def from_json(cls, text):
         data = json.loads(text)
         height = data['blockHeight']
-        path = data['path']
         path = [
             level_map([(leaf['offset'], hex_str_to_hash(leaf['hash'])) for leaf in level])
-            for level in path
+            for level in data['path']
         ]
         return height, cls(path)
 
