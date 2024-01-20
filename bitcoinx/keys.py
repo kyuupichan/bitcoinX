@@ -17,7 +17,7 @@ from os import urandom
 from electrumsv_secp256k1 import ffi, lib
 
 from .address import P2PKH_Address, P2PK_Output
-from .aes import aes_encrypt_with_iv, aes_decrypt_with_iv
+from .aes import aes_decrypt_authenticated, aes_encrypt_authenticated
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .consts import CURVE_ORDER
 from .errors import DecryptionError, InvalidSignature
@@ -267,30 +267,17 @@ class PrivateKey:
                 message = b64decode(message, validate=True)
             except binascii_Error:
                 raise DecryptionError('invalid base64 encoding of encrypted message') from None
+
         mlen = len(magic)
-        if len(message) < 81 + mlen:
-            raise DecryptionError('message too short')
-        if not message.startswith(magic):
-            raise DecryptionError('bad magic')
-
+        pubkey_bytes = message[mlen:mlen + 33]
         try:
-            ephemeral_pubkey = PublicKey.from_bytes(message[mlen: mlen + 33])
-        except ValueError as e:
-            raise DecryptionError(f'invalid ephemeral public key: {e}') from None
+            ephemeral_pubkey = PublicKey.from_bytes(pubkey_bytes)
+        except ValueError:
+            raise DecryptionError(f'invalid ephemeral public key') from None
 
-        ciphertext = message[mlen + 33:-32]
-        hmac = message[-32:]
-        key = sha512(self.ecdh_shared_secret(ephemeral_pubkey).to_bytes())
-        iv, key_e, key_m = key[0:16], key[16:32], key[32:]
-
-        if hmac_digest(key_m, message[:-32], _sha256) != hmac:
-            raise DecryptionError('bad HMAC')
-
-        # Convert exceptions to DecryptionError as the aes library itself can raise
-        try:
-            return aes_decrypt_with_iv(key_e, iv, ciphertext)
-        except Exception as e:
-            raise DecryptionError(str(e)) from None
+        password = self.ecdh_shared_secret(ephemeral_pubkey).to_bytes()
+        prefix = magic + pubkey_bytes
+        return aes_decrypt_authenticated(message, password, prefix)
 
 
 class PublicKey:
@@ -502,13 +489,9 @@ class PublicKey:
         if isinstance(message, str):
             message = message.encode()
         ephemeral_key = PrivateKey.from_random()
-        # pylint: disable=E1123
-        key = sha512(ephemeral_key.ecdh_shared_secret(self).to_bytes(compressed=True))
-        iv, key_e, key_m = key[0:16], key[16:32], key[32:]
-        ciphertext = aes_encrypt_with_iv(key_e, iv, message)
-        ephemeral_pubkey = ephemeral_key.public_key.to_bytes()
-        encrypted_data = b''.join((magic, ephemeral_pubkey, ciphertext))
-        return encrypted_data + hmac_digest(key_m, encrypted_data, _sha256)
+        password = ephemeral_key.ecdh_shared_secret(self).to_bytes(compressed=True)
+        prefix = magic + ephemeral_key.public_key.to_bytes()
+        return aes_encrypt_authenticated(message, password, prefix)
 
     def encrypt_message_to_base64(self, message, magic=b'BIE1'):
         '''As for encrypt_message, but return the result as a base64 ASCII string.'''

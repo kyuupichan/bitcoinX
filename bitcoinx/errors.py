@@ -70,8 +70,9 @@ class MerkleError(Exception):
     '''Raised on errors in merkle path validation.'''
 
 
-class DecryptionError(ValueError):
-    '''Raised by PrivateKey.decrypt_message for various failures.'''
+class DecryptionError(Exception):
+    '''Raised by PrivateKey.decrypt_message and aes_decrypt_ functions.  Indicates a
+    password error or corrupt ciphertext; in general it is impossible to distinguish.'''
 
 
 class ScriptError(Exception):

@@ -472,11 +472,11 @@ class TestPrivateKey:
 
         with pytest.raises(DecryptionError) as e:
             priv.decrypt_message(bytes(84))
-        assert 'too short' in str(e.value)
+        assert 'invalid ephemeral' in str(e.value)
 
         with pytest.raises(DecryptionError) as e:
-            priv.decrypt_message(enc_msg, magic=b'Z')
-        assert 'bad magic' in str(e.value)
+            priv.decrypt_message(enc_msg, magic=b'abcd')
+        assert 'corrupt ciphertext' in str(e.value)
 
         # Bad pubkey first byte
         enc_msg2 = bytearray(enc_msg)
@@ -495,15 +495,14 @@ class TestPrivateKey:
         enc_msg = bytes(encrypted_data) + hmac_digest(key_m, encrypted_data, _sha256)
         with pytest.raises(DecryptionError) as e:
             priv.decrypt_message(enc_msg)
-        assert 'padding' in str(e.value)
+        assert 'bad padding' in str(e.value)
 
         enc_msg = bytes.fromhex(
             '4249453102e5cde5b5924d745958ba05c87d6d8930c6314481fbdefa02d8f4bafc8a2e1dee7d9c3e9d704'
             '8d72c63fc3e7b76f7f0d0b99c9b75ac78af43442e5926ea9fbaab1d4d32d71a4237e432bc2bbf7808fcd3'
         )
-        with pytest.raises(DecryptionError) as e:
+        with pytest.raises(DecryptionError):
             priv.decrypt_message(enc_msg)
-        assert 'inconsistent padding bytes' in str(e.value)
 
         # A valid encrypted message but for the wrong key; should give hmac mismatch
         enc_msg = P.add(one).encrypt_message(msg)
