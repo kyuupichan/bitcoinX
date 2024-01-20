@@ -26,6 +26,11 @@ In time.
 ChangeLog
 =========
 
+0.9.0
+-----
+
+BIP239 (extended transaction format) support.  AES improvements.
+
 0.8.0
 -----
 

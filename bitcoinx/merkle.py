@@ -17,7 +17,7 @@ from .packing import (
 )
 
 
-__all__ = ('merkle_path_length', 'merkle_root', 'BUMP')
+__all__ = ('merkle_path_length', 'merkle_root')
 
 
 def merkle_path_length(tx_count):

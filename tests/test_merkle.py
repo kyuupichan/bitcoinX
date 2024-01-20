@@ -8,6 +8,7 @@ import pytest
 
 from bitcoinx import double_sha256, MerkleError, PackingError
 from bitcoinx.merkle import *
+from bitcoinx.merkle import BUMP
 
 from .utils import read_text_file
 
