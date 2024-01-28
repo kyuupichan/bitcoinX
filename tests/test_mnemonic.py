@@ -84,7 +84,7 @@ class TestBIP39Mnemonic:
         assert mnemonic == BIP39Mnemonic._from_entropy(entropy, english_wordlist)
         seed = BIP39Mnemonic.to_seed(mnemonic, 'TREZOR')
         assert seed.hex() == seed_hex
-        assert BIP32PrivateKey.from_seed(seed, Bitcoin).to_extended_key_string() == xprv
+        assert BIP32PrivateKey.from_seed(seed).to_extended_key_string(Bitcoin) == xprv
 
     def test_is_valid_bad_list(self):
         with pytest.raises(ValueError) as e:

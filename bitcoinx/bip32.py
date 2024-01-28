@@ -73,24 +73,24 @@ class BIP32PrivateKey(PrivateKey):
        - the classmethod from_seed
        - from an existing instance with the child() function
     '''
-    def __init__(self, secret, derivation, network):
-        super().__init__(secret, True, network)
+    def __init__(self, secret, derivation):
+        super().__init__(secret, True)
         self._derivation = derivation
 
-    def _extended_key(self):
+    def _extended_key(self, network):
         '''Return a raw extended private key.'''
-        return self._derivation.extended_key(self._network, self._secret)
+        return self._derivation.extended_key(network, self._secret)
 
     @classmethod
-    def _from_parts(cls, privkey, chain_code, network):
+    def _from_parts(cls, privkey, chain_code):
         derivation = BIP32Derivation(chain_code, 0, 0, bytes(4))
-        return cls(privkey, derivation, network)
+        return cls(privkey, derivation)
 
     @classmethod
-    def from_seed(cls, seed, network):
+    def from_seed(cls, seed):
         # This hard-coded message string seems to be network-independent...
         privkey, chain_code = hmac_sha512_halves(b'Bitcoin seed', seed)
-        return cls._from_parts(privkey, chain_code, network)
+        return cls._from_parts(privkey, chain_code)
 
     @classmethod
     def from_random(cls, *, source=urandom):
@@ -98,14 +98,14 @@ class BIP32PrivateKey(PrivateKey):
         while True:
             try:
                 data = source(64)
-                return cls._from_parts(data[:32], data[32:], Bitcoin)
+                return cls._from_parts(data[:32], data[32:])
             except ValueError:
                 pass
 
     @cachedproperty
     def public_key(self):
         '''Return the corresponding BIP32PublicKey object.'''
-        return BIP32PublicKey(self._secp256k1_public_key(), self._derivation, self._network)
+        return BIP32PublicKey(self._secp256k1_public_key(), self._derivation)
 
     def child(self, n):
         '''Return the derived child extended privkey at index N.'''
@@ -121,7 +121,7 @@ class BIP32PrivateKey(PrivateKey):
         L, R = hmac_sha512_halves(self._derivation.chain_code, msg)
         child_derivation = self._derivation.child(R, n, self.fingerprint())
 
-        return BIP32PrivateKey(self.add(L).to_bytes(), child_derivation, self._network)
+        return BIP32PrivateKey(self.add(L).to_bytes(), child_derivation)
 
     def child_safe(self, n):
         '''Return a child but increment n if the child derivation is invalid.'''
@@ -147,9 +147,9 @@ class BIP32PrivateKey(PrivateKey):
         '''Return the key's fingerprint as 4 bytes.'''
         return self.public_key.fingerprint()
 
-    def to_extended_key_string(self):
+    def to_extended_key_string(self, network):
         '''Return an extended key as a base58 string.'''
-        return base58_encode_check(self._extended_key())
+        return base58_encode_check(self._extended_key(network))
 
     def __repr__(self):
         return f'BIP32PrivateKey("{str(self)}")'
@@ -164,15 +164,15 @@ class BIP32PublicKey(PublicKey):
        - from a BIP32PrivateKey via its public_key attribute
     '''
 
-    def __init__(self, public_key, derivation, network):
+    def __init__(self, public_key, derivation):
         if isinstance(public_key, PublicKey):
             public_key = public_key._public_key
-        super().__init__(public_key, True, network)
+        super().__init__(public_key, True)
         self._derivation = derivation
 
-    def _extended_key(self):
+    def _extended_key(self, network):
         '''Return a raw extended private key.'''
-        return self._derivation.extended_key(self._network, self.to_bytes())
+        return self._derivation.extended_key(network, self.to_bytes())
 
     def child(self, n):
         '''Return the derived child extended pubkey at index N.'''
@@ -183,7 +183,7 @@ class BIP32PublicKey(PublicKey):
         L, R = hmac_sha512_halves(self._derivation.chain_code, msg)
         child_derivation = self._derivation.child(R, n, self.fingerprint())
 
-        return BIP32PublicKey(self.add(L), child_derivation, self._network)
+        return BIP32PublicKey(self.add(L), child_derivation)
 
     def child_safe(self, n):
         '''Return a child but increment n if the child derivation is invalid.'''
@@ -207,19 +207,21 @@ class BIP32PublicKey(PublicKey):
         '''Return the key's fingerprint as 4 bytes.'''
         return self.identifier()[:4]
 
-    def to_extended_key_string(self):
+    def to_extended_key_string(self, network):
         '''Return an extended key as a base58 string.'''
-        return base58_encode_check(self._extended_key())
+        return base58_encode_check(self._extended_key(network))
 
     def __str__(self):
-        return self.to_extended_key_string()
+        return self.to_extended_key_string(Bitcoin)
 
     def __repr__(self):
-        return f'BIP32PublicKey("{self.to_extended_key_string()}")'
+        return f'BIP32PublicKey("{str(self)}")'
 
 
 def _from_extended_key(ekey):
-    '''Return a PubKey or PrivKey from an extended key raw bytes.'''
+    '''Return a (key, network) pair.  key is a BIP32PublicKey or BIP32PrivateKey instance from
+    an extended key raw bytes.
+    '''
     if len(ekey) != 78:
         raise ValueError('extended key must have length 78')
 
@@ -227,13 +229,13 @@ def _from_extended_key(ekey):
     n, = unpack_be_uint32(ekey[9:13])
     derivation = BIP32Derivation(ekey[13:45], n, ekey[4], ekey[5:9])
     if is_public_key:
-        key = BIP32PublicKey(PublicKey.from_bytes(ekey[45:]), derivation, network)
+        key = BIP32PublicKey(PublicKey.from_bytes(ekey[45:]), derivation)
     else:
         if ekey[45] != 0:
             raise ValueError(f'invalid extended private key prefix byte {ekey[45]}')
-        key = BIP32PrivateKey(ekey[46:], derivation, network)
+        key = BIP32PrivateKey(ekey[46:], derivation)
 
-    return key
+    return key, network
 
 
 def bip32_key_from_string(ekey_str):
@@ -242,7 +244,7 @@ def bip32_key_from_string(ekey_str):
     xpub6BsnM1W2Y7qLMiuhi7f7dbAwQZ5Cz5gYJCRzTNainXzQXYjFwtuQXHd
     3qfi3t3KJtHxshXezfjft93w4UE7BGMtKwhqEHae3ZA7d823DVrL
 
-    return a BIP32PubKey or BIP32PrivKey.
+    Return a (key, network) pair.  key is a BIP32PublicKey or BIP32PrivateKey instance.
     '''
     return _from_extended_key(base58_decode_check(ekey_str))
 

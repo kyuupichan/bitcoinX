@@ -69,15 +69,13 @@ class TestPrivateKey:
 
     def test_constructor(self):
         secret = os.urandom(32)
-        p1 = PrivateKey(secret, True, Bitcoin)
-        p2 = PrivateKey(secret, network=BitcoinTestnet, compressed=False)
+        p1 = PrivateKey(secret, True)
+        p2 = PrivateKey(secret, compressed=False)
         assert p1.to_bytes() is secret and p2.to_bytes() is secret
         assert p1 == p2
-        assert p1.network() is Bitcoin and p2.network() is BitcoinTestnet
         assert p1.is_compressed()
         assert not p2.is_compressed()
         p3 = PrivateKey(secret)
-        assert p3.network() is Bitcoin
         assert p3.is_compressed()
 
     def test_from_arbitrary_bytes(self):
@@ -104,18 +102,16 @@ class TestPrivateKey:
 
     def test_hashable(self):
         secret = os.urandom(32)
-        p1 = PrivateKey(secret, True, Bitcoin)
-        p2 = PrivateKey(secret, False, BitcoinTestnet)
+        p1 = PrivateKey(secret, True)
+        p2 = PrivateKey(secret, False)
         assert len({p1, p2}) == 1
 
     def test_public_key(self):
         secret = os.urandom(32)
-        for network in (Bitcoin, BitcoinTestnet):
-            for compressed in (False, True):
-                p = PrivateKey(secret, compressed, network)
-                P = p.public_key
-                assert P.network() is network
-                assert P.is_compressed() is compressed
+        for compressed in (False, True):
+            p = PrivateKey(secret, compressed)
+            P = p.public_key
+            assert P.is_compressed() is compressed
 
     def test_public_key_bad(self):
         # Force coverage with a fake condition
@@ -138,7 +134,6 @@ class TestPrivateKey:
     def test_from_int(self, value):
         p = PrivateKey.from_int(value)
         assert p.to_int() == value
-        assert p.network() is Bitcoin
         assert p.is_compressed()
 
     @pytest.mark.parametrize("value", [0, 0x0, 00])
@@ -163,7 +158,6 @@ class TestPrivateKey:
             hex_str = '0' * (64 - len(hex_str)) + hex_str
         p = PrivateKey.from_hex(hex_str)
         assert p.to_int() == value
-        assert p.network() is Bitcoin
         assert p.is_compressed()
 
     @pytest.mark.parametrize("hex_str", ['', '00', '2345', '  ' + '11' * 30 + '  '])
@@ -199,7 +193,6 @@ class TestPrivateKey:
 
         p = PrivateKey.from_random(source=source)
         assert p.to_bytes() == secret
-        assert p.network() is Bitcoin
         assert p.is_compressed()
 
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34g',
@@ -207,7 +200,6 @@ class TestPrivateKey:
     def test_from_minikey(self, minikey):
         p = PrivateKey.from_minikey(minikey)
         assert p._secret == sha256(minikey.encode())
-        assert p.network() is Bitcoin
         assert not p.is_compressed()
 
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34h',
@@ -218,12 +210,12 @@ class TestPrivateKey:
 
     @pytest.mark.parametrize("network,WIF,hex_str,compressed", WIF_tests)
     def test_from_WIF(self, network, WIF, hex_str, compressed):
-        p = PrivateKey.from_WIF(WIF)
+        p, net = PrivateKey.from_WIF(WIF)
         assert p.to_hex() == hex_str
-        assert p.network() is network
+        assert net is network
         assert p._compressed == compressed
         assert len(p.public_key.to_bytes()) == (33 if compressed else 65)
-        assert p.to_WIF() == WIF
+        assert p.to_WIF(network) == WIF
 
     def test_from_WIF_bad(self):
         with pytest.raises(TypeError):
@@ -250,7 +242,7 @@ class TestPrivateKey:
 
     def test_to_WIF_no_args(self):
         p = PrivateKey.from_random()
-        assert p.to_WIF() == p.to_WIF(network=Bitcoin, compressed=True)
+        assert p.to_WIF(Bitcoin) == p.to_WIF(network=Bitcoin, compressed=True)
 
     def test_add_one(self):
         p1 = PrivateKey.from_random()
@@ -273,8 +265,9 @@ class TestPrivateKey:
 
     @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
     def test_add_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        p = PrivateKey.from_WIF(WIF).add(one)
-        assert p.network() is network
+        p, net = PrivateKey.from_WIF(WIF)
+        assert net is network
+        p = p.add(one)
         assert p.is_compressed() is compressed
 
     def test_add_bad(self):
@@ -309,8 +302,9 @@ class TestPrivateKey:
 
     @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
     def test_mult_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        p = PrivateKey.from_WIF(WIF).multiply(one)
-        assert p.network() is network
+        p, net = PrivateKey.from_WIF(WIF)
+        assert net is network
+        p = p.multiply(one)
         assert p.is_compressed() is compressed
 
     def test_mult_bad(self):
@@ -399,7 +393,8 @@ class TestPrivateKey:
     @pytest.mark.parametrize("msg", (b'BitcoinSV', 'BitcoinSV'))
     def test_sign_message_and_to_base64(self, msg):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
-        priv = PrivateKey.from_WIF(secret)
+        priv, net = PrivateKey.from_WIF(secret)
+        assert net is Bitcoin
         priv._compressed = True
         msg_sig = priv.sign_message(msg)
         for encoded_sig in (b64encode(msg_sig).decode(), priv.sign_message_to_base64(msg)):
@@ -421,7 +416,8 @@ class TestPrivateKey:
 
     def test_sign_message_long(self):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
-        priv = PrivateKey.from_WIF(secret)
+        priv, net = PrivateKey.from_WIF(secret)
+        assert net is Bitcoin
         msg = (
             'A purely peer-to-peer version of electronic cash would allow online payments to be se'
             'nt directly from one party to another without going through a financial institution. '
@@ -548,12 +544,11 @@ class TestPublicKey:
 
     def test_hashable(self):
         secret = os.urandom(32)
-        p1 = PrivateKey(secret, True, Bitcoin)
-        p2 = PrivateKey(secret, False, BitcoinTestnet)
+        p1 = PrivateKey(secret, True)
+        p2 = PrivateKey(secret, False)
         pub1 = p1.public_key
         pub2 = p2.public_key
         assert pub1.is_compressed() != pub2.is_compressed()
-        assert pub1.network() != pub2.network()
         assert len({pub1, pub2}) == 1
 
     def test_to_bytes(self):
@@ -573,7 +568,6 @@ class TestPublicKey:
         for compressed in (False, True):
             pub = PublicKey.from_bytes(priv.public_key.to_bytes(compressed=compressed))
             assert pub == priv.public_key
-            assert pub.network() is Bitcoin
             assert pub.is_compressed() is compressed
 
     def test_from_bytes_bad(self):
@@ -643,19 +637,19 @@ class TestPublicKey:
         priv = PrivateKey(bytes(range(32)))
         pub = priv.public_key
 
-        assert pub.to_address() == Address.from_string('16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L',
-                                                       Bitcoin)
-        assert pub.to_address(compressed=False) == Address.from_string(
+        assert pub.to_address(Bitcoin) == Address.from_string('16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L',
+                                                              Bitcoin)
+        assert pub.to_address(Bitcoin, compressed=False) == Address.from_string(
             '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP', Bitcoin)
 
-        assert pub.to_address(network=Bitcoin) == Address.from_string(
+        assert pub.to_address(Bitcoin) == Address.from_string(
             '16ZbRYV2f1NNuNQ9FDYyUMC2d1cjGS2G3L', Bitcoin)
         assert pub.to_address(network=Bitcoin, compressed=False) == Address.from_string(
             '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP', Bitcoin)
 
         assert pub.to_address(network=BitcoinTestnet, compressed=True) == Address.from_string(
             'mm5Yiba1U2odgUskxnXMJGQMV1DSAXVPib', BitcoinTestnet)
-        assert pub.to_address(network=BitcoinTestnet, compressed=False) == Address.from_string(
+        assert pub.to_address(BitcoinTestnet, compressed=False) == Address.from_string(
             'mvfcNNibtBZcRHqkTCsrCapVPU6dpCoKjp', BitcoinTestnet)
 
     def test_add(self):
@@ -670,8 +664,9 @@ class TestPublicKey:
 
     @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
     def test_add_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        P = PrivateKey.from_WIF(WIF).public_key.add(one)
-        assert P.network() is network
+        P, net = PrivateKey.from_WIF(WIF)
+        assert net is network
+        P = P.public_key.add(one)
         assert P.is_compressed() is compressed
 
     def test_add_bad(self):
@@ -700,8 +695,9 @@ class TestPublicKey:
 
     @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
     def test_multiply_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        P = PrivateKey.from_WIF(WIF).public_key.multiply(one)
-        assert P.network() is network
+        P, net = PrivateKey.from_WIF(WIF)
+        assert net is network
+        P = P.public_key.multiply(one)
         assert P.is_compressed() is compressed
 
     def test_multiply_bad(self):
@@ -731,13 +727,10 @@ class TestPublicKey:
         priv2 = priv.add(priv._secret)
         assert PublicKey.combine_keys([P, P]) == priv2.public_key
 
-    @pytest.mark.parametrize("compressed,network", (
-        (True, Bitcoin), (False, Bitcoin), (True, BitcoinTestnet), (False, BitcoinTestnet),
-    ))
-    def test_combine_keys(self, compressed, network):
+    @pytest.mark.parametrize("compressed", ((True, False)))
+    def test_combine_keys(self, compressed):
         priv_keys = [PrivateKey.from_random() for n in range(5)]
         priv_keys[0]._compressed = compressed
-        priv_keys[0]._network = network
         pub_keys = [priv_key.public_key for priv_key in priv_keys]
 
         pk = priv_keys[0]
@@ -745,7 +738,6 @@ class TestPublicKey:
             pk = pk.add(priv_keys[n]._secret)
         combined = PublicKey.combine_keys(pub_keys)
         assert pk.public_key == combined
-        assert combined.network() is network
         assert combined.is_compressed() is compressed
 
     def test_combine_keys_bad(self):
@@ -827,7 +819,6 @@ class TestPublicKey:
         pub = PublicKey.from_recoverable_signature(rec_sig, message)
 
         assert priv.public_key == pub
-        assert pub.network() is Bitcoin
 
     def test_from_recoverable_signature_bad(self):
         message = b'BitcoinSV'
@@ -850,7 +841,6 @@ class TestPublicKey:
         msg_sig = priv.sign_message(msg)
         P2 = PublicKey.from_signed_message(msg_sig, msg)
         assert P == P2
-        assert P2.network() is Bitcoin
 
     def test_from_signed_message_base64(self):
         priv = PrivateKey.from_random()
@@ -879,8 +869,8 @@ class TestPublicKey:
     def test_verify_message(self, msg):
         priv = PrivateKey.from_random()
         P = priv.public_key
-        address_comp = P.to_address()
-        address_uncomp = P.to_address(compressed=False)
+        address_comp = P.to_address(Bitcoin)
+        address_uncomp = P.to_address(Bitcoin, compressed=False)
         assert address_comp != address_uncomp
 
         msg_sig = priv.sign_message(msg)
@@ -939,9 +929,9 @@ class TestPublicKey:
         msg = b'BitcoinSV'
         msg_sig = priv1.sign_message(msg)
 
-        assert P1.verify_message_and_address(msg_sig, msg, P1.to_address())
-        assert not P1.verify_message_and_address(msg_sig, msg, P2.to_address())
-        assert not P1.verify_message_and_address(msg_sig[:-1], msg, P1.to_address())
+        assert P1.verify_message_and_address(msg_sig, msg, P1.to_address(Bitcoin))
+        assert not P1.verify_message_and_address(msg_sig, msg, P2.to_address(Bitcoin))
+        assert not P1.verify_message_and_address(msg_sig[:-1], msg, P1.to_address(Bitcoin))
 
         with pytest.raises(TypeError):
             P1.verify_message_and_address(msg_sig, msg, b'foobar')
@@ -953,7 +943,7 @@ class TestPublicKey:
         msg = b'BitcoinSV'
         msg_sig = priv.sign_message(msg, hasher=hasher)
 
-        assert P.verify_message_and_address(msg_sig, msg, P.to_address(), hasher=hasher)
+        assert P.verify_message_and_address(msg_sig, msg, P.to_address(Bitcoin), hasher=hasher)
 
     def test_verify_message_bad(self):
         priv = PrivateKey.from_random()
@@ -1039,9 +1029,7 @@ class TestPublicKey:
         P = PublicKey.from_hex(
             '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379'
             '515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee')
-        P._network = BitcoinTestnet
         C = P.complement()
         assert C.hash160().hex() == 'f4d294debc9799f1b6e0d15cd696b207ce6df0f9'
         assert C == P
         assert C is not P
-        assert C.network() is BitcoinTestnet
