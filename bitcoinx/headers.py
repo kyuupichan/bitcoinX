@@ -12,10 +12,11 @@ import math
 
 import attr
 
+from .base58 import base58_encode_check
 from .errors import MissingHeader, IncorrectBits, InsufficientPoW
 from .hashes import double_sha256, hash_to_hex_str, hash_to_value
 from .misc import chunks
-from .packing import unpack_header, unpack_le_uint32
+from .packing import pack_byte, unpack_header, unpack_le_uint32
 from .work import bits_to_target, bits_to_work, target_to_bits
 
 
@@ -427,6 +428,14 @@ class Network:
             if xver_bytes == network.xprv_verbytes:
                 return network, False
         raise ValueError(f'invalid xver_bytes {xver_bytes}')
+
+    def to_address(self, hash160):
+        '''Return a P2PKH address string.'''
+        return base58_encode_check(pack_byte(self.P2PKH_verbyte) + hash160)
+
+    def to_P2SH_address(self, hash160):
+        '''Return a P2SH address string.'''
+        return base58_encode_check(pack_byte(self.P2SH_verbyte) + hash160)
 
 
 def _required_bits_fortnightly(network, chain, height):

@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 
 from bitcoinx import cashaddr
 from .hashes import hash160 as calc_hash160
-from .base58 import base58_decode_check, base58_encode_check
+from .base58 import base58_decode_check
 from .headers import Bitcoin
 from .packing import pack_byte
 from .script import Script, Ops, push_item, push_int, item_to_int
@@ -92,7 +92,7 @@ class P2PKH_Address(Address):
         return hash(self._hash160) + 2
 
     def to_string(self):
-        return base58_encode_check(pack_byte(self._network.P2PKH_verbyte) + self._hash160)
+        return self._network.to_address(self._hash160)
 
     def hash160(self):
         return self._hash160
@@ -121,7 +121,7 @@ class P2SH_Address(Address):
         return hash(self._hash160) + 3
 
     def to_string(self):
-        return base58_encode_check(pack_byte(self._network.P2SH_verbyte) + self._hash160)
+        return self._network.to_P2SH_address(self._hash160)
 
     def hash160(self):
         return self._hash160
