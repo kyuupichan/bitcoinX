@@ -1,4 +1,5 @@
 import os
+from random import choice
 
 import pytest
 
@@ -248,7 +249,8 @@ class TestP2PK_Output:
         assert address.to_string() == '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP'
 
 
-MS_PUBKEYS = [PrivateKey.from_random().public_key for n in range(5)]
+MS_PUBKEYS = [(PrivateKey.from_random().public_key, choice([True, False]))
+              for n in range(5)]
 multisig_scriptsig = (
     '004830450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a4'
     '5a7b75b9d691370afc0e790ad17d971cfccb3da9c236e9aaa316973d0c41483045022100928b6b9b5e0d063f'
@@ -276,7 +278,8 @@ class TestP2MultiSig_Output:
         assert isinstance(raw, bytes)
         assert raw == b''.join((
             push_int(threshold),
-            b''.join(push_item(public_key.to_bytes()) for public_key in MS_PUBKEYS[:count]),
+            b''.join(push_item(public_key.to_bytes(compressed=compressed))
+                     for public_key, compressed in MS_PUBKEYS[:count]),
             push_int(count),
             pack_byte(OP_CHECKMULTISIG),
         ))
@@ -293,6 +296,9 @@ class TestP2MultiSig_Output:
         assert P2MultiSig_Output(MS_PUBKEYS[:1], 1) != P2MultiSig_Output(MS_PUBKEYS[:2], 1)
         assert P2MultiSig_Output(MS_PUBKEYS[:2], 1) != P2MultiSig_Output(MS_PUBKEYS[:2], 2)
         assert P2MultiSig_Output(MS_PUBKEYS[:2], 2) == P2MultiSig_Output(MS_PUBKEYS[:2], 2)
+        pubkey, compressed = MS_PUBKEYS[0]
+        assert (P2MultiSig_Output([(pubkey, compressed)], 1)
+                != P2MultiSig_Output([(pubkey, not compressed)], 1))
 
     def test_hashable(self):
         {P2MultiSig_Output(MS_PUBKEYS, 1)}
@@ -310,11 +316,11 @@ class TestP2MultiSig_Output:
     ])
     def test_from_template(self, threshold, count):
         good_output = P2MultiSig_Output(MS_PUBKEYS[:count], threshold)
-        public_keys = [public_key.to_bytes() for public_key in MS_PUBKEYS[:count]]
+        public_keys = [public_key.to_bytes(compressed=compressed)
+                       for public_key, compressed in MS_PUBKEYS[:count]]
         output = P2MultiSig_Output.from_template(pack_byte(threshold), *public_keys,
                                                  pack_byte(count))
-        assert list(output.public_keys) == [(public_key, True)
-                                            for public_key in MS_PUBKEYS[:count]]
+        assert list(output.public_keys) == MS_PUBKEYS[:count]
         assert output.threshold == threshold
         assert output == good_output
 
