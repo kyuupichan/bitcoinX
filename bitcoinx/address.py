@@ -138,8 +138,8 @@ class P2PK_Output:
 
     KIND = 'pubkey'
 
-    def __init__(self, public_key, network):
-        self.public_key = _to_public_key(public_key)
+    def __init__(self, public_key, network, *, compressed=True):
+        self.public_key, self._compressed = _to_public_key(public_key, compressed)
         self._network = network
 
     def __eq__(self, other):
@@ -149,13 +149,16 @@ class P2PK_Output:
         return hash(self.public_key) + 1
 
     def hash160(self):
-        return self.public_key.hash160()
+        return self.public_key.hash160(compressed=self._compressed)
 
     def to_address(self):
-        return self.public_key.to_address(network=self._network)
+        return self.public_key.to_address(network=self._network, compressed=self._compressed)
+
+    def public_key_bytes(self):
+        return self.public_key.to_bytes(compressed=self._compressed)
 
     def to_script_bytes(self):
-        return push_item(self.public_key.to_bytes()) + pack_byte(Ops.OP_CHECKSIG)
+        return push_item(self.public_key_bytes()) + pack_byte(Ops.OP_CHECKSIG)
 
     def to_script(self):
         return Script(self.to_script_bytes())
@@ -166,8 +169,9 @@ class P2MultiSig_Output:
     KIND = 'multisig'
 
     def __init__(self, public_keys, threshold):
-        '''public_keys is an iterable.'''
-        self.public_keys = tuple(_to_public_key(public_key) for public_key in public_keys)
+        '''public_keys is an iterable of public keys, or (public_key, compressed) pairs.'''
+        # A list of (public_key, is_compressed) pairs.
+        self.public_keys = _to_public_keys(public_keys)
         self.threshold = threshold
         n = len(self.public_keys)
         if not 1 <= threshold <= n:
@@ -183,7 +187,8 @@ class P2MultiSig_Output:
 
     def to_script_bytes(self):
         parts = [push_int(self.threshold)]
-        parts.extend(push_item(public_key.to_bytes()) for public_key in self.public_keys)
+        parts.extend(push_item(public_key.to_bytes(compressed=compressed))
+                     for public_key, compressed in self.public_keys)
         parts.append(push_int(len(self.public_keys)))
         parts.append(pack_byte(Ops.OP_CHECKMULTISIG))
         return b''.join(parts)
@@ -248,11 +253,20 @@ def _validate_hash160(hash160):
     return hash160
 
 
-def _to_public_key(obj):
+def _to_public_key(obj, compressed):
     '''Convert obj a PublicKey object.'''
     from .keys import PublicKey
     if isinstance(obj, PublicKey):
-        return obj
+        return obj, compressed
     if isinstance(obj, str):
-        return PublicKey.from_hex(obj)
-    return PublicKey.from_bytes(obj)
+        return (PublicKey.from_hex(obj), len(obj) == 66)
+    return (PublicKey.from_bytes(obj), len(obj) == 33)
+
+
+def _to_public_keys(objs):
+    def to_public_key(obj):
+        if isinstance(obj, tuple):
+            return _to_public_key(*obj)
+        return _to_public_key(obj, True)
+
+    return tuple(to_public_key(obj) for obj in objs)

@@ -361,15 +361,13 @@ class TestScript:
     def test_ops_does_bytes_conversion(self):
         list(P2PKH_script.ops())
 
-    def test_P2PKHK_script(self):
-        p = PrivateKey.from_random()
-        PC = p.public_key
-        PU = PC.complement()
-        for P in (PC, PU):
-            script = P.P2PKH_script()
-            data = P.hash160()
-            assert script == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
-                              bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
+    def test_P2PKH_script(self):
+        P = PrivateKey.from_random().public_key
+        script = P.P2PKH_script()
+        data = P.hash160()
+        assert data == P.hash160(compressed=True)
+        assert script == (bytes([OP_DUP, OP_HASH160, len(data)]) + data +
+                          bytes([OP_EQUALVERIFY, OP_CHECKSIG]))
 
     @pytest.mark.parametrize("script,asm", (
         # No script
@@ -441,7 +439,7 @@ class TestScript:
         text = '<wombat>'
         assert Script(script).to_asm(False, text) == asm.replace('[script error]', text)
 
-    @pytest.mark.parametrize("script,coin,json,extra", (
+    @pytest.mark.parametrize("script,network,json,extra", (
         # A P2PK output
         (
             '410494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223cd89719'
@@ -532,12 +530,12 @@ class TestScript:
         ),
     ), ids=['p2pk', 'p2pk-testnet', 'p2pk_sig', 'p2pkh_output', 'p2pkh_sig',
             'op_return', 'erroneous'])
-    def test_to_json(self, script, coin, json, extra):
+    def test_to_json(self, script, network, json, extra):
         json['hex'] = script
-        assert Script.from_hex(script).to_json(0, False, coin) == json
+        assert Script.from_hex(script).to_json(0, False, network) == json
         json.update(extra)
         assert Script.from_hex(script).to_json(JSONFlags.CLASSIFY_OUTPUT_SCRIPT, False,
-                                               coin) == json
+                                               network) == json
 
     @pytest.mark.parametrize("op,word", (
         (OP_VERIF, "OP_VERIF"),

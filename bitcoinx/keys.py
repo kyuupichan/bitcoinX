@@ -51,12 +51,8 @@ def _message_hash(message, hasher):
 
 class PrivateKey:
 
-    def __init__(self, secret, compressed=True):
-        '''Construct a PrivateKey from 32 big-endian bytes.
-
-        compressed is passed on to the PublicKey constructor to indicate whether the
-        public key should return an compressed serialization.
-        '''
+    def __init__(self, secret):
+        '''Construct a PrivateKey from 32 big-endian bytes.'''
         if isinstance(secret, bytes):
             if len(secret) != 32:
                 raise ValueError('private key must be 32 bytes')
@@ -67,7 +63,6 @@ class PrivateKey:
             self._secret = bytes(ffi.buffer(secret))
         else:
             raise TypeError('private key must be bytes')
-        self._compressed = compressed
 
     def _secp256k1_public_key(self):
         '''Construct a wrapped secp256k1 PublicKey.'''
@@ -93,14 +88,10 @@ class PrivateKey:
         To get a real string call to_hex() explicitly.'''
         return sha256(self._secret).hex()
 
-    def is_compressed(self):
-        '''Return true if the public key serializes to 33 bytes.'''
-        return self._compressed
-
     @cachedproperty
     def public_key(self):
         '''Return a PublicKey corresponding to this private key.'''
-        return PublicKey(self._secp256k1_public_key(), self._compressed)
+        return PublicKey(self._secp256k1_public_key())
 
     def to_int(self):
         '''Return the private key's representation as an integer.'''
@@ -134,26 +125,26 @@ class PrivateKey:
     def from_minikey(cls, minikey):
         '''Construct a PrivateKey from its Minikey encoding (used in Casascius coins).
 
-        Minikeys used uncompressed public keys.'''
+        NOTE: minikeys used uncompressed public keys.'''
         if not is_minikey(minikey):
             raise ValueError('invalid minikey')
-        return cls(sha256(minikey.encode()), False)
+        return cls(sha256(minikey.encode()))
 
     @classmethod
     def from_random(cls, *, source=urandom):
         '''Return a random, valid PrivateKey.'''
         while True:
             try:
-                return cls(source(32), True)
+                return cls(source(32))
             except ValueError:
                 pass
 
     @classmethod
     def from_WIF(cls, txt):
-        '''Construct a (PrivateKey, network) from WIF text.'''
+        '''Return a (PrivateKey, network, is_compressed) tuple from WIF text.'''
         raw = base58_decode_check(txt)
         if len(raw) == 33 or len(raw) == 34 and raw[-1] == 0x01:
-            return cls(raw[1:33], len(raw) == 34), Network.from_WIF_byte(raw[0])
+            return cls(raw[1:33]), Network.from_WIF_byte(raw[0]), len(raw) == 34
         raise ValueError('invalid WIF private key')
 
     @classmethod
@@ -165,14 +156,14 @@ class PrivateKey:
             return cls.from_minikey(txt)
         return cls.from_WIF(txt)
 
-    def to_WIF(self, network, *, compressed=None):
+    def to_WIF(self, network, *, compressed=True):
         '''Return the WIF form of the private key for the given network.
 
         Set compressed to True to indicate the corresponding public key should be the
         compressed form.
         '''
         payload = pack_byte(network.WIF_byte) + self._secret
-        if (self._compressed if compressed is None else compressed):
+        if compressed:
             payload += b'\x01'
         return base58_encode_check(payload)
 
@@ -181,14 +172,14 @@ class PrivateKey:
         secret = ffi.new('unsigned char [32]', self._secret)
         if not lib.secp256k1_ec_privkey_tweak_add(CONTEXT, secret, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PrivateKey(secret, self._compressed)
+        return PrivateKey(secret)
 
     def multiply(self, value):
         '''Return a new PrivateKey instance multiplying value by our secret.'''
         secret = ffi.new('unsigned char [32]', self._secret)
         if not lib.secp256k1_ec_privkey_tweak_mul(CONTEXT, secret, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PrivateKey(secret, self._compressed)
+        return PrivateKey(secret)
 
     def sign(self, message, hasher=sha256):
         '''Sign a message (more correctly its hash) and return a DER-encoded signature.
@@ -208,7 +199,7 @@ class PrivateKey:
         msg_hash = _message_hash(message, hasher)
         return sign_recoverable(msg_hash, self._secret)
 
-    def sign_message(self, message, hasher=double_sha256):
+    def sign_message(self, message, hasher=double_sha256, *, compressed=True):
         '''Sign a message compatibly with bitcoind (and ElectrumSV).
 
         message:     the message as bytes before being prefixed with SIGNED_MESSAGE_PREFIX.
@@ -224,7 +215,7 @@ class PrivateKey:
         recoverable_sig = self.sign_recoverable(message, hasher)
         # Compressed appears to be legacy and the signature is valid whether True or
         # False; in any case only the first byte (recid) of the signature changes.
-        return to_message_signature(recoverable_sig, compressed=self._compressed)
+        return to_message_signature(recoverable_sig, compressed=compressed)
 
     def sign_message_to_base64(self, message, hasher=double_sha256):
         '''As for sign_message, but return the result as a base64 ASCII string.'''
@@ -271,29 +262,25 @@ class PrivateKey:
 
 class PublicKey:
 
-    def __init__(self, public_key, compressed):
+    def __init__(self, public_key):
         '''Construct a PublicKey.
 
         This function is not intended to be called directly by user code; use instead one
         of the "from_" class methods or using a PrivateKey's 'public_key' property.
-
-        compressed is True if to_bytes() serializations yield public keys of 33 bytes.
         '''
         if not repr(public_key).startswith("<cdata 'secp256k1_pubkey *'"):
             raise TypeError('PublicKey constructor requires a secp256k1_pubkey')
         self._public_key = public_key
-        self._compressed = compressed
 
     # Public methods
 
     def __eq__(self, other):
         '''Return True if this PublicKey is equal to another.'''
-        return (isinstance(other, PublicKey) and
-                self.to_bytes(compressed=True) == other.to_bytes(compressed=True))
+        return (isinstance(other, PublicKey) and self.to_bytes() == other.to_bytes())
 
     def __hash__(self):
         '''Hashable objects which compare equal must have the same hash value.'''
-        return hash(self.to_bytes(compressed=True))
+        return hash(self.to_bytes())
 
     def __str__(self):
         return self.to_hex()
@@ -302,13 +289,9 @@ class PublicKey:
     def public_key(self):
         return self
 
-    def is_compressed(self):
-        '''Return true if it serializes to 33 bytes.'''
-        return self._compressed
-
-    def to_bytes(self, *, compressed=None):
+    def to_bytes(self, *, compressed=True):
         '''Serialize a PublicKey to bytes.'''
-        if (self._compressed if compressed is None else compressed):
+        if compressed:
             length, flag = 33, EC_COMPRESSED
         else:
             length, flag = 65, EC_UNCOMPRESSED
@@ -326,7 +309,7 @@ class PublicKey:
         public_key = ffi.new('secp256k1_pubkey *')
         if not lib.secp256k1_ec_pubkey_parse(CONTEXT, public_key, data, len(data)):
             raise ValueError('invalid public key')
-        return cls(public_key, len(data) == 33)
+        return cls(public_key)
 
     @classmethod
     def from_recoverable_signature(cls, recoverable_sig, message, hasher=sha256):
@@ -334,7 +317,7 @@ class PublicKey:
         signed.'''
         msg_hash = _message_hash(message, hasher)
         public_key = public_key_from_recoverable_signature(recoverable_sig, msg_hash)
-        return cls(public_key, True)
+        return cls(public_key)
 
     @classmethod
     def from_signed_message(cls, message_sig, message, hasher=double_sha256):
@@ -352,7 +335,7 @@ class PublicKey:
         recoverable_sig = to_recoverable_signature(message_sig)
         return cls.from_recoverable_signature(recoverable_sig, message, hasher)
 
-    def to_hex(self, *, compressed=None):
+    def to_hex(self, *, compressed=True):
         '''Convert a PublicKey to a hexadecimal string.'''
         return self.to_bytes(compressed=compressed).hex()
 
@@ -375,43 +358,36 @@ class PublicKey:
         y_bytes = int_to_be_bytes(y, 32)
         return cls.from_bytes(b''.join((b'\x04', x_bytes, y_bytes)))
 
-    def to_address(self, network, *, compressed=None):
+    def to_address(self, network, *, compressed=True):
         '''Return the public key as a bitcoin P2PKH address.'''
         return P2PKH_Address(self.hash160(compressed=compressed), network)
 
     def add(self, value):
-        '''Return a new PublicKey instance formed by adding value*G to this one.
-
-        Preserves compressed / uncompressed serialization.'''
+        '''Return a new PublicKey instance formed by adding value*G to this one.'''
         public_key = ffi.new('secp256k1_pubkey *', self._public_key[0])
         if not lib.secp256k1_ec_pubkey_tweak_add(CONTEXT, public_key, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PublicKey(public_key, self._compressed)
+        return PublicKey(public_key)
 
     def multiply(self, value):
         '''Return a new PublicKey instance formed by multiplying this one by value (i.e. adding
         it to itself value times).
-
-        Preserves compressed / uncompressed serialization.
         '''
         public_key = ffi.new('secp256k1_pubkey *', self._public_key[0])
         if not lib.secp256k1_ec_pubkey_tweak_mul(CONTEXT, public_key, _to_32_bytes(value)):
             raise ValueError('value or result out of range')
-        return PublicKey(public_key, self._compressed)
+        return PublicKey(public_key)
 
     @classmethod
     def combine_keys(cls, public_keys):
-        '''Return a new PublicKey equal to the sum of the given PublicKeys.
-
-        The result takes its default compressed attribute from the first public key.
-        '''
+        '''Return a new PublicKey equal to the sum of the given PublicKeys.'''
         lib_keys = [pk._public_key for pk in public_keys]
         if not lib_keys:
             raise ValueError('no public keys to combine')
         public_key = ffi.new('secp256k1_pubkey *')
         if not lib.secp256k1_ec_pubkey_combine(CONTEXT, public_key, lib_keys, len(lib_keys)):
             raise ValueError('the sum of the public keys is invalid')
-        return cls(public_key, public_keys[0]._compressed)
+        return cls(public_key)
 
     def verify_message(self, message_sig, message, hasher=double_sha256):
         '''Verify a message signed with bitcoind (and ElectrumSV).
@@ -476,18 +452,14 @@ class PublicKey:
         '''As for encrypt_message, but return the result as a base64 ASCII string.'''
         return b64encode(self.encrypt_message(message, magic)).decode()
 
-    def hash160(self, *, compressed=None):
+    def hash160(self, *, compressed=True):
         '''Returns a P2PK script.'''
         return calc_hash160(self.to_bytes(compressed=compressed))
 
-    def complement(self):
-        '''Returns a compressed public key if uncompressed, or vice versa.'''
-        return PublicKey(self._public_key, not self._compressed)
-
-    def P2PK_script(self):
+    def P2PK_script(self, *, compressed=True):
         '''Return a Script instance representing the P2PK script.'''
-        return P2PK_Output(self, None).to_script()
+        return P2PK_Output(self, None, compressed=compressed).to_script()
 
-    def P2PKH_script(self):
+    def P2PKH_script(self, *, compressed=True):
         '''Return a Script instance representing the P2PKH script.'''
-        return self.to_address(None).to_script()
+        return self.to_address(None, compressed=compressed).to_script()

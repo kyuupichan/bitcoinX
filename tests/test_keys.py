@@ -69,14 +69,8 @@ class TestPrivateKey:
 
     def test_constructor(self):
         secret = os.urandom(32)
-        p1 = PrivateKey(secret, True)
-        p2 = PrivateKey(secret, compressed=False)
-        assert p1.to_bytes() is secret and p2.to_bytes() is secret
-        assert p1 == p2
-        assert p1.is_compressed()
-        assert not p2.is_compressed()
-        p3 = PrivateKey(secret)
-        assert p3.is_compressed()
+        p1 = PrivateKey(secret)
+        assert p1.to_bytes() == secret
 
     def test_from_arbitrary_bytes(self):
         p = PrivateKey.from_arbitrary_bytes(b'BitcoinSV')
@@ -102,16 +96,9 @@ class TestPrivateKey:
 
     def test_hashable(self):
         secret = os.urandom(32)
-        p1 = PrivateKey(secret, True)
-        p2 = PrivateKey(secret, False)
+        p1 = PrivateKey(secret)
+        p2 = PrivateKey(secret)
         assert len({p1, p2}) == 1
-
-    def test_public_key(self):
-        secret = os.urandom(32)
-        for compressed in (False, True):
-            p = PrivateKey(secret, compressed)
-            P = p.public_key
-            assert P.is_compressed() is compressed
 
     def test_public_key_bad(self):
         # Force coverage with a fake condition
@@ -134,7 +121,6 @@ class TestPrivateKey:
     def test_from_int(self, value):
         p = PrivateKey.from_int(value)
         assert p.to_int() == value
-        assert p.is_compressed()
 
     @pytest.mark.parametrize("value", [0, 0x0, 00])
     def test_from_int_bad(self, value):
@@ -158,7 +144,6 @@ class TestPrivateKey:
             hex_str = '0' * (64 - len(hex_str)) + hex_str
         p = PrivateKey.from_hex(hex_str)
         assert p.to_int() == value
-        assert p.is_compressed()
 
     @pytest.mark.parametrize("hex_str", ['', '00', '2345', '  ' + '11' * 30 + '  '])
     def test_from_hex_bad(self, hex_str):
@@ -193,14 +178,12 @@ class TestPrivateKey:
 
         p = PrivateKey.from_random(source=source)
         assert p.to_bytes() == secret
-        assert p.is_compressed()
 
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34g',
                                          'S6c56bnXQiBjk9mqSYE7ykVQ7NzrRy'])
     def test_from_minikey(self, minikey):
         p = PrivateKey.from_minikey(minikey)
         assert p._secret == sha256(minikey.encode())
-        assert not p.is_compressed()
 
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34h',
                                          'S6c56bnXQiBjk9mqSYE7ykVQ7NzrRz'])
@@ -210,12 +193,11 @@ class TestPrivateKey:
 
     @pytest.mark.parametrize("network,WIF,hex_str,compressed", WIF_tests)
     def test_from_WIF(self, network, WIF, hex_str, compressed):
-        p, net = PrivateKey.from_WIF(WIF)
+        p, net, comp = PrivateKey.from_WIF(WIF)
         assert p.to_hex() == hex_str
         assert net is network
-        assert p._compressed == compressed
-        assert len(p.public_key.to_bytes()) == (33 if compressed else 65)
-        assert p.to_WIF(network) == WIF
+        assert comp == compressed
+        assert p.to_WIF(network, compressed=compressed) == WIF
 
     def test_from_WIF_bad(self):
         with pytest.raises(TypeError):
@@ -263,13 +245,6 @@ class TestPrivateKey:
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
 
-    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
-    def test_add_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        p, net = PrivateKey.from_WIF(WIF)
-        assert net is network
-        p = p.add(one)
-        assert p.is_compressed() is compressed
-
     def test_add_bad(self):
         p1 = PrivateKey.from_random()
         with pytest.raises(ValueError):
@@ -299,13 +274,6 @@ class TestPrivateKey:
         p3 = p2.multiply(p1._secret)
         assert p3.to_int() == result
         assert p2.to_int() == p2_int
-
-    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
-    def test_mult_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        p, net = PrivateKey.from_WIF(WIF)
-        assert net is network
-        p = p.multiply(one)
-        assert p.is_compressed() is compressed
 
     def test_mult_bad(self):
         p1 = PrivateKey.from_random()
@@ -393,16 +361,15 @@ class TestPrivateKey:
     @pytest.mark.parametrize("msg", (b'BitcoinSV', 'BitcoinSV'))
     def test_sign_message_and_to_base64(self, msg):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
-        priv, net = PrivateKey.from_WIF(secret)
+        priv, net, compressed = PrivateKey.from_WIF(secret)
         assert net is Bitcoin
-        priv._compressed = True
-        msg_sig = priv.sign_message(msg)
+
+        msg_sig = priv.sign_message(msg, compressed=True)
         for encoded_sig in (b64encode(msg_sig).decode(), priv.sign_message_to_base64(msg)):
             assert encoded_sig == ('IIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
                                    'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
 
-        priv._compressed = False
-        msg_sig = priv.sign_message(msg)
+        msg_sig = priv.sign_message(msg, compressed=False)
         assert b64encode(msg_sig) == (b'HIccCk2FG2xufHJmSqnrnOo/b6gPw+A+EpVAJEqfSqV0Nu'
                                       b'LXYiio6UZfvY/vmuI6jyNj/REuTFxxkhBM+zWA7jE=')
 
@@ -416,8 +383,9 @@ class TestPrivateKey:
 
     def test_sign_message_long(self):
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
-        priv, net = PrivateKey.from_WIF(secret)
+        priv, net, compressed = PrivateKey.from_WIF(secret)
         assert net is Bitcoin
+        assert compressed
         msg = (
             'A purely peer-to-peer version of electronic cash would allow online payments to be se'
             'nt directly from one party to another without going through a financial institution. '
@@ -524,13 +492,13 @@ class TestPublicKey:
 
     def test_good(self):
         pub = PrivateKey.from_random().public_key
-        PublicKey(pub._public_key, False)
+        PublicKey(pub._public_key)
 
     def test_eq(self):
         secret = os.urandom(32)
         priv = PrivateKey(secret)
         pub1 = priv.public_key
-        pub2 = PublicKey(pub1._public_key, False)
+        pub2 = PublicKey(pub1._public_key)
         assert pub1 is not pub2
         assert pub1 == pub2
         assert PrivateKey.from_random().public_key != pub1
@@ -544,12 +512,9 @@ class TestPublicKey:
 
     def test_hashable(self):
         secret = os.urandom(32)
-        p1 = PrivateKey(secret, True)
-        p2 = PrivateKey(secret, False)
-        pub1 = p1.public_key
-        pub2 = p2.public_key
-        assert pub1.is_compressed() != pub2.is_compressed()
-        assert len({pub1, pub2}) == 1
+        p1 = PrivateKey(secret)
+        p2 = PrivateKey(secret)
+        assert len({p1.public_key, p2.public_key}) == 1
 
     def test_to_bytes(self):
         priv = PrivateKey(bytes(range(32)))
@@ -568,7 +533,6 @@ class TestPublicKey:
         for compressed in (False, True):
             pub = PublicKey.from_bytes(priv.public_key.to_bytes(compressed=compressed))
             assert pub == priv.public_key
-            assert pub.is_compressed() is compressed
 
     def test_from_bytes_bad(self):
         priv = PrivateKey(bytes(range(32)))
@@ -662,13 +626,6 @@ class TestPublicKey:
         assert P2 == priv2.public_key
         assert P == priv.public_key
 
-    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
-    def test_add_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        P, net = PrivateKey.from_WIF(WIF)
-        assert net is network
-        P = P.public_key.add(one)
-        assert P.is_compressed() is compressed
-
     def test_add_bad(self):
         priv = PrivateKey.from_random()
         P = priv.public_key
@@ -692,13 +649,6 @@ class TestPublicKey:
         P2 = P.multiply(value)
         assert P2 == priv2.public_key
         assert P == priv.public_key
-
-    @pytest.mark.parametrize("network,WIF,_hex_str,compressed", WIF_tests)
-    def test_multiply_preserves_attributes(self, network, WIF, _hex_str, compressed):
-        P, net = PrivateKey.from_WIF(WIF)
-        assert net is network
-        P = P.public_key.multiply(one)
-        assert P.is_compressed() is compressed
 
     def test_multiply_bad(self):
         priv = PrivateKey.from_random()
@@ -727,10 +677,8 @@ class TestPublicKey:
         priv2 = priv.add(priv._secret)
         assert PublicKey.combine_keys([P, P]) == priv2.public_key
 
-    @pytest.mark.parametrize("compressed", ((True, False)))
-    def test_combine_keys(self, compressed):
+    def test_combine_keys(self):
         priv_keys = [PrivateKey.from_random() for n in range(5)]
-        priv_keys[0]._compressed = compressed
         pub_keys = [priv_key.public_key for priv_key in priv_keys]
 
         pk = priv_keys[0]
@@ -738,7 +686,6 @@ class TestPublicKey:
             pk = pk.add(priv_keys[n]._secret)
         combined = PublicKey.combine_keys(pub_keys)
         assert pk.public_key == combined
-        assert combined.is_compressed() is compressed
 
     def test_combine_keys_bad(self):
         priv = PrivateKey.from_random()
@@ -999,37 +946,29 @@ class TestPublicKey:
     def test_P2PK_script(self):
         P = PrivateKey.from_random().public_key
         script_c = P.P2PK_script()
-        script_u = P.complement().P2PK_script()
+        script_u = P.P2PK_script(compressed=False)
+        print(script_c.to_hex(), (bytes([33]) + P.to_bytes(compressed=True) + bytes([0xac])).hex())
         assert script_c == bytes([33]) + P.to_bytes(compressed=True) + bytes([0xac])
         assert script_u == bytes([65]) + P.to_bytes(compressed=False) + bytes([0xac])
-        assert script_c == P.P2PK_script()
+        assert script_c == P.P2PK_script(compressed=True)
 
     def test_P2PKH_script(self):
         P = PrivateKey.from_random().public_key
         script_c = P.P2PKH_script()
-        script_u = P.complement().P2PKH_script()
+        script_u = P.P2PKH_script(compressed=False)
         assert script_c == b''.join((bytes([0x76, 0xa9, 20]),
                                      hash160(P.to_bytes(compressed=True)),
                                      bytes([0x88, 0xac])))
         assert script_u == b''.join((bytes([0x76, 0xa9, 20]),
                                      hash160(P.to_bytes(compressed=False)),
                                      bytes([0x88, 0xac])))
-        assert script_c == P.P2PKH_script()
+        assert script_c == P.P2PKH_script(compressed=True)
 
     def test_hash160(self):
         # From block 1
         P = PublicKey.from_hex(
             '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379'
             '515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee')
-        assert P.hash160().hex() == '119b098e2e980a229e139a9ed01a469e518e6f26'
+        assert P.hash160().hex() == 'f4d294debc9799f1b6e0d15cd696b207ce6df0f9'
         assert P.hash160(compressed=True).hex() == 'f4d294debc9799f1b6e0d15cd696b207ce6df0f9'
         assert P.hash160(compressed=False).hex() == '119b098e2e980a229e139a9ed01a469e518e6f26'
-
-    def test_complement(self):
-        P = PublicKey.from_hex(
-            '0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379'
-            '515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee')
-        C = P.complement()
-        assert C.hash160().hex() == 'f4d294debc9799f1b6e0d15cd696b207ce6df0f9'
-        assert C == P
-        assert C is not P

@@ -608,7 +608,7 @@ class Script:
             if isinstance(output, P2PKH_Address):
                 result['address'] = output.to_string()
             elif isinstance(output, P2PK_Output):
-                result['pubkey'] = output.public_key.to_hex()
+                result['pubkey'] = output.public_key_bytes().hex()
                 result['address'] = output.to_address().to_string()
         return result
 

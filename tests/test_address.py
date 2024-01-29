@@ -242,7 +242,7 @@ class TestP2PK_Output:
             '2487e6222a6664e079c8edf7518defd562dbeda1e7593dfd7f0be285880a24dab'
         )
         pubkey = PublicKey.from_hex(pubkey_hex)
-        output = P2PK_Output(pubkey, Bitcoin)
+        output = P2PK_Output(pubkey, Bitcoin, compressed=False)
         address = output.to_address()
         assert isinstance(address, P2PKH_Address)
         assert address.to_string() == '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP'
@@ -313,7 +313,8 @@ class TestP2MultiSig_Output:
         public_keys = [public_key.to_bytes() for public_key in MS_PUBKEYS[:count]]
         output = P2MultiSig_Output.from_template(pack_byte(threshold), *public_keys,
                                                  pack_byte(count))
-        assert list(output.public_keys) == MS_PUBKEYS[:count]
+        assert list(output.public_keys) == [(public_key, True)
+                                            for public_key in MS_PUBKEYS[:count]]
         assert output.threshold == threshold
         assert output == good_output
 

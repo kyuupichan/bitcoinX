@@ -74,7 +74,7 @@ class BIP32PrivateKey(PrivateKey):
        - from an existing instance with the child() function
     '''
     def __init__(self, secret, derivation):
-        super().__init__(secret, True)
+        super().__init__(secret)
         self._derivation = derivation
 
     def _extended_key(self, network):
@@ -167,7 +167,7 @@ class BIP32PublicKey(PublicKey):
     def __init__(self, public_key, derivation):
         if isinstance(public_key, PublicKey):
             public_key = public_key._public_key
-        super().__init__(public_key, True)
+        super().__init__(public_key)
         self._derivation = derivation
 
     def _extended_key(self, network):
