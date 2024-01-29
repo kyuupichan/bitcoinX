@@ -21,8 +21,8 @@ from .aes import aes_decrypt_authenticated, aes_encrypt_authenticated
 from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .consts import CURVE_ORDER
 from .errors import DecryptionError, InvalidSignature
-from .hashes import sha256, sha512, double_sha256, hash160 as calc_hash160, hmac_digest, _sha256
-from .headers import Bitcoin, Network
+from .hashes import sha256, double_sha256, hash160 as calc_hash160
+from .headers import Network
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT, cachedproperty
 from .packing import pack_byte, pack_signed_message
 from .signature import (
@@ -253,7 +253,7 @@ class PrivateKey:
         try:
             ephemeral_pubkey = PublicKey.from_bytes(pubkey_bytes)
         except ValueError:
-            raise DecryptionError(f'invalid ephemeral public key') from None
+            raise DecryptionError('invalid ephemeral public key') from None
 
         password = self.ecdh_shared_secret(ephemeral_pubkey).to_bytes()
         prefix = magic + pubkey_bytes
@@ -444,6 +444,7 @@ class PublicKey:
         if isinstance(message, str):
             message = message.encode()
         ephemeral_key = PrivateKey.from_random()
+        # pylint: disable=unexpected-keyword-arg
         password = ephemeral_key.ecdh_shared_secret(self).to_bytes(compressed=True)
         prefix = magic + ephemeral_key.public_key.to_bytes()
         return aes_encrypt_authenticated(message, password, prefix)

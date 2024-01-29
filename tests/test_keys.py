@@ -363,6 +363,7 @@ class TestPrivateKey:
         secret = 'L4n6D5GnWkASz8RoNwnxvLXsLrn8ZqUMcjF3Th2Uas476qusFKYf'
         priv, net, compressed = PrivateKey.from_WIF(secret)
         assert net is Bitcoin
+        assert compressed
 
         msg_sig = priv.sign_message(msg, compressed=True)
         for encoded_sig in (b64encode(msg_sig).decode(), priv.sign_message_to_base64(msg)):
@@ -488,7 +489,7 @@ class TestPublicKey:
     ))
     def test_bad_type(self, bad_key):
         with pytest.raises(TypeError):
-            PublicKey(bad_key, True)
+            PublicKey(bad_key)
 
     def test_good(self):
         pub = PrivateKey.from_random().public_key
