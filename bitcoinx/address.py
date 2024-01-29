@@ -170,7 +170,7 @@ class P2MultiSig_Output:
 
     def __init__(self, public_keys, threshold):
         '''public_keys is an iterable of public keys, or (public_key, compressed) pairs.'''
-        # A list of (public_key, is_compressed) pairs.
+        # A tuple of (public_key, is_compressed) pairs.
         self.public_keys = _to_public_keys(public_keys)
         self.threshold = threshold
         n = len(self.public_keys)

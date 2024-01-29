@@ -407,12 +407,12 @@ class TestClassification:
         assert s2 != s
         assert isinstance(sc2, P2SH_Address)
 
-    def test_P2PK(self):
+    def test_P2PK_compressed(self):
         script_hex = '210363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4ac'
         s = Script.from_hex(script_hex)
         sc = classify_output_script(s, Bitcoin)
         assert isinstance(sc, P2PK_Output)
-        assert (sc.public_key.to_hex() ==
+        assert (sc.public_key_bytes().hex() ==
                 '0363f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4')
 
         suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
@@ -421,6 +421,34 @@ class TestClassification:
         assert sc2.public_key == sc.public_key
         assert s2 != s
         assert isinstance(sc2, P2PK_Output)
+
+    def test_P2PK_uncompressed(self):
+        script_hex = ('410463f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4'
+                      '016c40331bfa6202f5712bbfff0da56d95630f6edc0cd6ed999554a78a5face1ac')
+        s = Script.from_hex(script_hex)
+        sc = classify_output_script(s, Bitcoin)
+        assert isinstance(sc, P2PK_Output)
+        assert sc.public_key_bytes().hex() == (
+            '0463f75554e05e05a04551e59d78d78965ec6789f42199f7cbaa9fa4bd2df0a4b4016'
+            'c40331bfa6202f5712bbfff0da56d95630f6edc0cd6ed999554a78a5face1'
+        )
+
+        suffix = push_item(b'foo') + push_item(b'bar') + pack_byte(OP_2DROP)
+        s2 = Script.from_hex(script_hex + suffix.hex())
+        sc2 = classify_output_script(s2, Bitcoin)
+        assert sc2.public_key == sc.public_key
+        assert s2 != s
+        assert isinstance(sc2, P2PK_Output)
+
+    def test_P2PK_compressed_from_hex(self):
+        pubkey_comp_hex = '020ec8f3a0340460e20d1d5ece922b479179fe05b5083b954ee3215517e85925b9'
+        pubkey_uncomp_hex = PublicKey.from_hex(pubkey_comp_hex).to_hex(compressed=False)
+        out1 = P2PK_Output(pubkey_comp_hex, Bitcoin)
+        out2 = P2PK_Output(pubkey_uncomp_hex, Bitcoin)
+        assert out1.public_key == out2.public_key
+        assert out1.public_key_bytes().hex() == pubkey_comp_hex
+        assert out2.public_key_bytes().hex() == pubkey_uncomp_hex
+
 
     def test_P2MultiSig(self):
         script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'
