@@ -138,10 +138,11 @@ class Tx:
         for n, txin in enumerate(self.inputs):
             context = TxInputContext(self, n, txin.txo)
             try:
-                if not context.verify_input(limits, utxos_after_genesis[n]):
-                    raise InterpreterError(f'input {n} evaluates to false')
+                verifies = context.verify_input(limits, utxos_after_genesis[n])
             except InterpreterError as e:
                 raise InterpreterError(f'input {n} failed to verify') from e
+            if not verifies:
+                raise InterpreterError(f'input {n} evaluates to false')
 
     def _hash_prevouts(self):
         preimage = b''.join(txin.prevout_bytes() for txin in self.inputs)

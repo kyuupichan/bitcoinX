@@ -322,8 +322,8 @@ class TestBUMP:
             BUMP(path)
         assert 'phantom' in str(e.value)
 
-    def text_extraneous_leaves_rejected(self):
-        tx_hashes = testcases[15]
+    def test_extraneous_leaves_rejected(self):
+        tx_hashes = generate_block(32)
         bump = BUMP.create(tx_hashes, [tx_hashes[0]])
         bump.path[2][2] = bytes(32)
         with pytest.raises(MerkleError) as e:

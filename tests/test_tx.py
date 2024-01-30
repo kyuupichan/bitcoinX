@@ -3,7 +3,7 @@ import random
 import pytest
 
 from bitcoinx import (
-    PublicKey, SigHash, Bitcoin, BitcoinTestnet, JSONFlags,
+    PublicKey, SigHash, Bitcoin, BitcoinTestnet, JSONFlags, Script, OP_FALSE,
     InterpreterError
 )
 from bitcoinx.tx import *
@@ -180,6 +180,17 @@ class TestTx:
         assert tx.fee() == 339
         return tx
 
+    def test_to_hex_extended(self):
+        tx = self.read_extended_tx()
+        assert tx.to_hex_extended() == tx.to_bytes_extended().hex()
+
+    def test_from_bytes_extended(self):
+        tx = self.read_extended_tx()
+        tx2 = Tx.from_bytes_extended(tx.to_bytes_extended())
+        assert tx2.is_extended()
+        assert tx2 == tx
+        assert tx2.hash() == tx.hash()
+
     def test_verify_inputs(self):
         # Test the transaction signatures
         tx = self.read_extended_tx()
@@ -190,6 +201,14 @@ class TestTx:
         tx.inputs[0].txo.value += 1
         with pytest.raises(InterpreterError):
             tx.verify_inputs()
+
+    def test_verify_inputs_false(self):
+        tx = self.read_extended_tx()
+        tx.inputs[0].txo.script_pubkey = Script() << OP_FALSE
+        tx.inputs[0].script_sig = Script()
+        with pytest.raises(InterpreterError) as e:
+            tx.verify_inputs()
+        assert 'evaluates to false' in str(e.value)
 
     def test_verify_inputs_not_extended(self):
         # Test we require an extended tx to verify
