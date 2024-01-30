@@ -84,7 +84,7 @@ class BIP39Mnemonic:
 
     # This function is split out for testing purposes
     @classmethod
-    def _from_entropy(cls, entropy, wordlist):
+    def _words_from_entropy(cls, entropy, wordlist):
         size = len(entropy)
         cs_bits = size // 4
         checksum = be_bytes_to_int(sha256(entropy)) >> (256 - cs_bits)
@@ -96,7 +96,7 @@ class BIP39Mnemonic:
             entropy_cs, part = divmod(entropy_cs, 2048)
             parts.append(part)
 
-        return ' '.join(wordlist[part] for part in reversed(parts))
+        return [wordlist[part] for part in reversed(parts)]
 
     @classmethod
     def generate(cls, wordlist, bits=128):
@@ -115,7 +115,7 @@ class BIP39Mnemonic:
 
         entropy = urandom(bits // 8)
 
-        return cls._from_entropy(entropy, wordlist)
+        return ' '.join(cls._words_from_entropy(entropy, wordlist))
 
     @classmethod
     def normalize(cls, mnemonic):
@@ -184,7 +184,8 @@ class ElectrumMnemonic:
     '''Electrum mnemonic support.'''
 
     @classmethod
-    def generate_new(cls, wordlist, *, prefix='01', bits=132, skip_old=True):
+    def generate_new(cls, wordlist, *, prefix='01', bits=132, skip_old=True, skip_bip39=True,
+                     source=urandom):
         '''Return a new electrum mnemonic from the wordlist with the given bits of entropy.
 
         The wordlist can be of arbitrary length and have arbitrary words.
@@ -197,15 +198,22 @@ class ElectrumMnemonic:
             raise ValueError('wordlist is too short')
 
         word_count = ceil(bits / log(wordlist_size, 2))
-        entropy, delta = _random_integer(word_count, wordlist_size)
+        bits = ceil(word_count * log(wordlist_size, 2)) + 16
+        size = (bits + 7) // 8
 
         while True:
-            mnemonic = cls._from_entropy(entropy, wordlist)
-            if cls.is_valid_new(mnemonic, prefix):
-                # There is a chance of about 1 in 35,000 it is also a valid old seed
-                if not (skip_old and cls.is_valid_old(mnemonic)):
-                    return mnemonic
-            entropy += delta
+            entropy = be_bytes_to_int(source(size))
+            words = cls._words_from_entropy(entropy, wordlist)
+            if len(words) < word_count:
+                continue
+            mnemonic = ' '.join(words)
+            if not cls.is_valid_new(mnemonic, prefix):
+                continue
+            if skip_old and cls.is_valid_old(mnemonic):
+                continue
+            if skip_bip39 and BIP39Mnemonic.is_valid(mnemonic, wordlist):
+                continue
+            return mnemonic
 
     @classmethod
     def generate_old_seed(cls, *, word_count=12):
@@ -316,12 +324,12 @@ class ElectrumMnemonic:
         return ' '.join(wordlist[index] for index in indices(hex_seed, len(wordlist)))
 
     @classmethod
-    def _from_entropy(cls, entropy, wordlist):
+    def _words_from_entropy(cls, entropy, wordlist):
         '''Covert entropy to a mnemonic.
 
-        Note: this repeats until entropy is exhausted; it is not fixed-length.  The first
-        word represents the least significant bits of the entropy, so this is a
-        little-endian encoding.
+        NOTE: this repeats until the entropy number is zero; so it could return a mnemonic
+        of only a few words.  The first word represents the least significant bits of the
+        entropy, so this is a little-endian encoding.
         '''
         def words(entropy, wordlist):
             count = len(wordlist)
@@ -329,7 +337,7 @@ class ElectrumMnemonic:
                 entropy, rem = divmod(entropy, count)
                 yield wordlist[rem]
 
-        return ' '.join(words(entropy, wordlist))
+        return list(words(entropy, wordlist))
 
 
 def _normalize_text(text):
@@ -337,22 +345,3 @@ def _normalize_text(text):
     done, nor is whitespace collapsed.
     '''
     return normalize('NFKD', text)
-
-
-def _random_integer(word_count, wordlist_size):
-    '''Return a random integer sufficient to encode word_count words from a wordlist
-    of size wordlist_size.'''
-
-    bits = ceil(word_count * log(wordlist_size, 2)) + 16
-    size = (bits + 7) // 8
-    # Because of the unfortunate encoding Electrum uses, the most sigificant word cannot have
-    # index 0.
-    modulus = wordlist_size ** word_count
-    min_value = modulus // wordlist_size + 1
-
-    while True:
-        value = be_bytes_to_int(urandom(size)) % modulus
-        if value <= min_value:
-            continue
-        delta = 1 if value < (min_value + modulus) // 2 else -1
-        return value, delta

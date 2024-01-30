@@ -2,9 +2,10 @@ import json
 
 import pytest
 
-from bitcoinx import BIP32PrivateKey, Bitcoin
+from bitcoinx import BIP32PrivateKey, Bitcoin, int_to_be_bytes
 from bitcoinx.mnemonic import *
 
+from os import urandom
 
 english_wordlist = Wordlists.bip39_wordlist('english.txt')
 
@@ -81,7 +82,7 @@ class TestBIP39Mnemonic:
     @pytest.mark.parametrize("entropy_hex, mnemonic, seed_hex, xprv", bip39_test_vectors())
     def test_bip39_test_vectors(self, entropy_hex, mnemonic, seed_hex, xprv):
         entropy = bytes.fromhex(entropy_hex)
-        assert mnemonic == BIP39Mnemonic._from_entropy(entropy, english_wordlist)
+        assert mnemonic == ' '.join(BIP39Mnemonic._words_from_entropy(entropy, english_wordlist))
         seed = BIP39Mnemonic.to_seed(mnemonic, 'TREZOR')
         assert seed.hex() == seed_hex
         assert BIP32PrivateKey.from_seed(seed).to_extended_key_string(Bitcoin) == xprv
@@ -108,6 +109,11 @@ class TestBIP39Mnemonic:
 
 class TestElectrumMnemonic:
 
+    # This mnemonic is a valid old and new Electrum mnemonic
+    VALID_OLD_NEW = 'skin help erase offer twenty mystery noise minute wish upset sentence claim'
+    # This mnemonic is a valid BIP39 and new Electrum mnemonic
+    VALID_BIP39_NEW = 'balance ethics sign doctor text cattle damp force short sting coast tonight'
+
     @pytest.mark.parametrize("bits, prefix, _execution_count", (
         (bits, prefix, n)
         for bits in (132, 264)
@@ -117,6 +123,62 @@ class TestElectrumMnemonic:
     def test_generate_new(self, bits, prefix, _execution_count):
         mnemonic = ElectrumMnemonic.generate_new(english_wordlist, prefix=prefix, bits=bits)
         assert ElectrumMnemonic.is_valid_new(mnemonic, prefix)
+
+    def source_for_entropy(self, entropy):
+        raw = int_to_be_bytes(entropy, 19)
+        count = 0
+        def source(n):
+            nonlocal count
+            if count == 0:
+                count += n
+                return raw
+            raise EOFError
+        return source
+
+    def mnemonic_to_entropy(self, mnemonic, wordlist):
+        words = mnemonic.split()
+        entropy = 0
+        count = len(wordlist)
+        for word in reversed(words):
+            entropy = entropy * count + wordlist.index(word)
+        return entropy
+
+    def test_valid_old(self):
+        wordlist = english_wordlist
+        entropy = self.mnemonic_to_entropy(self.VALID_OLD_NEW, wordlist)
+        prefix = '01'
+        mnemonic = ' '.join(ElectrumMnemonic._words_from_entropy(entropy, wordlist))
+        assert ElectrumMnemonic.is_valid_old(mnemonic)
+        assert ElectrumMnemonic.is_valid_new(mnemonic, prefix)
+
+        # Test we generate if not skip_old
+        m =  ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_old=False,
+                                           source=self.source_for_entropy(entropy))
+        assert m == mnemonic
+
+        # Test we don't generate it with skip_old
+        with pytest.raises(EOFError):
+            ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_old=True,
+                                          source=self.source_for_entropy(entropy))
+
+    def test_valid_bip39(self):
+        wordlist = english_wordlist
+        entropy = self.mnemonic_to_entropy(self.VALID_BIP39_NEW, wordlist)
+        prefix = '01'
+        mnemonic = ' '.join(ElectrumMnemonic._words_from_entropy(entropy, wordlist))
+        assert ElectrumMnemonic.is_valid_new(mnemonic, prefix)
+        assert BIP39Mnemonic.is_valid(mnemonic, wordlist)
+
+        # Test we generate if not skip_BIP39
+        m =  ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=False,
+                                           source=self.source_for_entropy(entropy))
+        assert m == mnemonic
+
+        # Test we don't generate it with skip_BIP39
+        with pytest.raises(EOFError):
+            ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=True,
+                                          source=self.source_for_entropy(entropy))
+
 
     @pytest.mark.parametrize("text,answer", (
         ('caT dog', 'cat dog'),
