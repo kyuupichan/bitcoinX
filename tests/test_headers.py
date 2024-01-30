@@ -196,8 +196,9 @@ class TestChainAndHeaders:
     def test_incorrect_bits(self):
         prev_hash = header_hash(Bitcoin.genesis_header)
         header = random_raw_header(prev_hash, [436956491])
-        with pytest.raises(IncorrectBits):
+        with pytest.raises(IncorrectBits) as e:
             self.headers.connect(header)
+        assert 'requires bits' in str(e.value)
 
     def test_header_hash_at_height(self):
         for chain in self.headers.chains():
@@ -208,8 +209,9 @@ class TestChainAndHeaders:
     def test_insufficient_pow(self):
         prev_hash = header_hash(Bitcoin.genesis_header)
         header = random_raw_header(prev_hash, [header_bits(Bitcoin.genesis_header)])
-        with pytest.raises(InsufficientPoW):
+        with pytest.raises(InsufficientPoW) as e:
             self.headers.connect(header)
+        assert 'exceeds its target' in str(e.value)
 
     def test_chain_count(self):
         assert self.headers.chain_count() == 2
