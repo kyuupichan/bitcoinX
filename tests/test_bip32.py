@@ -3,7 +3,7 @@ import pytest
 from bitcoinx.bip32 import *
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check, PrivateKey,
-    Address
+    Address, BIP32_HARDENED,
 )
 
 HARDENED = 1 << 31
@@ -27,6 +27,10 @@ mprivkey_testnet, net4 = bip32_key_from_string(MXPRV_TESTNET)
 def test_bip32_key_from_string():
     assert net1 is net3 is Bitcoin
     assert net2 is net4 is BitcoinTestnet
+
+
+def test_hardened():
+    assert BIP32_HARDENED == HARDENED
 
 
 def test_bip32_key_from_string_bad():

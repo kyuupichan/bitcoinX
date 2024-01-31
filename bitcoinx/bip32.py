@@ -8,7 +8,7 @@
 '''BIP32 implementation.'''
 
 __all__ = (
-    'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation',
+    'BIP32PublicKey', 'BIP32PrivateKey', 'BIP32Derivation', 'BIP32_HARDENED',
     'bip32_key_from_string', 'bip32_decompose_chain_string', 'bip32_is_valid_chain_string',
     'bip32_build_chain_string', 'bip32_validate_derivation',
 )
@@ -25,7 +25,7 @@ from .keys import PrivateKey, PublicKey
 from .misc import cachedproperty
 from .packing import pack_be_uint32, unpack_be_uint32, pack_byte
 
-HARDENED = 1 << 31
+BIP32_HARDENED = 1 << 31
 PART_REGEX = re.compile("([0-9]+)'?$")
 
 
@@ -112,7 +112,7 @@ class BIP32PrivateKey(PrivateKey):
         if not 0 <= n < (1 << 32):
             raise ValueError(f'invalid BIP32 private key child number: {n}')
 
-        if n >= HARDENED:
+        if n >= BIP32_HARDENED:
             serkey = b'\0' + self._secret
         else:
             serkey = self.public_key.to_bytes()
@@ -132,7 +132,7 @@ class BIP32PrivateKey(PrivateKey):
                 if not 0 <= n < (1 << 32):
                     raise
                 n += 1
-                if n & (HARDENED - 1) == 0:
+                if n & (BIP32_HARDENED - 1) == 0:
                     raise ValueError('out of BIP32 derivations') from None
 
     def derivation(self):
@@ -176,7 +176,7 @@ class BIP32PublicKey(PublicKey):
 
     def child(self, n):
         '''Return the derived child extended pubkey at index N.'''
-        if not 0 <= n < HARDENED:
+        if not 0 <= n < BIP32_HARDENED:
             raise ValueError(f'invalid BIP32 public key child number: {n}')
 
         msg = self.to_bytes() + pack_be_uint32(n)
@@ -191,7 +191,7 @@ class BIP32PublicKey(PublicKey):
             try:
                 return self.child(n)
             except ValueError:
-                if not 0 <= n < HARDENED:
+                if not 0 <= n < BIP32_HARDENED:
                     raise
                 n += 1
 
@@ -270,10 +270,10 @@ def bip32_decompose_chain_string(chain_str):
         if not match:
             raise ValueError(f'invalid bip32 chain: {chain_str}')
         value = int(match.groups()[0])
-        if value >= HARDENED:
+        if value >= BIP32_HARDENED:
             raise ValueError(f'invalid bip32 chain: {chain_str}')
         if part[-1] == "'":
-            value += HARDENED
+            value += BIP32_HARDENED
         result.append(value)
     return result
 
@@ -311,9 +311,9 @@ def bip32_build_chain_string(derivation):
     def parts(derivation):
         yield 'm'
         for n in derivation:
-            if n < HARDENED:
+            if n < BIP32_HARDENED:
                 yield str(n)
             else:
-                yield str(n - HARDENED) + "'"
+                yield str(n - BIP32_HARDENED) + "'"
 
     return '/'.join(parts(bip32_validate_derivation(derivation)))
