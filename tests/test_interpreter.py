@@ -394,6 +394,11 @@ class TestInterpreterLimits:
 
 class TestInterpreterState:
 
+    def test_required_txin_context(self, state):
+        with pytest.raises(RuntimeError) as e:
+            state.evaluate_script(Script() << OP_CHECKSIG)
+        assert 'cannot process OP_CHECKSIG without a TxInputContext' == str(e.value)
+
     def test_bump_op_count(self, state):
         state.bump_op_count(state.limits.ops_per_script)
         with pytest.raises(TooManyOps):
