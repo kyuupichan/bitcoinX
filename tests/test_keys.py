@@ -489,6 +489,13 @@ class TestPublicKey:
         with pytest.raises(TypeError):
             PublicKey(bad_key)
 
+    def test_from_random(self):
+        a = PublicKey.from_random()
+        b = PublicKey.from_random()
+        assert isinstance(a, PublicKey)
+        assert isinstance(b, PublicKey)
+        assert a != b
+
     def test_good(self):
         pub = PrivateKey.from_random().public_key
         PublicKey(pub._public_key)

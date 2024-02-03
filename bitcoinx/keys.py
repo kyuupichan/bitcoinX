@@ -289,6 +289,11 @@ class PublicKey:
     def public_key(self):
         return self
 
+    @classmethod
+    def from_random(cls):
+        '''Return a random, valid PublicKey.  The private key is lost.'''
+        return PrivateKey.from_random().public_key
+
     def to_bytes(self, *, compressed=True):
         '''Serialize a PublicKey to bytes.'''
         if compressed:
