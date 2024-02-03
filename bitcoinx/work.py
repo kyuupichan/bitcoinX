@@ -62,13 +62,16 @@ def bits_to_work(bits):
     return (1 << 256) // (bits_to_target(bits) + 1)
 
 
-def grind_header(version, prev_hash, merkle_root, timestamp, bits):
+def grind_header(version, prev_hash, merkle_root, timestamp, bits, max_tries=None):
     '''Grind the nonce until a header meeting the PoW target is found.  Return the header
     bytes once found, otherwise None.'''
     target = bits_to_target(bits)
 
+    if max_tries is None:
+        max_tries = 1 << 32
+
     header = bytearray(pack_header(version, prev_hash, merkle_root, timestamp, bits, 0))
-    for nonce in range(1 << 32):
+    for nonce in range(max_tries):
         header[76:80] = pack_le_uint32(nonce)
         value = hash_to_value(double_sha256(header))
         if value <= target:

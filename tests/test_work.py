@@ -290,3 +290,13 @@ def test_grind_header():
     assert header.timestamp == timestamp
     assert header.bits == bits
     assert header.hash_value() <= target
+
+
+def test_grind_header_fail():
+    bits = target_to_bits(256)
+    version = 4
+    prev_hash = os.urandom(32)
+    root = os.urandom(32)
+    timestamp = int(time.time())
+
+    assert grind_header(version, prev_hash, root, timestamp, bits, max_tries=10) is None
