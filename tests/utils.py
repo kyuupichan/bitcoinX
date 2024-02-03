@@ -1,5 +1,5 @@
-from os import urandom, path
 import json
+import os
 from random import randrange, choice, random
 
 
@@ -7,9 +7,9 @@ from bitcoinx import (
     Tx, TxInput, TxOutput, Script, TxInputContext, SEQUENCE_FINAL,
     OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR
 )
+from bitcoinx import misc
 
-
-data_dir = path.join(path.dirname(path.realpath(__file__)), 'data')
+data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 
 
 random_ops = [OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF,
@@ -43,7 +43,7 @@ def random_bool():
 
 def random_input():
     sequence = SEQUENCE_FINAL if random_bool() else randrange(0, SEQUENCE_FINAL)
-    return TxInput(urandom(32), randrange(0, 4), random_script(), sequence)
+    return TxInput(os.urandom(32), randrange(0, 4), random_script(), sequence)
 
 
 def random_output():
@@ -70,7 +70,7 @@ def random_txinput_context():
 
 
 def read_file(filename):
-    with open(path.join(data_dir, filename)) as f:
+    with open(os.path.join(data_dir, filename)) as f:
         return f.read()
 
 
@@ -83,13 +83,36 @@ def read_tx(filename):
 
 
 def read_signature_hashes(filename):
-    with open(path.join(data_dir, filename)) as f:
+    with open(os.path.join(data_dir, filename)) as f:
         contents = f.read().strip()
     return [bytes.fromhex(line) for line in contents.splitlines()]
 
 
 def read_json_tx(filename):
-    with open(path.join(data_dir, filename)) as f:
+    with open(os.path.join(data_dir, filename)) as f:
         d = json.loads(f.read())
     return (Tx.from_hex(d['tx_hex']), d['input_values'],
             [bytes.fromhex(pk_hex) for pk_hex in d['input_pk_scripts']])
+
+
+class Replace_os_urandom:
+
+    os_urandom = os.urandom
+
+    def __init__(self, values):
+        self.values = values
+        self.count = 0
+
+    def our_urandom(self, n):
+        if self.values:
+            result = self.values.pop()
+            assert len(result) == n
+            return result
+        raise EOFError
+
+    def __enter__(self):
+        assert os.urandom is self.os_urandom
+        os.urandom = self.our_urandom
+
+    def __exit__(self, type, value, traceback):
+        os.urandom = self.os_urandom

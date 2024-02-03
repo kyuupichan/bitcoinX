@@ -11,6 +11,7 @@ from bitcoinx.misc import int_to_be_bytes
 from bitcoinx import Bitcoin, BitcoinTestnet
 from bitcoinx import pack_byte, base58_encode_check, Address, pack_varbytes
 
+from .utils import Replace_os_urandom
 
 one = bytes(31) + bytes([1])
 global_privkey = PrivateKey.from_random()
@@ -172,11 +173,8 @@ class TestPrivateKey:
         secret = int_to_be_bytes(39823453, 32)
         values = [secret, int_to_be_bytes(0, 32), int_to_be_bytes(CURVE_ORDER, 32)]
 
-        def source(size):
-            assert size == 32
-            return values.pop()
-
-        p = PrivateKey.from_random(source=source)
+        with Replace_os_urandom(values):
+            p = PrivateKey.from_random()
         assert p.to_bytes() == secret
 
     @pytest.mark.parametrize("minikey", ['SZEfg4eYxCJoqzumUqP34g',

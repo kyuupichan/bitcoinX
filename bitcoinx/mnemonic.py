@@ -22,10 +22,9 @@ __all__ = ('BIP39Mnemonic', 'ElectrumMnemonic', 'Wordlists', )
 
 
 from math import ceil, log
-
 from hashlib import pbkdf2_hmac
-from os import urandom
 from unicodedata import normalize, combining, east_asian_width
+import os
 
 from .hashes import sha256, hmac_sha512
 from .misc import int_to_be_bytes, be_bytes_to_int, chunks, data_file_path
@@ -113,7 +112,7 @@ class BIP39Mnemonic:
         if bits not in {128, 160, 192, 224, 256}:
             raise ValueError(f'invalid number of entropy bits: {bits}')
 
-        entropy = urandom(bits // 8)
+        entropy = os.urandom(bits // 8)
 
         return ' '.join(cls._words_from_entropy(entropy, wordlist))
 
@@ -201,7 +200,7 @@ class ElectrumMnemonic:
         size = (bits + 7) // 8
 
         while True:
-            entropy = be_bytes_to_int(urandom(size))
+            entropy = be_bytes_to_int(os.urandom(size))
             words = cls._words_from_entropy(entropy, wordlist)
             if len(words) < word_count:
                 continue
@@ -224,7 +223,7 @@ class ElectrumMnemonic:
         '''
         if word_count not in {12, 24}:
             raise ValueError('word count must be 12 or 24')
-        return urandom(word_count * 4 // 3).hex()
+        return os.urandom(word_count * 4 // 3).hex()
 
     @classmethod
     def normalize_new(cls, mnemonic):

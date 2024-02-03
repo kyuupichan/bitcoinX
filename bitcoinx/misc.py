@@ -13,14 +13,17 @@ __all__ = (
 )
 
 import mmap
+import os
 from functools import partial
-from os import path
 
 from electrumsv_secp256k1 import create_context
 
 
 CONTEXT = create_context()
-package_dir = path.dirname(path.realpath(__file__))
+package_dir = os.path.dirname(os.path.realpath(__file__))
+
+# bitcoinx uses this.  Permits easy replacement for testing corner cases (tests/utils.py)
+urandom = os.urandom
 
 # Converts big-endian bytes to an integer
 be_bytes_to_int = partial(int.from_bytes, byteorder='big')
@@ -49,7 +52,7 @@ def chunks(items, size):
 
 def data_file_path(*parts):
     '''Return the path to a file in the data/ directory.'''
-    return path.join(package_dir, "data", *parts)
+    return os.path.join(package_dir, "data", *parts)
 
 
 #

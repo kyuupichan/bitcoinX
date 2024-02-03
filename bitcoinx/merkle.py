@@ -223,11 +223,11 @@ class BUMP:
 
             path = [level]
             path.extend(read_level_map(read) for _ in range(merkle_path_length(tx_count) - 1))
-
-            if path[-1] and any(len(hash_) != 32 for hash_ in path[-1].values()):
-                raise PackingError('hashes have length 32 bytes')
         except PackingError:
             raise PackingError('truncated stream reading BUMP') from None
+
+        if path[-1] and any(len(hash_) != 32 for hash_ in path[-1].values()):
+            raise PackingError('hashes have length 32 bytes')
 
         return height, cls(path)
 

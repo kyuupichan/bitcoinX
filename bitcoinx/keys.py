@@ -10,9 +10,9 @@
 __all__ = ('PrivateKey', 'PublicKey', )
 
 
+import os
 from base64 import b64decode, b64encode
 from binascii import Error as binascii_Error
-from os import urandom
 
 from electrumsv_secp256k1 import ffi, lib
 
@@ -131,11 +131,11 @@ class PrivateKey:
         return cls(sha256(minikey.encode()))
 
     @classmethod
-    def from_random(cls, *, source=urandom):
+    def from_random(cls):
         '''Return a random, valid PrivateKey.'''
         while True:
             try:
-                return cls(source(32))
+                return cls(os.urandom(32))
             except ValueError:
                 pass
 

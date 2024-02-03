@@ -95,6 +95,16 @@ class TestBUMP:
         # Assert we have a proof for all hashes we were required to prove
         assert all(hash_to_prove in proven_hashes for hash_to_prove in hashes_to_prove)
 
+    def test_create_fail(self):
+        with pytest.raises(MerkleError) as e:
+            BUMP.create([], [])
+        assert 'tx_hashes cannot be empty' == str(e.value)
+
+    def test_empty_path(self):
+        with pytest.raises(MerkleError) as e:
+            BUMP([])
+        assert 'path cannot be empty' == str(e.value)
+
     @pytest.mark.parametrize("tx_hashes", testcases[1:])
     def test_duplicate_tx_hashes_rejected(self, tx_hashes):
         tx_hashes = tx_hashes.copy()
@@ -115,6 +125,15 @@ class TestBUMP:
         proof = BUMP.create(tx_hashes, tx_hashes)
         assert proof.path[0] == {offset: tx_hash for offset, tx_hash in enumerate(tx_hashes)}
         assert all(not level for level in proof.path[1:])
+
+    def test_level_map_fail(self):
+        tx_hashes = testcases[6]
+        proof = BUMP.create(tx_hashes, tx_hashes[:-1])
+        value = json.loads(proof.to_json(100))
+        value['path'][0].append({'offset': 0, 'hash': bytes(32).hex()})
+        with pytest.raises(MerkleError) as e:
+            BUMP.from_json(json.dumps(value))
+        assert 'conflicting leaves in path' in str(e.value)
 
     def test_eq(self):
         tx_hashes = testcases[6]
@@ -202,6 +221,18 @@ class TestBUMP:
 
         assert height == height2
         assert bump == bump2
+
+    def test_read_short(self):
+        tx_hashes = testcases[12]
+        hashes_to_prove = tx_hashes[-1:]
+        bump = BUMP.create(tx_hashes, hashes_to_prove)
+        assert bump.path[-1]
+
+        height = 5 + (len(tx_hashes) - 1) * 50_000
+        raw = bump.to_bytes(height)
+        with pytest.raises(PackingError) as e:
+            BUMP.from_bytes(raw[:-1])
+        assert 'hashes have length 32 bytes' == str(e.value)
 
     def test_to_bytes_height(self):
         tx_hashes = testcases[12]

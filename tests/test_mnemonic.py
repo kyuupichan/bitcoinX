@@ -6,7 +6,8 @@ from bitcoinx import BIP32PrivateKey, Bitcoin, int_to_be_bytes
 from bitcoinx.mnemonic import *
 import bitcoinx.mnemonic
 
-from os import urandom
+from .utils import Replace_os_urandom
+
 
 english_wordlist = Wordlists.bip39_wordlist('english.txt')
 
@@ -108,32 +109,8 @@ class TestBIP39Mnemonic:
         assert not BIP39Mnemonic.is_valid(mnemonic, english_wordlist)
 
 
-class ReplaceUrandom:
-
-    def __init__(self, entropy):
-        self.entropy = entropy
-        self.count = 0
-
-    def our_urandom(self, n):
-        if self.count == 0:
-            self.count += n
-            return int_to_be_bytes(self.entropy, n)
-        raise EOFError
-
-    def __enter__(self):
-        assert bitcoinx.mnemonic.urandom is urandom
-        bitcoinx.mnemonic.urandom = self.our_urandom
-
-    def __exit__(self, type, value, traceback):
-        bitcoinx.mnemonic.urandom = urandom
-
-
-def test_replace_urandom():
-    entropy = 400
-    assert bitcoinx.mnemonic.urandom is urandom
-    with ReplaceUrandom(entropy):
-        assert bitcoinx.mnemonic.urandom(10) == int_to_be_bytes(entropy, 10)
-    assert bitcoinx.mnemonic.urandom is urandom
+def one_entropy(entropy):
+    return [int_to_be_bytes(entropy, 19)]
 
 
 class TestElectrumMnemonic:
@@ -170,12 +147,12 @@ class TestElectrumMnemonic:
         assert ElectrumMnemonic.is_valid_new(mnemonic, prefix)
 
         # Test we generate if not skip_old
-        with ReplaceUrandom(entropy):
+        with Replace_os_urandom(one_entropy(entropy)):
             m =  ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_old=False)
         assert m == mnemonic
 
         # Test we don't generate it with skip_old
-        with ReplaceUrandom(entropy), pytest.raises(EOFError):
+        with Replace_os_urandom(one_entropy(entropy)), pytest.raises(EOFError):
             ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_old=True)
 
     def test_valid_bip39(self):
@@ -187,19 +164,19 @@ class TestElectrumMnemonic:
         assert BIP39Mnemonic.is_valid(mnemonic, wordlist)
 
         # Test we generate if not skip_BIP39
-        with ReplaceUrandom(entropy):
+        with Replace_os_urandom(one_entropy(entropy)):
             m =  ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=False)
         assert m == mnemonic
 
         # Test we don't generate it with skip_BIP39
-        with ReplaceUrandom(entropy), pytest.raises(EOFError):
+        with Replace_os_urandom(one_entropy(entropy)), pytest.raises(EOFError):
             ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=True)
 
     def test_skip_short_mnemonic(self):
         wordlist = english_wordlist
         entropy = 500
         prefix = '01'
-        with ReplaceUrandom(entropy), pytest.raises(EOFError):
+        with Replace_os_urandom(one_entropy(entropy)), pytest.raises(EOFError):
             ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix)
 
     @pytest.mark.parametrize("text,answer", (
