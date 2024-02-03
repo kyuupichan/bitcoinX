@@ -179,6 +179,13 @@ class TestElectrumMnemonic:
             ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=True,
                                           source=self.source_for_entropy(entropy))
 
+    def test_skip_short_mnemonic(self):
+        wordlist = english_wordlist
+        entropy = 500
+        prefix = '01'
+        with pytest.raises(EOFError):
+            ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix,
+                                          source=self.source_for_entropy(entropy))
 
     @pytest.mark.parametrize("text,answer", (
         ('caT dog', 'cat dog'),
