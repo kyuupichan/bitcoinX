@@ -198,12 +198,12 @@ class TestP2PK_Output:
         assert p.public_key.to_hex() == h
 
     def test_eq(self):
-        p = PrivateKey.from_random().public_key
+        p = PublicKey.from_random()
         assert P2PK_Output(p, Bitcoin) == P2PK_Output(p, Bitcoin)
         assert P2PK_Output(p, Bitcoin) != p
 
     def test_hashable(self):
-        p = PrivateKey.from_random().public_key
+        p = PublicKey.from_random()
         {P2PK_Output(p, Bitcoin)}
 
     def test_hash160(self):
@@ -249,7 +249,7 @@ class TestP2PK_Output:
         assert address.to_string() == '1G9f5Kdd5A8MeBN8jduUNfcAXUVvtFxVhP'
 
 
-MS_PUBKEYS = [(PrivateKey.from_random().public_key, choice([True, False]))
+MS_PUBKEYS = [(PublicKey.from_random(), choice([True, False]))
               for n in range(5)]
 multisig_scriptsig = (
     '004830450221009a8f3f87228213a66525137b59bb9884c5a6fce43128f0eaf81082c50b99c07b022030a2a4'
@@ -329,7 +329,7 @@ class TestP2MultiSig_Output:
         assert output.hash160() == hash160(output.to_script_bytes())
 
     def test_from_template_bad(self):
-        public_keys = [PrivateKey.from_random().public_key.to_bytes() for n in range(2)]
+        public_keys = [PublicKey.from_random().to_bytes() for n in range(2)]
         with pytest.raises(ValueError):
             P2MultiSig_Output.from_template(pack_byte(1), *public_keys, pack_byte(1))
         with pytest.raises(ValueError):

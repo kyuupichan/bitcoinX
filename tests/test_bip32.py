@@ -6,6 +6,8 @@ from bitcoinx import (
     Address, BIP32_HARDENED,
 )
 
+from .utils import Replace_os_urandom
+
 HARDENED = 1 << 31
 MXPRV = 'xprv9s21ZrQH143K2gMVrSwwojnXigqHgm1khKZGTCm7K8w4PmuDEUru' \
         'dk11ZBxhGPUiUeVcrfGLoZmt8rFNRDLp18jmKMcVma89z7PJd2Vn7R9'
@@ -143,7 +145,7 @@ class TestBIP32PublicKey:
         mpubkey.child_safe((1 << 31) - 1)
 
     def test_child_safe_is_safe(self):
-        pub = BIP32PrivateKey.from_random().public_key
+        pub = BIP32PublicKey.from_random()
         bad_n = 666
 
         def bad_child(self, n):
@@ -203,15 +205,12 @@ class TestPrivKey:
 
         values = [bytes(range(64)), bytes(64)]
 
-        def source(size):
-            assert size == 64
-            return values.pop()
-
-        p = BIP32PrivateKey.from_random(source=source)
-        assert p.to_extended_key_string(Bitcoin) == (
-            'xprv9s21ZrQH143K2NukZg6wLLhBGTfK6twkq4qMuqCpX2uq3udoAx4'
-            'cKXFmyQrGAMn8TNyjNJThnPHL321QCxRxZpg7QQAvQFb7kePtCLcSrq3'
-        )
+        with Replace_os_urandom(values):
+            p = BIP32PrivateKey.from_random()
+            assert p.to_extended_key_string(Bitcoin) == (
+                'xprv9s21ZrQH143K2NukZg6wLLhBGTfK6twkq4qMuqCpX2uq3udoAx4'
+                'cKXFmyQrGAMn8TNyjNJThnPHL321QCxRxZpg7QQAvQFb7kePtCLcSrq3'
+            )
 
     def test_identifier(self):
         assert mprivkey.identifier() == mpubkey.identifier()

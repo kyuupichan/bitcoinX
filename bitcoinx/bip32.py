@@ -13,7 +13,7 @@ __all__ = (
     'bip32_build_chain_string', 'bip32_validate_derivation',
 )
 
-from os import urandom
+import os
 import re
 
 import attr
@@ -93,11 +93,11 @@ class BIP32PrivateKey(PrivateKey):
         return cls._from_parts(privkey, chain_code)
 
     @classmethod
-    def from_random(cls, *, source=urandom):
+    def from_random(cls):
         '''Return a random, valid PrivateKey.'''
         while True:
             try:
-                data = source(64)
+                data = os.urandom(64)
                 return cls._from_parts(data[:32], data[32:])
             except ValueError:
                 pass
@@ -169,6 +169,11 @@ class BIP32PublicKey(PublicKey):
             public_key = public_key._public_key
         super().__init__(public_key)
         self._derivation = derivation
+
+    @classmethod
+    def from_random(cls):
+        '''Return a random, valid BIP32PublicKey.  The private key is lost.'''
+        return BIP32PrivateKey.from_random().public_key
 
     def _extended_key(self, network):
         '''Return a raw extended private key.'''

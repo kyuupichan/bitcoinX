@@ -497,7 +497,7 @@ class TestPublicKey:
         assert a != b
 
     def test_good(self):
-        pub = PrivateKey.from_random().public_key
+        pub = PublicKey.from_random()
         PublicKey(pub._public_key)
 
     def test_eq(self):
@@ -507,13 +507,13 @@ class TestPublicKey:
         pub2 = PublicKey(pub1._public_key)
         assert pub1 is not pub2
         assert pub1 == pub2
-        assert PrivateKey.from_random().public_key != pub1
+        assert PublicKey.from_random() != pub1
         # Other types
         assert pub1 != 0
         assert pub1 != 'foo'
 
     def test_public_key(self):
-        pub = PrivateKey.from_random().public_key
+        pub = PublicKey.from_random()
         assert pub.public_key is pub
 
     def test_hashable(self):
@@ -946,11 +946,11 @@ class TestPublicKey:
             assert priv.decrypt_message(enc_msg, magic) == msg
 
     def test_str(self):
-        P = PrivateKey.from_random().public_key
+        P = PublicKey.from_random()
         assert str(P) == P.to_hex()
 
     def test_P2PK_script(self):
-        P = PrivateKey.from_random().public_key
+        P = PublicKey.from_random()
         script_c = P.P2PK_script()
         script_u = P.P2PK_script(compressed=False)
         print(script_c.to_hex(), (bytes([33]) + P.to_bytes(compressed=True) + bytes([0xac])).hex())
@@ -959,7 +959,7 @@ class TestPublicKey:
         assert script_c == P.P2PK_script(compressed=True)
 
     def test_P2PKH_script(self):
-        P = PrivateKey.from_random().public_key
+        P = PublicKey.from_random()
         script_c = P.P2PKH_script()
         script_u = P.P2PKH_script(compressed=False)
         assert script_c == b''.join((bytes([0x76, 0xa9, 20]),

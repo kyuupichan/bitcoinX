@@ -6,7 +6,7 @@ import pytest
 from bitcoinx.errors import ImpossibleEncoding
 from bitcoinx.consts import JSONFlags
 from bitcoinx.script import *
-from bitcoinx import PrivateKey, pack_byte, Bitcoin, BitcoinTestnet
+from bitcoinx import PublicKey, pack_byte, Bitcoin, BitcoinTestnet
 
 from .utils import zeroes, non_zeroes
 
@@ -251,7 +251,7 @@ def test_Ops_members():
     assert Ops['OP_NOP10'].value == 185
 
 
-P2PKH_script = PrivateKey.from_random().public_key.P2PKH_script()
+P2PKH_script = PublicKey.from_random().P2PKH_script()
 
 
 class TestScript:
@@ -362,7 +362,7 @@ class TestScript:
         list(P2PKH_script.ops())
 
     def test_P2PKH_script(self):
-        P = PrivateKey.from_random().public_key
+        P = PublicKey.from_random()
         script = P.P2PKH_script()
         data = P.hash160()
         assert data == P.hash160(compressed=True)
