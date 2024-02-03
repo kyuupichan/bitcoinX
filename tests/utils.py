@@ -7,7 +7,6 @@ from bitcoinx import (
     Tx, TxInput, TxOutput, Script, TxInputContext, SEQUENCE_FINAL,
     OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR
 )
-from bitcoinx import misc
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 
@@ -114,5 +113,5 @@ class Replace_os_urandom:
         assert os.urandom is self.os_urandom
         os.urandom = self.our_urandom
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, _type, _value, _traceback):
         os.urandom = self.os_urandom

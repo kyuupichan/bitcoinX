@@ -4,7 +4,6 @@ import pytest
 
 from bitcoinx import BIP32PrivateKey, Bitcoin, int_to_be_bytes
 from bitcoinx.mnemonic import *
-import bitcoinx.mnemonic
 
 from .utils import Replace_os_urandom
 
