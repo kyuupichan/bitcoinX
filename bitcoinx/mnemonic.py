@@ -184,8 +184,7 @@ class ElectrumMnemonic:
     '''Electrum mnemonic support.'''
 
     @classmethod
-    def generate_new(cls, wordlist, *, prefix='01', bits=132, skip_old=True, skip_bip39=True,
-                     source=urandom):
+    def generate_new(cls, wordlist, *, prefix='01', bits=132, skip_old=True, skip_bip39=True):
         '''Return a new electrum mnemonic from the wordlist with the given bits of entropy.
 
         The wordlist can be of arbitrary length and have arbitrary words.
@@ -202,7 +201,7 @@ class ElectrumMnemonic:
         size = (bits + 7) // 8
 
         while True:
-            entropy = be_bytes_to_int(source(size))
+            entropy = be_bytes_to_int(urandom(size))
             words = cls._words_from_entropy(entropy, wordlist)
             if len(words) < word_count:
                 continue
