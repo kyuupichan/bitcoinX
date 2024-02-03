@@ -414,6 +414,10 @@ class TxInput:
     def from_bytes_extended(cls, raw):
         return cls.read_extended(BytesIO(raw).read)
 
+    @classmethod
+    def from_hex_extended(cls, hex_str):
+        return cls.from_bytes_extended(bytes.fromhex(hex_str))
+
     def to_bytes_extended(self):
         return self.to_bytes() + self.txo.to_bytes()
 

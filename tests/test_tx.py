@@ -173,7 +173,8 @@ class TestTx:
         with pytest.raises(RuntimeError):
             tx.fee()
 
-    def read_extended_tx(self):
+    @staticmethod
+    def read_extended_tx():
         tx = read_tx('9839fcf5d3406199dfbc88736768d7b9b8924a94f46247739829f0118ae31df6_ext.hex')
         assert tx.is_extended()
         assert tx.are_inputs_final()
@@ -480,6 +481,12 @@ class TestTxInput:
         n = random.randrange(0, 100)
         json.update({'nInput': n})
         assert TxInput.from_hex(script).to_json(JSONFlags.ENUMERATE_INPUTS, n) == json
+
+    def test_from_hex_extended(self):
+        tx = TestTx.read_extended_tx()
+        txin = tx.inputs[0]
+        txin_hex = txin.to_hex_extended()
+        assert TxInput.from_hex_extended(txin_hex) == txin
 
 
 class TestTxOutput:
