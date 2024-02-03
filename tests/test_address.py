@@ -4,7 +4,7 @@ from random import choice
 import pytest
 
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes, PrivateKey, PublicKey,
+    Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes, PublicKey,
     Script, pack_byte, push_int, push_item,
     OP_RETURN, OP_CHECKMULTISIG, OP_0, OP_1, OP_DROP, OP_2DROP, OP_NOP, OP_CHECKSIG,
     hash160, classify_output_script
