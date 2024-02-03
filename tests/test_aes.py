@@ -20,7 +20,7 @@ class TestAES:
             value = aes.aes_decrypt_with_iv(aes_key, aes_iv, encrypted_value)
             assert value == original_value
 
-    def test_encrypt_decrypt(self):
+    def test_decrypt_bad_length(self):
         aeskey = os.urandom(32)
         aes_key = aeskey[:16]
         aes_iv = aeskey[16:]
