@@ -27,8 +27,8 @@ def _append_PKCS7_padding(data):
 def _strip_PKCS7_padding(data):
     # Impossible if Cryptodomex is functioning properly - it would have raised ValueError in
     # aes_decrypt_with_iv().
-    if not data or len(data) % 16:
-        raise DecryptionError('bad length')
+    assert data and not len(data) % 16
+
     # Check padding
     padlen = data[-1]
     if not 0 < padlen <= 16 or data[-padlen:] != bytes([padlen]) * padlen:
