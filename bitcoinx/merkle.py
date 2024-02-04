@@ -6,7 +6,6 @@
 
 '''Merkle trees, branches, proofs and roots.'''
 
-import json
 from io import BytesIO
 from math import ceil, log
 
@@ -17,25 +16,55 @@ from .packing import (
 )
 
 
-__all__ = ('merkle_path_length', 'merkle_root')
+__all__ = ('merkle_path_length', 'merkle_root', 'MerkleProof')
+
+
+def to_hash(item):
+    if isinstance(item, str):
+        item = hex_str_to_hash(item)
+    else:
+        item = bytes(item)
+    if len(item) != 32:
+        raise ValueError('hash must be 32 bytes')
+    return item
 
 
 class MerkleProof:
 
-    def __init__(self, offset, branch):
+    def __init__(self, tx_hash, offset, branch):
+        self.tx_hash = to_hash(tx_hash)
+        self.branch = [to_hash(item) for item in branch]
+        self.offset = offset
+
         if not 0 <= offset < (1 << len(branch)):
             raise ValueError('offset out of range')
-        self.offset = offset
-        self.branch = branch
+        # A block can have at most 2^32 transactions
+        if len(branch) > 32:
+            raise ValueError('branch too long')
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, MerkleProof)
+            and self.tx_hash == other.tx_hash
+            and self.branch == other.branch
+            and self.offset == other.offset
+        )
 
     @classmethod
     def from_json(cls, data):
-        return cls(data.get('offset'), data.get('branch'))
+        return cls(data['tx_hash'], data['offset'], data['branch'])
 
-    def root(self, tx_hash):
+    def to_json(self):
+        return {
+            'tx_hash': hash_to_hex_str(self.tx_hash),
+            'offset': self.offset,
+            'branch': [hash_to_hex_str(elt) for elt in self.branch],
+        }
+
+    def root(self):
         hash_func = double_sha256
         offset = self.offset
-        result = tx_hash
+        result = self.tx_hash
         for elt in self.branch:
             if offset & 1:
                 result = hash_func(elt + result)
@@ -47,20 +76,22 @@ class MerkleProof:
     @classmethod
     def from_bytes(cls, raw):
         read = BytesIO(raw).read
+        tx_hash = read(32)
         offset = read_varint(read)
         branch = [read(32) for _ in range(read_varint(read))]
         if read(1):
-            raise ValueError('trailing bytes in serialized proof')
-        return cls(offset, branch)
+            raise ValueError('excess bytes reading merkle proof')
+        return cls(tx_hash, offset, branch)
 
     def to_bytes(self):
-        def parts(offset, branch):
-            yield pack_varint(offset),
-            yield pack_varint(len(branch))
-            for hash_ in branch:
+        def parts(self):
+            yield self.tx_hash
+            yield pack_varint(self.offset)
+            yield pack_varint(len(self.branch))
+            for hash_ in self.branch:
                 yield hash_
 
-        return b''.join(parts(self.offset, self.branch))
+        return b''.join(parts(self))
 
 
 def merkle_path_length(tx_count):
@@ -324,4 +355,4 @@ class BUMP:
                 uplift = uplift_level(uplift, length)
                 offset //= 2
 
-        return MerkleProof(tx_offset, branch)
+        return MerkleProof(tx_hash, tx_offset, branch)

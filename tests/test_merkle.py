@@ -6,9 +6,9 @@ from random import randrange, sample, choice
 
 import pytest
 
-from bitcoinx import double_sha256, MerkleError, PackingError
+from bitcoinx import double_sha256, MerkleError, PackingError, hash_to_hex_str
 from bitcoinx.merkle import *
-from bitcoinx.merkle import BUMP
+from bitcoinx.merkle import BUMP  # Not yet exported
 
 from .utils import read_text_file
 
@@ -75,6 +75,80 @@ bump_a = (
     '247265fd996fd0ac62fc6dcce796e745e559b2df8a4766ea81d39fb68a05d89e21c9114b5c4a1b3576ccf5bbe3f'
     '5471daf041b52bbfcca5903ab8e84676f0000'
 )
+
+
+class TestMerkleProof:
+
+    def random_merkle_proof(self):
+        tx_hash = urandom(32)
+        branch = [urandom(32) for _ in range(randrange(16))]
+        offset = randrange(0, 1 << len(branch))
+        return MerkleProof(tx_hash, offset, branch)
+
+    def test_constructor_types(self):
+        while True:
+            m1 = self.random_merkle_proof()
+            if len(m1.branch) > 5:
+                break
+        branch = m1.branch.copy()
+        branch[2] = hash_to_hex_str(branch[2])
+        m2 = MerkleProof(hash_to_hex_str(m1.tx_hash), m1.offset, branch)
+        assert m1 == m1
+        assert m1 == m2
+
+    def test_constructor_bad_hashes(self):
+        with pytest.raises(ValueError) as e:
+            MerkleProof(bytes(31), 0, [])
+        assert 'hash must be 32 bytes' == str(e.value)
+
+        with pytest.raises(ValueError) as e:
+            MerkleProof(bytes(32), 0, [bytes(5)])
+        assert 'hash must be 32 bytes' == str(e.value)
+
+    def test_constructor_bad_offset(self):
+        branch = [bytes(32)] * 3
+        with pytest.raises(ValueError) as e:
+            MerkleProof(bytes(32), 8, branch)
+        assert 'offset out of range' == str(e.value)
+
+        with pytest.raises(ValueError) as e:
+            MerkleProof(bytes(32), -1, branch)
+        assert 'offset out of range' == str(e.value)
+
+        MerkleProof(bytes(32), 7, branch)
+
+    def test_constructor_bad_branch(self):
+        with pytest.raises(ValueError) as e:
+            MerkleProof(bytes(32), (1 << 32) - 1, [bytes(32)] * 33)
+        assert 'branch too long' == str(e.value)
+
+        MerkleProof(bytes(32), (1 << 32) - 1, [bytes(32)] * 32)
+
+    @pytest.mark.parametrize('_exec_count', range(10))
+    def test_to_from_json(self, _exec_count):
+        m1 = self.random_merkle_proof()
+        m2 = MerkleProof.from_json(m1.to_json())
+        assert m1 == m2
+
+    @pytest.mark.parametrize('_exec_count', range(10))
+    def test_to_from_bytes(self, _exec_count):
+        m1 = self.random_merkle_proof()
+        m2 = MerkleProof.from_bytes(m1.to_bytes())
+        assert m1 == m2
+
+    def test_from_bytes_excess(self):
+        m = self.random_merkle_proof()
+        with pytest.raises(ValueError) as e:
+            MerkleProof.from_bytes(m.to_bytes() + b'1')
+        assert str(e.value) == 'excess bytes reading merkle proof'
+
+    def test_root(self):
+        row0 = [b'0' * 32, b'1' * 32, b'2' * 32, b'3' * 32]
+        row1 = [double_sha256(row0[a] + row0[a + 1]) for a in (0, 2)]
+        root = double_sha256(row1[0] + row1[1])
+        for offset, tx_hash in enumerate(row0):
+            m = MerkleProof(tx_hash, offset, [row0[offset ^ 1], row1[(offset // 2) ^ 1]])
+            assert m.root() == root
 
 
 class TestBUMP:
@@ -420,4 +494,4 @@ class TestBUMP:
 
         for tx_hash in hashes_to_prove:
             proof = bump.merkle_proof(tx_hash)
-            assert proof.root(tx_hash) == bump.root
+            assert proof.root() == bump.root
