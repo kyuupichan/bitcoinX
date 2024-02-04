@@ -20,6 +20,49 @@ from .packing import (
 __all__ = ('merkle_path_length', 'merkle_root')
 
 
+class MerkleProof:
+
+    def __init__(self, offset, branch):
+        if not 0 <= offset < (1 << len(branch)):
+            raise ValueError('offset out of range')
+        self.offset = offset
+        self.branch = branch
+
+    @classmethod
+    def from_json(cls, data):
+        return cls(data.get('offset'), data.get('branch'))
+
+    def root(self, tx_hash):
+        hash_func = double_sha256
+        offset = self.offset
+        result = tx_hash
+        for elt in self.branch:
+            if offset & 1:
+                result = hash_func(elt + result)
+            else:
+                result = hash_func(result + elt)
+            offset >>= 1
+        return result
+
+    @classmethod
+    def from_bytes(cls, raw):
+        read = BytesIO(raw).read
+        offset = read_varint(read)
+        branch = [read(32) for _ in range(read_varint(read))]
+        if read(1):
+            raise ValueError('trailing bytes in serialized proof')
+        return cls(offset, branch)
+
+    def to_bytes(self):
+        def parts(offset, branch):
+            yield pack_varint(offset),
+            yield pack_varint(len(branch))
+            for hash_ in branch:
+                yield hash_
+
+        return b''.join(parts(self.offset, self.branch))
+
+
 def merkle_path_length(tx_count):
     return max(1, ceil(log(tx_count, 2)))
 
@@ -186,14 +229,13 @@ class BUMP:
             pairs = sorted((offset, hash_) for offset, hash_ in level.items())
             return [{'offset': offset, 'hash': hash_to_hex_str(hash_)} for offset, hash_ in pairs]
 
-        return json.dumps({
+        return {
             'blockHeight': height,
             'path': [level_json(level) for level in self.path],
-        })
+        }
 
     @classmethod
-    def from_json(cls, text):
-        data = json.loads(text)
+    def from_json(cls, data):
         height = data['blockHeight']
         path = [
             level_map([(leaf['offset'], hex_str_to_hash(leaf['hash'])) for leaf in level])
@@ -258,3 +300,28 @@ class BUMP:
             raise MerkleError('all hashes to prove must be present') from None
 
         return cls(list(levels(tx_hashes, offsets)))
+
+    def merkle_proof(self, tx_hash):
+        for offset, hash_ in self.path[0].items():
+            if hash_ == tx_hash:
+                break
+        else:
+            raise MerkleError('tx_hash is not in the bump')
+
+        branch = []
+        tx_offset = offset
+        tx_count = max(self.path[0].keys()) + 1
+        if tx_count != 1:
+            uplift = {}
+            for level, length in iterate_path(self.path, tx_count):
+                uplift.update(level)
+                sibling = offset ^ 1
+                if sibling == length:
+                    branch.append(uplift[offset])
+                else:
+                    branch.append(uplift[sibling])
+
+                uplift = uplift_level(uplift, length)
+                offset //= 2
+
+        return MerkleProof(tx_offset, branch)

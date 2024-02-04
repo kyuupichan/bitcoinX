@@ -129,10 +129,10 @@ class TestBUMP:
     def test_level_map_fail(self):
         tx_hashes = testcases[6]
         proof = BUMP.create(tx_hashes, tx_hashes[:-1])
-        value = json.loads(proof.to_json(100))
+        value = proof.to_json(100)
         value['path'][0].append({'offset': 0, 'hash': bytes(32).hex()})
         with pytest.raises(MerkleError) as e:
-            BUMP.from_json(json.dumps(value))
+            BUMP.from_json(value)
         assert 'conflicting leaves in path' in str(e.value)
 
     def test_eq(self):
@@ -392,8 +392,8 @@ class TestBUMP:
     def test_to_json(self):
         answer = read_text_file('bump.json')
         height, bump = BUMP.from_bytes(bytes.fromhex(bump_a))
-        text = bump.to_json(height)
-        assert text == answer
+        data = bump.to_json(height)
+        assert json.dumps(data) == answer
 
     def test_to_json_is_sorted(self):
         tx_hashes = testcases[1]
@@ -402,13 +402,22 @@ class TestBUMP:
         if sorted(level.keys()) == list(level.keys()):
             level = {offset: level[offset] for offset in reversed(level.keys())}
             bump.path[0] = level
-        text = bump.to_json(1)
-        data = json.loads(text)
+        data = bump.to_json(1)
         assert data['path'][0][0]['offset'] == 0
 
     def test_from_json(self):
         orig_height, orig_bump = BUMP.from_bytes(bytes.fromhex(bump_a))
         text = read_text_file('bump.json')
-        height, bump = BUMP.from_json(text)
+        height, bump = BUMP.from_json(json.loads(text))
         assert height == orig_height
         assert bump == orig_bump
+
+    @pytest.mark.parametrize("tx_hashes", testcases)
+    def test_merkle_proof(self, tx_hashes):
+        count = randrange(1, len(tx_hashes) + 1)
+        hashes_to_prove = sample(tx_hashes, count)
+        bump = BUMP.create(tx_hashes, hashes_to_prove)
+
+        for tx_hash in hashes_to_prove:
+            proof = bump.merkle_proof(tx_hash)
+            assert proof.root(tx_hash) == bump.root
