@@ -706,7 +706,7 @@ class TestNetworkProtocol:
         assert service == service2
         assert result == (X_service.address, X_service.services, nonce)
 
-    def test_version_payload_timestamp_None(self):
+    def test_version_payload_assoc_id_None(self):
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.assoc_id = None

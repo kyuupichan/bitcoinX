@@ -5,6 +5,7 @@
 
 
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -21,7 +22,6 @@ from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
     read_varbytes, read_varint, read_le_int32, read_le_uint32, read_le_uint64, read_le_int64,
-    read_list
 )
 
 
@@ -543,7 +543,7 @@ class NetworkProtocol:
         '''A nonce suitable for a PING or VERSION messages.'''
         # bitcoind doesn't like zero nonces
         while True:
-            nonce = urandom(8)
+            nonce = os.urandom(8)
             if nonce != ZERO_NONCE:
                 return nonce
 
