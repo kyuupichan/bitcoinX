@@ -12,7 +12,6 @@ __all__ = (
     'int_to_be_bytes', 'int_to_le_bytes', 'CONTEXT'
 )
 
-import mmap
 import os
 from functools import partial
 
@@ -53,22 +52,6 @@ def chunks(items, size):
 def data_file_path(*parts):
     '''Return the path to a file in the data/ directory.'''
     return os.path.join(package_dir, "data", *parts)
-
-
-#
-# Internal utilities
-#
-
-def map_file(file_name, new_size=None):
-    '''Map an existing file into memory.  If new_size is specified the
-    file is truncated or extended to that size.
-
-    Returns a Python mmap object.
-    '''
-    with open(file_name, 'rb+') as f:
-        if new_size is not None:
-            f.truncate(new_size)
-        return mmap.mmap(f.fileno(), 0)
 
 
 # Method decorator.  To be used for calculations that will always deliver the same result.

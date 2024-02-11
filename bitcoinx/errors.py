@@ -75,6 +75,10 @@ class DecryptionError(Exception):
     password error or corrupt ciphertext; in general it is impossible to distinguish.'''
 
 
+#
+# Script errors
+#
+
 class ScriptError(Exception):
     '''Base class for script errors.'''
 
@@ -86,6 +90,10 @@ class TruncatedScriptError(ScriptError):
 class InterpreterError(ScriptError):
     '''Base class for interpreter errors.'''
 
+
+#
+# Interpreter errors
+#
 
 class ScriptTooLarge(InterpreterError):
     '''Raised when a script is too long.'''
