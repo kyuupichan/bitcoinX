@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+from asyncio import Event, Queue, TaskGroup, open_connection, CancelledError
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 from functools import partial
@@ -16,12 +17,13 @@ from ipaddress import ip_address, IPv4Address, IPv6Address
 from struct import Struct, error as struct_error
 from typing import List
 
-from .errors import ProtocolError
+from .errors import ProtocolError, ForceDisconnectError
 from .hashes import double_sha256
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
     read_varbytes, read_varint, read_le_int32, read_le_uint32, read_le_uint64, read_le_int64,
+    read_list
 )
 
 
@@ -582,6 +584,8 @@ class NetworkProtocol:
     def read_version_payload(cls, service, payload):
         '''Read a version payload and update member variables of service (except address).  Return
         a tuple (our_address, our_services, nonce) in the payload.
+
+        This is not a constructor because there is no reliable source for the address.
         '''
         read = BytesIO(payload).read
         service.protocol_version = read_le_uint32(read)
@@ -615,13 +619,334 @@ class NetworkProtocol:
         parts.append(hash_stop or bytes(32))
         return b''.join(parts)
 
-    # @classmethod
-    # def unpack_headers(payload):
-    #     def read_one(read):
-    #         raw_header = read(80)
-    #         # A stupid tx count which seems to always be zero...
-    #         read_varint(read)
-    #         return raw_header
+    @classmethod
+    def unpack_headers(cls, payload):
+        def read_one(read):
+            raw_header = read(80)
+            # A stupid tx count which seems to always be zero...
+            read_varint(read)
+            return raw_header
 
-    #     read = BytesIO(payload).read
-    #     return read_list(read, read_one)
+        read = BytesIO(payload).read
+        return read_list(read, read_one)
+
+
+class Node:
+    '''A node talks on a network, e.g., mainnet.  Connections to peers are represented by
+    a Session, which references the Node to manage unified state.'''
+
+    def __init__(self, network, headers, *, our_service=None):
+        self.network = network
+        self.our_service = our_service or BitcoinService()
+        self.headers = headers
+
+    async def connect(self, service, **kwargs):
+        '''Establish an outgoing connection to a service (a BitcoinService instance).
+        The session spawns further connections as part of its association as necessary.
+        '''
+        address = service.address
+        reader, writer = await open_connection(str(address.host), address.port)
+        connection = Connection(reader, writer)
+        return Session(self, service, connection, True, **kwargs)
+
+
+class SessionLogger(logging.LoggerAdapter):
+
+    '''Prepends a connection identifier to a logging message.'''
+    def process(self, msg, kwargs):
+        peer_id = self.extra.get('peer_id', 'unknown')
+        return f'[{peer_id}] {msg}', kwargs
+
+
+class Session:
+    '''Represents a single logical connection (an association) to a peer.  This can consist of
+    multiple actual connections to the peer.  The peer determines on which connection a
+    message is sent, and tracks state across the associated connections.
+
+    If a client wishes to maintain several associations with the same address, it must be
+    done with separate Session objects.
+    '''
+
+    def __init__(self, node, service, connection, is_outgoing, *,
+                 protoconf=None,
+                 perform_handshake=True,
+                 send_protoconf=True,
+                 sync_headers=True):
+        self.node = node
+        self.their_service = service
+        # The main connection.  For now, the only one.
+        self.connection = connection
+        self.is_outgoing = is_outgoing
+        self.our_protoconf = protoconf or Protoconf.default()
+        self._perform_handshake = perform_handshake
+        self._send_protoconf = send_protoconf
+        self.sync_headers = sync_headers
+
+        # State
+        self.version_sent = False
+        self.version_received = Event()
+        self.verack_received = Event()
+        self.headers_synced = Event()
+        self.protoconf_sent = False
+        self.their_protoconf = None
+        self.nonce = NetworkProtocol.random_nonce()
+
+        # Logging
+        logger = logging.getLogger('Session')
+        context = {'peer_id': f'{service.address}'}
+        self.logger = SessionLogger(logger, context)
+        self.debug = logger.isEnabledFor(logging.DEBUG)
+
+    async def close(self):
+        await self.connection.close()
+        self.connection = None
+
+    async def maintain_connection(self, connection):
+        '''Maintains a connection.'''
+        async with TaskGroup() as group:
+            await group.create_task(self.recv_messages_loop(connection))
+            await group.create_task(self.send_messages_loop(connection))
+            if self._perform_handshake:
+                await group.create_task(self.perform_handshake(connection))
+            if self._send_protoconf:
+                await group.create_task(self.send_protoconf())
+            if self.sync_headers:
+                await group.create_task(self.get_headers())
+
+    async def send_messages_loop(self, connection):
+        '''Handle sending the queue of messages.  This sends all messages except the initial
+        version / verack handshake.
+        '''
+        await self.verack_received.wait()
+
+        send = self.connection.send
+        while True:
+            # FIXME: handle extended messages
+            header, payload = await connection.outgoing_messages.get()
+            if len(payload) + len(header) <= 536:
+                await send(header + payload)
+            else:
+                await send(header)
+                await send(payload)
+
+    async def recv_messages_loop(self, connection):
+        '''Read messages from a stream and pass them to handlers for processing.'''
+        while True:
+            header = 'incoming'
+            try:
+                header = await MessageHeader.from_stream(connection.recv_exactly)
+                await self.handle_message(connection, header)
+            except EOFError:
+                self.logger.info('connection closed remotely')
+                raise
+            except ForceDisconnectError as e:
+                self.logger.error(f'fatal protocol error, disconnecting: {e}')
+                raise
+            except ProtocolError as e:
+                self.logger.error(f'protocol error: {e}')
+            except Exception:
+                self.logger.exception(f'error handling {header} message')
+
+    async def _send_unqueued(self, connection, command, payload):
+        '''Send a command without queueing.  For use with handshake negotiation.'''
+        self.logger.debug(f'sending unqueued {command} message')
+        header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
+        await connection.send(header + payload)
+
+    def log_service_details(self, serv, headline):
+        self.logger.info(headline)
+        self.logger.info(f'    user_agent={serv.user_agent} services={serv.services!r}')
+        self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
+                         f'relay={serv.relay} timestamp={serv.timestamp} assoc_id={serv.assoc_id}')
+
+    async def perform_handshake(self, connection):
+        '''Perform the initial handshake.  Send version and verack messages, and wait until a
+        verack is received back.'''
+        if not self.is_outgoing:
+            # Incoming connections wait for version message first
+            await self.version_received.wait()
+
+        # Send version message with our current height
+        our_service = self.node.our_service
+        our_service.start_height = self.node.headers.height
+        self.log_service_details(our_service, 'sending version message:')
+        payload = our_service.version_payload(self.their_service.address, self.nonce)
+        await self._send_unqueued(connection, MessageHeader.VERSION, payload)
+
+        self.version_sent = True
+        if self.is_outgoing:
+            # Outoing connections wait now
+            await self.version_received.wait()
+
+        # Send verack
+        await self._send_unqueued(connection, MessageHeader.VERACK, b'')
+
+        # Handhsake is complete once verack is received
+        await self.verack_received.wait()
+
+    def connection_for_command(self, _command):
+        return self.connection
+
+    async def send_message(self, command, payload):
+        '''Send a command and its payload.'''
+        connection = self.connection_for_command(command)
+        header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
+        await connection.outgoing_messages.put((header, payload))
+
+    async def handle_message(self, connection, header):
+        if self.debug:
+            self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
+
+        magic = self.node.network.magic
+        if header.magic != magic:
+            raise ForceDisconnectError(f'bad magic: got 0x{header.magic.hex()} '
+                                       f'expected 0x{magic.hex()}')
+
+        if not self.verack_received.is_set():
+            if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
+                raise ProtocolError(f'{header} command received before handshake finished')
+
+        command = header.command()
+
+        if header.is_extended:
+            # FIXME
+            pass
+
+        # FIXME: handle large payloads in a streaming fashion
+
+        # Consume the payload
+        payload = await connection.recv_exactly(header.payload_len)
+        handler = getattr(self, f'on_{command}', None)
+        if not handler:
+            if self.debug:
+                self.logger.debug(f'ignoring unhandled {command} command')
+            return
+
+        if not header.is_extended and header.payload_checksum(payload) != header.checksum:
+            # Maybe force disconnect if we get too many bad checksums in a short time
+            error = ProtocolError if self.verack_received.is_set() else ForceDisconnectError
+            raise error(f'bad checksum for {header} command')
+
+        await handler(payload)
+
+    # Call to request various things from the peer
+
+    async def get_addr(self):
+        '''Call to request network nodes from the peer.'''
+
+    async def get_data(self, items):
+        '''Request various items from the peer.'''
+
+    async def get_block(self, block_hash):
+        '''Call to request the block with the given hash.'''
+
+    async def get_headers(self, chain=None):
+        '''Send a request to get headers with the chain's block locator.  If chain is None,
+        the logest chain is used.
+
+        Calling this with no argument forms a loop with on_headers() whose eventual effect
+        is to synchronize the peer's headers.
+        '''
+        # self.headers_synced.clear()
+        # locator = (chain or self.node.headers.longest_chain()).block_locator()
+        # payload = NetworkProtocol.pack_block_locator(self.node.our_service.protocol_version,
+        #                                              locator)
+        # if self.debug:
+        #     self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
+        # await self.send_message(MessageHeader.GETHEADERS, payload)
+
+    # Callbacks when certain messages are received.
+
+    async def on_addr(self, services):
+        '''Called when an addr message is received.'''
+
+    async def on_block(self, raw):
+        '''Called when a block is received.'''
+
+    async def on_headers(self, payload):
+        '''Handle getting a bunch of headers.'''
+        raw_headers = NetworkProtocol.unpack_headers(payload)
+        if len(raw_headers) > 2000:
+            self.logger.warning(f'{len(raw_headers):,d} headers in headers message')
+
+        # Synchronized?
+        if not raw_headers:
+            # if self.debug:
+            #     self.logger.debug(f'headers synchronized to height {headers.height}')
+            self.headers_synced.set()
+            return
+
+        # await self.get_headers(chain)
+
+    async def on_inv(self, items):
+        '''Called when an inv message is received advertising availability of various objects.'''
+
+    async def on_tx(self, raw):
+        '''Called when a tx is received.'''
+
+    async def on_version(self, payload):
+        '''Called when a version message is received.   their_service has been updated as
+        they report it (except the address is unchanged).'''
+        if self.version_received.is_set():
+            raise ProtocolError('duplicate version message')
+        await self.version_received.set()
+        _, _, nonce = self.their_service.read_version_payload(payload)
+        if nonce == self.nonce:
+            raise ForceDisconnectError('connected to ourself')
+        self.log_service_details(self.their_service, 'received version message:')
+
+    async def on_verack(self, payload):
+        if not self.version_sent:
+            raise ProtocolError('verack message received before version message sent')
+        if self.verack_received.is_set():
+            self.logger.error('duplicate verack message')
+        if payload:
+            self.logger.error('verack message has payload')
+        await self.verack_received.set()
+
+    async def on_protoconf(self, payload):
+        '''Called when a protoconf message is received.'''
+        if self.their_protoconf:
+            raise ProtocolError('duplicate protoconf message received')
+        self.their_protoconf = Protoconf.from_payload(payload, self.logger)
+
+    async def send_protoconf(self):
+        if self.protoconf_sent:
+            self.logger.warning('protoconf message already sent')
+            return
+        self.protoconf_sent = True
+        await self.send_message(MessageHeader.PROTOCONF,
+                                self.our_protoconf.payload())
+
+
+class Connection:
+
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
+        self.outgoing_messages = Queue()
+
+    async def close(self):
+        self.writer.close()
+        await self.writer.wait_closed()
+
+    async def send(self, data):
+        self.writer.write(data)
+        await self.writer.drain()
+
+    async def recv_exactly(self, nbytes):
+        recv = self.reader.readexactly
+        parts = []
+        while nbytes > 0:
+            try:
+                part = await recv(nbytes)
+            except CancelledError as e:
+                e.bytes_read = b''.join(parts)
+                raise
+            if not part:
+                e = EOFError('unexpected end of data')
+                e.bytes_read = b''.join(parts)
+                raise e
+            parts.append(part)
+            nbytes -= len(part)
+        return b''.join(parts)
