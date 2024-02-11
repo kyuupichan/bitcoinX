@@ -495,3 +495,11 @@ class TestBUMP:
         for tx_hash in hashes_to_prove:
             proof = bump.merkle_proof(tx_hash)
             assert proof.root() == bump.root
+
+    def test_merkle_proof_fail(self):
+        tx_hashes = testcases[10]
+        bump = BUMP.create(tx_hashes, tx_hashes[:4])
+
+        with pytest.raises(MerkleError) as e:
+            bump.merkle_proof(bytes(32))
+        assert str(e.value) == 'tx_hash is not in the bump'

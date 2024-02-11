@@ -225,13 +225,38 @@ class TestNetAddress:
     def test_str(self, address, answer):
         assert str(address) == answer
 
-
     @pytest.mark.parametrize("attr", ('host', 'port'))
     def test_immutable(self, attr):
         address = NetAddress('foo.bar', 23)
         with pytest.raises(AttributeError):
             setattr(address, attr, 'foo')
         setattr(address, 'foo', '')
+
+    @pytest.mark.parametrize("address,answer",(
+        (NetAddress('abcd::dbca', 50), bytes.fromhex('abcd000000000000000000000000dbca')),
+        (NetAddress('1.2.3.5', 50), bytes.fromhex('00000000000000000000ffff01020305')),
+        (NetAddress('foo.bar', 50), TypeError('address must be resolved: foo.bar')),
+    ))
+    def test_pack_host(self, address, answer):
+        if isinstance(answer, Exception):
+            with pytest.raises(type(answer)) as e:
+                address.pack_host()
+            assert type(e.value) == type(answer) and str(e.value) == str(answer)
+        else:
+            assert address.pack_host() == answer
+
+    @pytest.mark.parametrize("address,answer",(
+        (NetAddress('abcd::dbca', 50), bytes.fromhex('abcd000000000000000000000000dbca0032')),
+        (NetAddress('1.2.3.5', 40), bytes.fromhex('00000000000000000000ffff010203050028')),
+        (NetAddress('foo.bar', 30), TypeError('address must be resolved: foo.bar')),
+    ))
+    def test_pack(self, address, answer):
+        if isinstance(answer, Exception):
+            with pytest.raises(type(answer)) as e:
+                address.pack()
+            assert type(e.value) == type(answer) and str(e.value) == str(answer)
+        else:
+            assert address.pack() == answer
 
 
 def default_func(protocol, kind):
