@@ -13,6 +13,7 @@ from functools import partial
 from io import BytesIO
 from ipaddress import ip_address, IPv4Address, IPv6Address
 from struct import Struct, error as struct_error
+from typing import List
 
 from .errors import ProtocolError
 from .hashes import double_sha256
@@ -26,7 +27,7 @@ from .packing import (
 
 __all__ = (
     'is_valid_hostname', 'classify_host', 'validate_port', 'validate_protocol',
-    'NetAddress', 'Service', 'ServicePart',
+    'NetAddress', 'Service', 'ServicePart', 'NetworkProtocol',
     'BitcoinService', 'ServiceFlags', 'Protoconf', 'MessageHeader',
 )
 
@@ -440,24 +441,6 @@ class ServicePacking:
         return [read_with_timestamp(read) for _ in range(count)]
 
 
-def pack_block_locator(protocol_version, locator, hash_stop=None):
-    parts = [pack_le_int32(protocol_version), pack_varint(len(locator))]
-    parts.extend(locator)
-    parts.append(hash_stop or bytes(32))
-    return b''.join(parts)
-
-
-def unpack_headers(payload):
-    def read_one(read):
-        raw_header = read(80)
-        # A stupid tx count which seems to always be zero...
-        read_varint(read)
-        return raw_header
-
-    read = BytesIO(payload).read
-    return read_list(read, read_one)
-
-
 class BitcoinService:
     '''Represents a bitcoin network service.
 
@@ -492,65 +475,6 @@ class BitcoinService:
     def __hash__(self):
         return hash(self.address)
 
-    def to_version_payload(self, their_service, nonce):
-        '''Create a version message payload.
-
-        If self.timestamp is None, then the current time is used.
-        their_service is a NetAddress or BitcoinService.
-        '''
-        if len(nonce) != 8:
-            raise ValueError('nonce must be 8 bytes')
-
-        if isinstance(their_service, NetAddress):
-            their_service_packed = ServicePacking.pack(their_service, ServiceFlags.NODE_NONE)
-        else:
-            their_service_packed = their_service.pack()
-
-        timestamp = int(time.time()) if self.timestamp is None else self.timestamp
-        assoc_id = b'' if self.assoc_id is None else pack_varbytes(self.assoc_id)
-
-        return b''.join((
-            pack_le_int32(self.protocol_version),
-            pack_le_uint64(self.services),
-            pack_le_int64(timestamp),
-            their_service_packed,
-            self.pack(),   # In practice this is ignored by receiver
-            nonce,
-            pack_varbytes(self.user_agent.encode()),
-            pack_le_int32(self.start_height),
-            pack_byte(self.relay),
-            assoc_id,
-        ))
-
-    def read_version_payload(self, payload):
-        '''Read a version payload and update member variables (except address).  Return a tuple
-        (our_address, our_services, nonce) from the payload.
-        '''
-        read = BytesIO(payload).read
-        self.protocol_version = read_le_uint32(read)
-        self.services = read_le_uint64(read)
-        self.timestamp = read_le_int64(read)
-        our_address, our_services = ServicePacking.read(read)
-        ServicePacking.read(read)   # Ignore
-        nonce = read(8)
-
-        user_agent = read_varbytes(read)
-        try:
-            self.user_agent = user_agent.decode()
-        except UnicodeDecodeError:
-            self.user_agent = '0x' + user_agent.hex()
-
-        self.start_height = read_le_int32(read)
-        # Relay is optional, defaulting to True
-        self.relay = read(1) != b'\0'
-        # Association ID is optional.  We set it to None if not provided.
-        try:
-            self.assoc_id = read_varbytes(read)
-        except struct_error:
-            self.assoc_id = None
-
-        return (our_address, our_services, nonce)
-
     def pack(self):
         '''Return the address and service flags as an encoded service.'''
         return ServicePacking.pack(self.address, self.services)
@@ -576,7 +500,7 @@ class Protoconf:
     LEGACY_MAX_PAYLOAD = 1024 * 1024
 
     max_payload: int
-    stream_policies: list[bytes]
+    stream_policies: List[bytes]
 
     def max_inv_elements(self):
         return (self.max_payload - 9) // (4 + 32)
@@ -610,3 +534,94 @@ class Protoconf:
 
         stream_policies = read_varbytes(read)
         return Protoconf(max_payload, stream_policies.split(b','))
+
+
+class NetworkProtocol:
+
+    @classmethod
+    def random_nonce(cls):
+        '''A nonce suitable for a PING or VERSION messages.'''
+        # bitcoind doesn't like zero nonces
+        while True:
+            nonce = urandom(8)
+            if nonce != ZERO_NONCE:
+                return nonce
+
+    @classmethod
+    def version_payload(cls, service, their_service, nonce):
+        '''Create a version message payload.
+
+        If self.timestamp is None, then the current time is used.
+        their_service is a NetAddress or BitcoinService.
+        '''
+        if len(nonce) != 8:
+            raise ValueError('nonce must be 8 bytes')
+
+        if isinstance(their_service, NetAddress):
+            their_service_packed = ServicePacking.pack(their_service, ServiceFlags.NODE_NONE)
+        else:
+            their_service_packed = their_service.pack()
+
+        timestamp = int(time.time()) if service.timestamp is None else service.timestamp
+        assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
+
+        return b''.join((
+            pack_le_int32(service.protocol_version),
+            pack_le_uint64(service.services),
+            pack_le_int64(timestamp),
+            their_service_packed,
+            service.pack(),   # In practice this is ignored by receiver
+            nonce,
+            pack_varbytes(service.user_agent.encode()),
+            pack_le_int32(service.start_height),
+            pack_byte(service.relay),
+            assoc_id,
+        ))
+
+    @classmethod
+    def read_version_payload(cls, service, payload):
+        '''Read a version payload and update member variables of service (except address).  Return
+        a tuple (our_address, our_services, nonce) in the payload.
+        '''
+        read = BytesIO(payload).read
+        service.protocol_version = read_le_uint32(read)
+        service.services = read_le_uint64(read)
+        service.timestamp = read_le_int64(read)
+        our_address, our_services = ServicePacking.read(read)
+        ServicePacking.read(read)   # Ignore
+        nonce = read(8)
+
+        user_agent = read_varbytes(read)
+        try:
+            service.user_agent = user_agent.decode()
+        except UnicodeDecodeError:
+            service.user_agent = '0x' + user_agent.hex()
+
+        service.start_height = read_le_int32(read)
+        # Relay is optional, defaulting to True
+        service.relay = read(1) != b'\0'
+        # Association ID is optional.  We set it to None if not provided.
+        try:
+            service.assoc_id = read_varbytes(read)
+        except struct_error:
+            service.assoc_id = None
+
+        return (our_address, our_services, nonce)
+
+    @classmethod
+    def pack_block_locator(cls, protocol_version, locator, hash_stop=None):
+        parts = [pack_le_int32(protocol_version), pack_varint(len(locator))]
+        parts.extend(locator)
+        parts.append(hash_stop or bytes(32))
+        return b''.join(parts)
+
+    # @classmethod
+    # def unpack_headers(payload):
+    #     def read_one(read):
+    #         raw_header = read(80)
+    #         # A stupid tx count which seems to always be zero...
+    #         read_varint(read)
+    #         return raw_header
+
+    #     read = BytesIO(payload).read
+    #     return read_list(read, read_one)

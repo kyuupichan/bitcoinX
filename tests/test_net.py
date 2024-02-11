@@ -1,10 +1,15 @@
 import asyncio
+import copy
+import time
 from io import BytesIO
 from ipaddress import IPv4Address, IPv6Address
+from os import urandom
 
 import pytest
 
-from bitcoinx import Bitcoin, pack_varint, _version_str, double_sha256
+from bitcoinx import (
+    Bitcoin, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
+)
 from bitcoinx.errors import ProtocolError
 from bitcoinx.net import *
 from bitcoinx.net import ServicePacking
@@ -539,12 +544,24 @@ ext_header_tests = [
      b'block\0\0\0\0\0\0\0\0P\xd6\xdc\1\0\0\0'),
 ]
 
+ALL_COMMANDS = ('addr', 'authch', 'authresp', 'block', 'blocktxn', 'cmpctblock', 'createstrm',
+                'datareftx', 'dsdetected', 'extmsg', 'feefilter', 'getaddr', 'getblocks',
+                'getblocktxn', 'getdata', 'getheaders', 'gethdrsen', 'hdrsen', 'headers',
+                'inv', 'mempool', 'notfound', 'ping', 'pong', 'protoconf', 'reject', 'reply',
+                'revokemid', 'sendcmpct', 'sendheaders', 'sendhdrsen', 'streamack', 'tx',
+                'verack', 'version')
+
 
 class TestMessageHeader:
 
-    def basics(self):
-        assert MessageHeader.STD_HEADER_SIZE == 28
-        assert MessageHEader.EXT_HEADER_SIZE == 48
+    def test_basics(self):
+        assert MessageHeader.STD_HEADER_SIZE == 24
+        assert MessageHeader.EXT_HEADER_SIZE == 44
+
+    @pytest.mark.parametrize("command", ALL_COMMANDS)
+    def test_commands(self, command):
+        padding = 12 - len(command)
+        assert getattr(MessageHeader, command.upper()) == command.encode() + bytes(padding)
 
     @pytest.mark.parametrize("magic, command, payload, answer", std_header_tests)
     def test_std_bytes(self, magic, command, payload, answer):
@@ -598,11 +615,6 @@ class TestMessageHeader:
         header = MessageHeader(b'', command_bytes, 0, b'', False)
         assert str(header) == command
 
-    def test_commands(self):
-        for key, value in MessageHeader.__dict__.items():
-            if isinstance(value, bytes):
-                assert key.lower().encode() == value.rstrip(b'\0')
-
 
 net_addresses = ['1.2.3.4', '4.3.2.1', '001:0db8:85a3:0000:0000:8a2e:0370:7334',
                  '2001:db8:85a3:8d3:1319:8a2e:370:7348']
@@ -616,3 +628,119 @@ def random_net_address():
 def random_service():
     address = random_net_address()
     return BitcoinService(address=address)
+
+
+class TestNetworkProtocol:
+
+    def test_pack_block_locator(self):
+        def pack_hash(h):
+            return h
+
+        locator = [urandom(32) for _ in range(6)]
+        hash_stop = urandom(32)
+        protocol = 100
+        answer = pack_le_int32(protocol) + pack_list(locator, pack_hash)
+
+        assert NetworkProtocol.pack_block_locator(protocol, locator) == answer + bytes(32)
+        assert NetworkProtocol.pack_block_locator(protocol, locator, None) == answer + bytes(32)
+        assert NetworkProtocol.pack_block_locator(protocol, locator, hash_stop) \
+            == answer + hash_stop
+
+    def test_version_payload_bad_nonce(self):
+        with pytest.raises(ValueError) as e:
+            NetworkProtocol.version_payload(X_service, BitcoinService(), bytes(7))
+        assert 'nonce must be 8 bytes' == str(e.value)
+
+    def test_version_payload_theirs_default(self):
+        nonce = b'1234beef'
+        their_service = BitcoinService()
+        payload = NetworkProtocol.version_payload(X_service, their_service, nonce)
+        assert payload == bytes.fromhex(
+            '80380100010000000000000020a1070000000000000000000000000000000000000000000000000000'
+            '0000000000010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
+            '666f6f6261723a312e302f05000000000744656661756c74')
+        service = BitcoinService()
+        service.address = X_service.address
+        result = NetworkProtocol.read_version_payload(service, payload)
+        assert service == X_service
+        assert result == (their_service.address, their_service.services, nonce)
+
+    def test_version_payload_theirs_X(self):
+        nonce = b'1234beef'
+        their_service = copy.copy(X_service)
+        payload = NetworkProtocol.version_payload(X_service, their_service, nonce)
+        assert payload == bytes.fromhex(
+            '80380100010000000000000020a1070000000000010000000000000000000000000000000000ffff01'
+            '020304162e010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
+            '666f6f6261723a312e302f05000000000744656661756c74')
+        service = BitcoinService()
+        service.address = X_service.address
+        result = NetworkProtocol.read_version_payload(service, payload)
+        assert service == X_service
+        assert result == (their_service.address, their_service.services, nonce)
+
+    def test_version_payload_NetAddress(self):
+        nonce = b'cabbages'
+        address = NetAddress('1.2.3.4', 5)
+        payload = NetworkProtocol.version_payload(X_service, address, nonce)
+        assert payload == bytes.fromhex(
+            '80380100010000000000000020a1070000000000000000000000000000000000000000000000ffff01'
+            '0203040005010000000000000000000000000000000000ffff01020304162e63616262616765730c2f'
+            '666f6f6261723a312e302f05000000000744656661756c74')
+        service = BitcoinService(address=address)
+        service_copy = copy.copy(service)
+        result = NetworkProtocol.read_version_payload(service, payload)
+        assert service == service_copy
+        assert result == (address, ServiceFlags.NODE_NONE, nonce)
+
+    def test_version_payload_timestamp_None(self):
+        nonce = b'cabbages'
+        service = copy.copy(X_service)
+        service.timestamp = None
+        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+
+        service2 = BitcoinService(address=service.address)
+        result = NetworkProtocol.read_version_payload(service2, payload)
+        assert 0 < time.time() - service2.timestamp < 5
+        service.timestamp = service2.timestamp
+        assert service == service2
+        assert result == (X_service.address, X_service.services, nonce)
+
+    def test_version_payload_timestamp_None(self):
+        nonce = b'cabbages'
+        service = copy.copy(X_service)
+        service.assoc_id = None
+        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+
+        service2 = BitcoinService(address=service.address)
+        result = NetworkProtocol.read_version_payload(service2, payload)
+        assert service2.assoc_id is None
+        assert service == service2
+        assert result == (X_service.address, X_service.services, nonce)
+
+    def test_read_version_payload_undecodeable_user_agent(self):
+        nonce = b'cabbages'
+        service = copy.copy(X_service)
+        service.user_agent = 'xxx'
+        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        # Non-UTF8 user agent
+        payload = payload.replace(b'xxx', b'\xff' * 3)
+
+        service2 = BitcoinService(address=service.address)
+        result = NetworkProtocol.read_version_payload(service2, payload)
+        assert service2.user_agent == '0xffffff'
+        service2.user_agent = service.user_agent
+        assert service == service2
+        assert result == (X_service.address, X_service.services, nonce)
+
+    def test_read_version_payload_no_relay(self):
+        nonce = b'cabbages'
+        service = BitcoinService()
+        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+
+        service2 = BitcoinService(address=service.address)
+        result = NetworkProtocol.read_version_payload(service2, payload[:-1])
+        assert service2.assoc_id is None
+        assert service2.relay is True
+        assert service == service2
+        assert result == (X_service.address, X_service.services, nonce)
