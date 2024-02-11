@@ -76,6 +76,22 @@ class DecryptionError(Exception):
 
 
 #
+# Network errors
+#
+
+class BadChecksumError(Exception):
+    '''Raise when a message's checksum is bad.'''
+
+
+class ProtocolError(Exception):
+    '''Raise on detecting a network protcol error.'''
+
+
+class ForceDisconnectError(Exception):
+    '''Raise on an error that must force a disconnection.'''
+
+
+#
 # Script errors
 #
 
