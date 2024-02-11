@@ -20,7 +20,7 @@ setuptools.setup(
     name='bitcoinX',
     version=version,
     python_requires='>=3.8',
-    install_requires=['attrs', 'pycryptodomex', 'electrumsv-secp256k1'],
+    install_requires=['pycryptodomex', 'electrumsv-secp256k1'],
     packages=['bitcoinx'],
     description='Library of Bitcoin functions',
     author='Neil Booth',

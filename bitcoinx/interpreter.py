@@ -14,16 +14,15 @@ __all__ = (
 
 
 import operator
+from dataclasses import dataclass
 from enum import IntFlag
 from functools import partial
-
-import attr
 
 from .consts import (
     LOCKTIME_THRESHOLD, SEQUENCE_FINAL, SEQUENCE_LOCKTIME_DISABLE_FLAG,
     SEQUENCE_LOCKTIME_MASK, SEQUENCE_LOCKTIME_TYPE_FLAG, UINT32_MAX, UINT64_MAX, INT32_MAX,
+    INT64_MAX,
 )
-from .consts import INT64_MAX
 from .errors import (
     InterpreterError, NumEqualVerifyFailed,
     StackSizeTooLarge, MinimalEncodingError, InvalidPublicKeyEncoding,
@@ -102,7 +101,7 @@ STANDARD_SCRIPT_VERIFY_FLAGS = (
 )
 
 
-@attr.s(slots=True)
+@dataclass
 class MinerPolicy:
     '''Miner policy rules for transaction acceptance.
 
@@ -112,19 +111,19 @@ class MinerPolicy:
     Consensus rules determine what is accepted in a block and are looser.
     '''
     # In bytes, e.g. 10_000_000
-    max_script_size = attr.ib()
+    max_script_size: int
     # In bytes, e.g. 256
-    max_script_num_length = attr.ib()
+    max_script_num_length: int
     # In bytes, e.g. 10_000_000
-    max_stack_memory_usage = attr.ib()
+    max_stack_memory_usage: int
     # e.g. 1_000_000
-    max_ops_per_script = attr.ib()
+    max_ops_per_script: int
     # e.g. 64
-    max_pubkeys_per_multisig = attr.ib()
+    max_pubkeys_per_multisig: int
     # Transactions in blocks must pass script verification with these flags
-    consensus_flags = attr.ib(default=MANDATORY_SCRIPT_VERIFY_FLAGS)
+    consensus_flags: int = MANDATORY_SCRIPT_VERIFY_FLAGS
     # Standard transactions must comply with these flags
-    standard_flags = attr.ib(default=STANDARD_SCRIPT_VERIFY_FLAGS)
+    standard_flags: int = STANDARD_SCRIPT_VERIFY_FLAGS
 
 
 class InterpreterLimits:
@@ -358,17 +357,17 @@ class InterpreterLimits:
             raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
 
 
-@attr.s(slots=True)
+@dataclass
 class TxInputContext:
     '''The context of a transaction input when evaluating its script_sig against a previous
     outputs script_pubkey.'''
 
-    # The transaction containing the input, an instance of Tx
-    tx = attr.ib()
+    # The transaction containing the input
+    tx: 'Tx'
     # The index of the input
-    input_index = attr.ib()
-    # The previous output it is spending, an instance of TxOutput
-    utxo = attr.ib()
+    input_index: int
+    # The previous output it is spending
+    utxo: 'TxOutput'
 
     def verify_input(self, limits, is_utxo_after_genesis):
         '''Return the boolean result of validating the input subject to limits.'''
@@ -451,12 +450,12 @@ class TxInputContext:
             raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
 
-@attr.s(slots=True)
+@dataclass
 class Condition:
     '''Represents an open condition block whilst executing.'''
-    opcode = attr.ib()       # OP_IF or OP_NOTIF
-    execute = attr.ib()      # True or False; flips on OP_ELSE
-    seen_else = attr.ib()    # True or False
+    opcode: int        # OP_IF or OP_NOTIF
+    execute: bool      # True or False; flips on OP_ELSE
+    seen_else: bool    # True or False
 
 
 class InterpreterState:

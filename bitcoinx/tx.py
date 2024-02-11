@@ -10,8 +10,8 @@ __all__ = (
     'Tx', 'TxInput', 'TxOutput',
 )
 
-import attr
 import datetime
+from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
 
@@ -27,13 +27,13 @@ from .script import Script, Ops
 from .signature import SigHash
 
 
-@attr.s(slots=True)
+@dataclass
 class Tx:
     '''A bitcoin transaction.'''
-    version: int = attr.ib()
-    inputs: List["TxInput"] = attr.ib()
-    outputs: List["TxOutput"] = attr.ib()
-    locktime: int = attr.ib()
+    version: int
+    inputs: List["TxInput"]
+    outputs: List["TxOutput"]
+    locktime: int
 
     EXTENDED_MARKER = b'\0\0\0\0\0\xef'
 
@@ -341,15 +341,15 @@ class Tx:
         return result
 
 
-@attr.s(slots=True, repr=False)
+@dataclass(repr=False)
 class TxInput:
     '''A bitcoin transaction input.'''
-    prev_hash: bytes = attr.ib()
-    prev_idx: int = attr.ib()
-    script_sig: Script = attr.ib()
-    sequence: int = attr.ib()
+    prev_hash: bytes
+    prev_idx: int
+    script_sig: Script
+    sequence: int
     # The TXO it spends (for an extended input)
-    txo: Optional['TxOutput'] = attr.ib(default=None)
+    txo: Optional['TxOutput'] = None
 
     def is_coinbase(self):
         '''Return True iff the input is the single input of a coinbase transaction.'''
@@ -459,11 +459,11 @@ class TxInput:
         )
 
 
-@attr.s(slots=True, repr=False)
+@dataclass(repr=False)
 class TxOutput:
     '''A bitcoin transaction output.'''
-    value: int = attr.ib()
-    script_pubkey: Script = attr.ib()
+    value: int
+    script_pubkey: Script
 
     @classmethod
     def read(cls, read):
