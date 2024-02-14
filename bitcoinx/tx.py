@@ -7,7 +7,7 @@
 
 
 __all__ = (
-    'Tx', 'TxInput', 'TxOutput',
+    'Tx', 'TxInput', 'TxOutput', 'TxInputContext',
 )
 
 import datetime
@@ -18,7 +18,7 @@ from typing import List, Optional
 from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
 from .errors import InterpreterError
 from .hashes import hash_to_hex_str, double_sha256
-from .interpreter import InterpreterLimits, TxInputContext
+from .interpreter import InterpreterLimits, verify_input
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
     read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list
@@ -138,7 +138,7 @@ class Tx:
         for n, txin in enumerate(self.inputs):
             context = TxInputContext(self, n, txin.txo)
             try:
-                verifies = context.verify_input(limits, utxos_after_genesis[n])
+                verifies = verify_input(context, limits, utxos_after_genesis[n])
             except InterpreterError as e:
                 raise InterpreterError(f'input {n} failed to verify') from e
             if not verifies:
@@ -515,6 +515,19 @@ class TxOutput:
 
 
 TxOutput.NULL_SERIALIZATION = TxOutput.null().to_bytes()
+
+
+@dataclass
+class TxInputContext:
+    '''The context of a transaction input when evaluating its script_sig against a previous
+    outputs script_pubkey.'''
+
+    # The transaction containing the input
+    tx: Tx
+    # The index of the input
+    input_index: int
+    # The previous output it is spending
+    utxo: TxOutput
 
 
 def locktime_description(locktime):

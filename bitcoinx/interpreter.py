@@ -9,7 +9,7 @@
 
 __all__ = (
     'InterpreterError', 'InterpreterLimits', 'InterpreterState', 'InterpreterFlags',
-    'MinerPolicy', 'TxInputContext',
+    'MinerPolicy',
 )
 
 
@@ -355,99 +355,6 @@ class InterpreterLimits:
         '''Raise on upgradeable nops if the flag is set.'''
         if self.flags & InterpreterFlags.REJECT_UPGRADEABLE_NOPS:
             raise UpgradeableNopError(f'encountered upgradeable NOP {op.name}')
-
-
-@dataclass
-class TxInputContext:
-    '''The context of a transaction input when evaluating its script_sig against a previous
-    outputs script_pubkey.'''
-
-    # The transaction containing the input
-    tx: 'Tx'
-    # The index of the input
-    input_index: int
-    # The previous output it is spending
-    utxo: 'TxOutput'
-
-    def verify_input(self, limits, is_utxo_after_genesis):
-        '''Return the boolean result of validating the input subject to limits.'''
-        # Update limits appropriately for the UTXO state
-        limits.set_utxo_state(is_utxo_after_genesis)
-
-        script_sig = self.tx.inputs[self.input_index].script_sig
-        if limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY and not script_sig.is_push_only():
-            raise PushOnlyError('script_sig is not pushdata only')
-
-        script_pubkey = self.utxo.script_pubkey
-        is_P2SH = limits.flags & InterpreterFlags.ENABLE_P2SH and script_pubkey.is_P2SH()
-
-        state = InterpreterState(limits, self)
-        state.evaluate_script(script_sig)
-        if is_P2SH:
-            stack_copy = state.stack.make_copy()
-        state.evaluate_script(script_pubkey)
-        if not state.stack or not cast_to_bool(state.stack[-1]):
-            return False
-
-        # Additional validation for P2SH transactions
-        if is_P2SH:
-            if not script_sig.is_push_only():
-                raise PushOnlyError('P2SH script_sig is not pushdata only')
-            state.stack.restore_copy(stack_copy)
-            pubkey_script = Script(state.stack.pop())
-            state.evaluate_script(pubkey_script)
-            if not state.stack or not cast_to_bool(state.stack[-1]):
-                return False
-
-        if limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and len(state.stack) != 1:
-            raise CleanStackError('stack is not clean')
-
-        return True
-
-    def check_sig(self, sig_bytes, pubkey_bytes, script_code):
-        '''Check a signature.  Returns True or False.'''
-        if not sig_bytes:
-            return False
-        from .keys import PublicKey
-        try:
-            pubkey = PublicKey.from_bytes(pubkey_bytes)
-        except ValueError:
-            return False
-
-        # Split out to a normalized DER signature and the sighash
-        der_sig, sighash = Signature.split_and_normalize(sig_bytes)
-        message_hash = self.tx.signature_hash(self.input_index, self.utxo.value,
-                                              script_code, sighash)
-
-        return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
-
-    def validate_locktime(self, locktime):
-        # Are the lock times comparable?
-        if (locktime < LOCKTIME_THRESHOLD) ^ (self.tx.locktime < LOCKTIME_THRESHOLD):
-            raise LockTimeError('locktimes are not comparable')
-        # Numeric comparison
-        if locktime > self.tx.locktime:
-            raise LockTimeError(f'locktime {locktime:,d} not reached')
-        if self.tx.inputs[self.input_index].sequence == SEQUENCE_FINAL:
-            raise LockTimeError('transaction input is final')
-
-    def validate_sequence(self, sequence):
-        # If this flag is set it behaves as a NOP
-        if sequence & SEQUENCE_LOCKTIME_DISABLE_FLAG:
-            return
-        # Is BIP68 triggered?
-        if 0 <= self.tx.version < 2:
-            raise LockTimeError('transaction version is under 2')
-        txin_seq = self.tx.inputs[self.input_index].sequence
-        if txin_seq & SEQUENCE_LOCKTIME_DISABLE_FLAG:
-            raise LockTimeError('transaction index sequence is disabled')
-        mask = SEQUENCE_LOCKTIME_TYPE_FLAG | SEQUENCE_LOCKTIME_MASK
-        sequence &= mask
-        txin_seq &= mask
-        if (sequence < SEQUENCE_LOCKTIME_TYPE_FLAG) ^ (txin_seq < SEQUENCE_LOCKTIME_TYPE_FLAG):
-            raise LockTimeError('sequences are not comparable')
-        if sequence > txin_seq:
-            raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
 
 @dataclass
@@ -805,7 +712,7 @@ class InterpreterState:
 
     def on_CHECKSIG(self, op):
         # (sig pubkey -- bool)
-        check_sig = self.txin_context(op).check_sig
+        context = self.txin_context(op)
         self.require_stack_depth(2)
         sig_bytes = self.stack[-2]
         pubkey_bytes = self.stack[-1]
@@ -813,7 +720,7 @@ class InterpreterState:
         self.limits.validate_pubkey(pubkey_bytes)
         script_code = self.iterator.script_code()
         script_code = self.limits.cleanup_script_code(sig_bytes, script_code)
-        is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
+        is_good = check_sig(context, sig_bytes, pubkey_bytes, script_code)
         if not is_good:
             self.limits.validate_nullfail(sig_bytes)
         self.stack.pop()
@@ -828,7 +735,7 @@ class InterpreterState:
 
     def on_CHECKMULTISIG(self, op):
         # ([sig ...] sig_count [pubkey ...] pubkey_count -- bool)
-        check_sig = self.txin_context(op).check_sig
+        context = self.txin_context(op)
 
         self.require_stack_depth(1)
         # Limit key count to 4 bytes
@@ -863,7 +770,7 @@ class InterpreterState:
             self.limits.validate_signature(sig_bytes)
             pubkey_bytes = self.stack[key_base_index + keys_remaining]
             self.limits.validate_pubkey(pubkey_bytes)
-            is_good = check_sig(sig_bytes, pubkey_bytes, script_code)
+            is_good = check_sig(context, sig_bytes, pubkey_bytes, script_code)
             if is_good:
                 sigs_remaining -= 1
             keys_remaining -= 1
@@ -947,7 +854,14 @@ class InterpreterState:
             locktime = self.limits.to_number(self.stack[-1], length_limit=5)
             if locktime < 0:
                 raise LockTimeError(f'locktime {locktime:,d} is negative')
-            context.validate_locktime(locktime)
+            # Are the lock times comparable?
+            if (locktime < LOCKTIME_THRESHOLD) ^ (context.tx.locktime < LOCKTIME_THRESHOLD):
+                raise LockTimeError('locktimes are not comparable')
+            # Numeric comparison
+            if locktime > context.tx.locktime:
+                raise LockTimeError(f'locktime {locktime:,d} not reached')
+            if context.tx.inputs[context.input_index].sequence == SEQUENCE_FINAL:
+                raise LockTimeError('transaction input is final')
 
     def on_CHECKSEQUENCEVERIFY(self):
         if not self.limits.flags & InterpreterFlags.ENABLE_CHECKSEQUENCEVERIFY:
@@ -958,7 +872,22 @@ class InterpreterState:
             sequence = self.limits.to_number(self.stack[-1], length_limit=5)
             if sequence < 0:
                 raise LockTimeError(f'sequence {sequence:,d} is negative')
-            context.validate_sequence(sequence)
+            # If this flag is set it behaves as a NOP
+            if sequence & SEQUENCE_LOCKTIME_DISABLE_FLAG:
+                return
+            # Is BIP68 triggered?
+            if 0 <= context.tx.version < 2:
+                raise LockTimeError('transaction version is under 2')
+            txin_seq = context.tx.inputs[context.input_index].sequence
+            if txin_seq & SEQUENCE_LOCKTIME_DISABLE_FLAG:
+                raise LockTimeError('transaction index sequence is disabled')
+            mask = SEQUENCE_LOCKTIME_TYPE_FLAG | SEQUENCE_LOCKTIME_MASK
+            sequence &= mask
+            txin_seq &= mask
+            if (sequence < SEQUENCE_LOCKTIME_TYPE_FLAG) ^ (txin_seq < SEQUENCE_LOCKTIME_TYPE_FLAG):
+                raise LockTimeError('sequences are not comparable')
+            if sequence > txin_seq:
+                raise LockTimeError(f'masked sequence number {sequence:,d} not reached')
 
     @classmethod
     def bind_handlers(cls):
@@ -1075,6 +1004,61 @@ class InterpreterState:
         handlers[Ops.OP_NOP3] = cls.on_CHECKSEQUENCEVERIFY
 
         cls._handlers = handlers
+
+
+def check_sig(context, sig_bytes, pubkey_bytes, script_code):
+    '''Check a signature.  Returns True or False.'''
+    if not sig_bytes:
+        return False
+
+    from .keys import PublicKey
+    try:
+        pubkey = PublicKey.from_bytes(pubkey_bytes)
+    except ValueError:
+        return False
+
+    # Split out to a normalized DER signature and the sighash
+    der_sig, sighash = Signature.split_and_normalize(sig_bytes)
+    message_hash = context.tx.signature_hash(context.input_index, context.utxo.value,
+                                             script_code, sighash)
+
+    return pubkey.verify_der_signature(der_sig, message_hash, hasher=None)
+
+
+def verify_input(context, limits, is_utxo_after_genesis):
+    '''Return the boolean result of validating the input subject to limits.'''
+    # Update limits appropriately for the UTXO state
+    limits.set_utxo_state(is_utxo_after_genesis)
+
+    script_sig = context.tx.inputs[context.input_index].script_sig
+    if limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY and not script_sig.is_push_only():
+        raise PushOnlyError('script_sig is not pushdata only')
+
+    script_pubkey = context.utxo.script_pubkey
+    is_P2SH = limits.flags & InterpreterFlags.ENABLE_P2SH and script_pubkey.is_P2SH()
+
+    state = InterpreterState(limits, context)
+    state.evaluate_script(script_sig)
+    if is_P2SH:
+        stack_copy = state.stack.make_copy()
+    state.evaluate_script(script_pubkey)
+    if not state.stack or not cast_to_bool(state.stack[-1]):
+        return False
+
+    # Additional validation for P2SH transactions
+    if is_P2SH:
+        if not script_sig.is_push_only():
+            raise PushOnlyError('P2SH script_sig is not pushdata only')
+        state.stack.restore_copy(stack_copy)
+        pubkey_script = Script(state.stack.pop())
+        state.evaluate_script(pubkey_script)
+        if not state.stack or not cast_to_bool(state.stack[-1]):
+            return False
+
+    if limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and len(state.stack) != 1:
+        raise CleanStackError('stack is not clean')
+
+    return True
 
 
 def bitcoin_div(a, b):
