@@ -1,9 +1,10 @@
 import pytest
 
-from bitcoinx.bip32 import *
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Base58Error, base58_decode_check, base58_encode_check, PrivateKey,
     Address, BIP32_HARDENED,
+    bip32_key_from_string, BIP32PrivateKey, BIP32PublicKey, bip32_decompose_chain_string,
+    bip32_build_chain_string, bip32_validate_derivation, bip32_is_valid_chain_string,
 )
 
 from .utils import Replace_os_urandom

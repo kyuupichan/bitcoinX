@@ -100,6 +100,9 @@ def merkle_path_length(tx_count):
 
 def merkle_root(hashes):
     '''Given a list of transaction hashes for a block, return the merkle root.'''
+    if not isinstance(hashes, (list, tuple)):
+        hashes = list(hashes)
+
     if not hashes:
         raise ValueError('hashes list cannot be empty')
 
