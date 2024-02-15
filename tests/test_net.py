@@ -15,7 +15,7 @@ from bitcoinx.errors import ProtocolError
 from bitcoinx.net import (
     ServicePacking, NetAddress, NetworkProtocol, BitcoinService, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart,
+    ServicePart, Node, Session,
 )
 
 
@@ -660,8 +660,8 @@ class TestNetworkProtocol:
 
     def test_version_payload_theirs_default(self):
         nonce = b'1234beef'
-        their_service = BitcoinService()
-        payload = NetworkProtocol.version_payload(X_service, their_service, nonce)
+        remote_service = BitcoinService()
+        payload = NetworkProtocol.version_payload(X_service, remote_service, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000000000000000000000000000000000000000000000'
             '0000000000010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
@@ -670,12 +670,12 @@ class TestNetworkProtocol:
         service.address = X_service.address
         result = NetworkProtocol.read_version_payload(service, payload)
         assert service == X_service
-        assert result == (their_service.address, their_service.services, nonce)
+        assert result == (remote_service.address, remote_service.services, nonce)
 
     def test_version_payload_theirs_X(self):
         nonce = b'1234beef'
-        their_service = copy.copy(X_service)
-        payload = NetworkProtocol.version_payload(X_service, their_service, nonce)
+        remote_service = copy.copy(X_service)
+        payload = NetworkProtocol.version_payload(X_service, remote_service, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000010000000000000000000000000000000000ffff01'
             '020304162e010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
@@ -684,7 +684,7 @@ class TestNetworkProtocol:
         service.address = X_service.address
         result = NetworkProtocol.read_version_payload(service, payload)
         assert service == X_service
-        assert result == (their_service.address, their_service.services, nonce)
+        assert result == (remote_service.address, remote_service.services, nonce)
 
     def test_version_payload_NetAddress(self):
         nonce = b'cabbages'
@@ -751,3 +751,42 @@ class TestNetworkProtocol:
         assert service2.relay is True
         assert service == service2
         assert result == (X_service.address, X_service.services, nonce)
+
+
+@pytest.fixture
+def listening_node():
+    service = BitcoinService(address=NetAddress('127.0.0.1', 5656))
+    node = Node(service, Bitcoin, None)
+    yield node
+
+
+class TestNode:
+
+    def test_simple_listen(self, listening_node):
+        async def test():
+            async with listening_node.listen():
+                assert str(listening_node.service.address.host) == '127.0.0.1'
+                assert listening_node.network is Bitcoin
+
+        asyncio.run(test())
+
+    def test_simple_connect(self, listening_node):
+        pair = None
+        class ConnectingSession(Session):
+            async def maintain_connection(self, connection):
+                nonlocal pair
+                pair = (self, connection)
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                await node.connect(listening_node.service, session_cls=ConnectingSession)
+                session, connection = pair
+                assert isinstance(session, ConnectingSession)
+                assert session.node is node
+                assert session.remote_service is listening_node.service
+                assert session.connection is connection
+                assert session.is_outgoing
+                assert session.our_protoconf == Protoconf.default()
+
+        asyncio.run(test())

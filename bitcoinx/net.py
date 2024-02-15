@@ -3,7 +3,7 @@
 # All rights reserved.
 #
 
-
+import asyncio
 import logging
 import os
 import re
@@ -550,19 +550,19 @@ class NetworkProtocol:
                 return nonce
 
     @classmethod
-    def version_payload(cls, service, their_service, nonce):
+    def version_payload(cls, service, remote_service, nonce):
         '''Create a version message payload.
 
         If self.timestamp is None, then the current time is used.
-        their_service is a NetAddress or BitcoinService.
+        remote_service is a NetAddress or BitcoinService.
         '''
         if len(nonce) != 8:
             raise ValueError('nonce must be 8 bytes')
 
-        if isinstance(their_service, NetAddress):
-            their_service_packed = ServicePacking.pack(their_service, ServiceFlags.NODE_NONE)
+        if isinstance(remote_service, NetAddress):
+            remote_service_packed = ServicePacking.pack(remote_service, ServiceFlags.NODE_NONE)
         else:
-            their_service_packed = their_service.pack()
+            remote_service_packed = remote_service.pack()
 
         timestamp = int(time.time()) if service.timestamp is None else service.timestamp
         assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
@@ -571,7 +571,7 @@ class NetworkProtocol:
             pack_le_int32(service.protocol_version),
             pack_le_uint64(service.services),
             pack_le_int64(timestamp),
-            their_service_packed,
+            remote_service_packed,
             service.pack(),   # In practice this is ignored by receiver
             nonce,
             pack_varbytes(service.user_agent.encode()),
@@ -631,49 +631,120 @@ class NetworkProtocol:
         return read_list(read, read_one)
 
 
-class Node:
-    '''A node talks on a network, e.g., mainnet.  Connections to peers are represented by
-    a Session, which references the Node to manage unified state.'''
+class Connection:
+    '''A single network connection.  Each connection has its own outgoing message queue
+    because a Session decides which connection an outgoing message is sent on.
+    '''
 
-    def __init__(self, network, headers, *, our_service=None):
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
+        self.outgoing_messages = Queue()
+
+    async def close(self):
+        self.writer.close()
+        await self.writer.wait_closed()
+
+    async def send(self, data):
+        self.writer.write(data)
+        await self.writer.drain()
+
+    async def recv_exactly(self, nbytes):
+        recv = self.reader.readexactly
+        parts = []
+        while nbytes > 0:
+            try:
+                part = await recv(nbytes)
+            except CancelledError as e:
+                e.bytes_read = b''.join(parts)
+                raise
+            if not part:
+                e = EOFError('unexpected end of data')
+                e.bytes_read = b''.join(parts)
+                raise e
+            parts.append(part)
+            nbytes -= len(part)
+        return b''.join(parts)
+
+
+class Node:
+    '''A node talks on a single network, e.g., mainnet.  Connections to peers are represented
+    by a Session, which references the Node to manage unified state.
+    '''
+
+    def __init__(self, service, network, headers):
+        self.service = service
         self.network = network
-        self.our_service = our_service or BitcoinService()
         self.headers = headers
 
-    async def connect(self, service, **kwargs):
-        '''Establish an outgoing connection to a service (a BitcoinService instance).
-        The session spawns further connections as part of its association as necessary.
+    async def connect(self, service, *, session_cls=None):
+        '''Establish an outgoing connection to a service (a BitcoinService instance).  When
+        connected, call session_cls (a callable) and await its member funciont
+        maintain_connection().
         '''
         address = service.address
         reader, writer = await open_connection(str(address.host), address.port)
         connection = Connection(reader, writer)
-        return Session(self, service, connection, True, **kwargs)
+        session = (session_cls or Session)(self, service, connection, True)
+        await session.maintain_connection(connection)
+
+    def listen(self, *, session_cls=None):
+        '''Listen for incoming connections, and for each incoming connection call session_cls (a
+        callable) and then await its member function maintain_connection().
+        '''
+        return Listener(self, session_cls or Session)
+
+
+class Listener:
+    '''A helper for Node.listen() to ensure sessions are cleaned up properly.'''
+
+    def __init__(self, node, session_cls):
+        self.node = node
+        self.session_cls = session_cls
+        self.server = None
+
+    async def on_incoming(self, reader, writer):
+        host, port = writer.transport.get_extra_info('peername')
+        remote_service = BitcoinService(address=NetAddress(host, port))
+        connection = Connection(reader, writer)
+        session = self.session_cls(self.node, remote_service, connection, False)
+        await session.maintain_connection(connection)
+
+    async def __aenter__(self):
+        host = str(self.node.service.address.host)
+        port = self.node.service.address.port
+        self.server = await asyncio.start_server(self.on_incoming, host, port)
+
+    async def __aexit__(self, *args):
+        self.server.close()
+        await self.server.wait_closed()
 
 
 class SessionLogger(logging.LoggerAdapter):
 
     '''Prepends a connection identifier to a logging message.'''
     def process(self, msg, kwargs):
-        peer_id = self.extra.get('peer_id', 'unknown')
-        return f'[{peer_id}] {msg}', kwargs
+        remote_address = self.extra.get('remote_address', 'unknown')
+        return f'[{remote_address}] {msg}', kwargs
 
 
 class Session:
-    '''Represents a single logical connection (an association) to a peer.  This can consist of
-    multiple actual connections to the peer.  The peer determines on which connection a
-    message is sent, and tracks state across the associated connections.
+    '''Represents a single logical connection (an association) to a peer.  A logical
+    connection can consist of multiple separate streams connection to a peer.  The sesion
+    determines on which connection a message is sent, and tracks state across the
+    associated connections.
 
     If a client wishes to maintain several associations with the same address, it must be
     done with separate Session objects.
     '''
 
-    def __init__(self, node, service, connection, is_outgoing, *,
+    def __init__(self, node, remote_service, connection, is_outgoing, *,
                  protoconf=None,
                  perform_handshake=True,
                  send_protoconf=True,
                  sync_headers=True):
         self.node = node
-        self.their_service = service
+        self.remote_service = remote_service
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = is_outgoing
@@ -693,7 +764,7 @@ class Session:
 
         # Logging
         logger = logging.getLogger('Session')
-        context = {'peer_id': f'{service.address}'}
+        context = {'remote_address': f'{remote_service.address}'}
         self.logger = SessionLogger(logger, context)
         self.debug = logger.isEnabledFor(logging.DEBUG)
 
@@ -704,14 +775,14 @@ class Session:
     async def maintain_connection(self, connection):
         '''Maintains a connection.'''
         async with TaskGroup() as group:
-            await group.create_task(self.recv_messages_loop(connection))
-            await group.create_task(self.send_messages_loop(connection))
+            group.create_task(self.recv_messages_loop(connection))
+            group.create_task(self.send_messages_loop(connection))
             if self._perform_handshake:
-                await group.create_task(self.perform_handshake(connection))
+                group.create_task(self.perform_handshake(connection))
             if self._send_protoconf:
-                await group.create_task(self.send_protoconf())
-            if self.sync_headers:
-                await group.create_task(self.get_headers())
+                group.create_task(self.send_protoconf())
+            # if self.sync_headers:
+            #     group.create_task(self.get_headers())
 
     async def send_messages_loop(self, connection):
         '''Handle sending the queue of messages.  This sends all messages except the initial
@@ -745,7 +816,7 @@ class Session:
             except ProtocolError as e:
                 self.logger.error(f'protocol error: {e}')
             except Exception:
-                self.logger.exception(f'error handling {header} message')
+                self.logger.exception(f'internal error handling {header} message')
 
     async def _send_unqueued(self, connection, command, payload):
         '''Send a command without queueing.  For use with handshake negotiation.'''
@@ -767,10 +838,11 @@ class Session:
             await self.version_received.wait()
 
         # Send version message with our current height
-        our_service = self.node.our_service
-        our_service.start_height = self.node.headers.height
+        our_service = self.node.service
+        our_service.start_height = 1000 # self.node.headers.height
         self.log_service_details(our_service, 'sending version message:')
-        payload = our_service.version_payload(self.their_service.address, self.nonce)
+        payload = NetworkProtocol.version_payload(our_service, self.remote_service.address,
+                                                  self.nonce)
         await self._send_unqueued(connection, MessageHeader.VERSION, payload)
 
         self.version_sent = True
@@ -849,7 +921,7 @@ class Session:
         '''
         # self.headers_synced.clear()
         # locator = (chain or self.node.headers.longest_chain()).block_locator()
-        # payload = NetworkProtocol.pack_block_locator(self.node.our_service.protocol_version,
+        # payload = NetworkProtocol.pack_block_locator(self.node.service.protocol_version,
         #                                              locator)
         # if self.debug:
         #     self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
@@ -885,15 +957,15 @@ class Session:
         '''Called when a tx is received.'''
 
     async def on_version(self, payload):
-        '''Called when a version message is received.   their_service has been updated as
+        '''Called when a version message is received.   remote_service has been updated as
         they report it (except the address is unchanged).'''
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
         await self.version_received.set()
-        _, _, nonce = self.their_service.read_version_payload(payload)
+        _, _, nonce = self.remote_service.read_version_payload(payload)
         if nonce == self.nonce:
             raise ForceDisconnectError('connected to ourself')
-        self.log_service_details(self.their_service, 'received version message:')
+        self.log_service_details(self.remote_service, 'received version message:')
 
     async def on_verack(self, payload):
         if not self.version_sent:
@@ -917,36 +989,3 @@ class Session:
         self.protoconf_sent = True
         await self.send_message(MessageHeader.PROTOCONF,
                                 self.our_protoconf.payload())
-
-
-class Connection:
-
-    def __init__(self, reader, writer):
-        self.reader = reader
-        self.writer = writer
-        self.outgoing_messages = Queue()
-
-    async def close(self):
-        self.writer.close()
-        await self.writer.wait_closed()
-
-    async def send(self, data):
-        self.writer.write(data)
-        await self.writer.drain()
-
-    async def recv_exactly(self, nbytes):
-        recv = self.reader.readexactly
-        parts = []
-        while nbytes > 0:
-            try:
-                part = await recv(nbytes)
-            except CancelledError as e:
-                e.bytes_read = b''.join(parts)
-                raise
-            if not part:
-                e = EOFError('unexpected end of data')
-                e.bytes_read = b''.join(parts)
-                raise e
-            parts.append(part)
-            nbytes -= len(part)
-        return b''.join(parts)
