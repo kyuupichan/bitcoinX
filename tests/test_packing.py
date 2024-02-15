@@ -9,7 +9,7 @@ from bitcoinx.packing import (
     pack_be_uint32, pack_le_uint32, pack_be_uint16, pack_byte, pack_port, pack_be_uint64,
     unpack_le_int32, unpack_le_int32_from, unpack_le_int64, unpack_le_int64_from,
     unpack_le_uint16, unpack_le_uint16_from, unpack_le_uint32, unpack_le_uint32_from,
-    unpack_le_uint64, unpack_le_uint64_from, read_le_int32, read_le_int64, read_le_uint16,
+    unpack_le_uint64, unpack_le_uint64_from, read_le_int64, read_le_uint16,
     read_le_uint32, read_le_uint64
 )
 

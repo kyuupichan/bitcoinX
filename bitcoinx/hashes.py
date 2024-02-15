@@ -17,7 +17,6 @@ __all__ = (
 import hashlib
 import hmac
 
-from .misc import chunks
 from Cryptodome.Hash import RIPEMD160
 
 
