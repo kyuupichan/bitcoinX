@@ -5,7 +5,9 @@ import pytest
 
 from bitcoinx.consts import CURVE_ORDER, SIGNED_MESSAGE_PREFIX
 from bitcoinx.errors import DecryptionError, InvalidSignature
-from bitcoinx.keys import *
+from bitcoinx.keys import (
+    PublicKey, PrivateKey,
+)
 from bitcoinx.hashes import sha256, sha512, _sha256, hmac_digest, hash160, double_sha256
 from bitcoinx.misc import int_to_be_bytes
 from bitcoinx import Bitcoin, BitcoinTestnet
@@ -451,7 +453,7 @@ class TestPrivateKey:
         # Bad padding.  Triggering this is work...
         ephemeral_pubkey = PublicKey.from_bytes(enc_msg[4: 37])
         key = sha512(priv.ecdh_shared_secret(ephemeral_pubkey).to_bytes())
-        _iv, _key_e, key_m = key[0:16], key[16:32], key[32:]
+        key_m = key[32:]
 
         encrypted_data = bytearray(enc_msg[:-32])
         encrypted_data[-1] ^= 1    # Bad padding

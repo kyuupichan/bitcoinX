@@ -1,6 +1,9 @@
 import pytest
 
-from bitcoinx.base58 import *
+from bitcoinx import (
+    base58_decode, base58_encode, base58_encode_check, base58_decode_check, Base58Error,
+    is_minikey,
+)
 
 b58_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 

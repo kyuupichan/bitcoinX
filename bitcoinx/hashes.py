@@ -12,13 +12,11 @@ __all__ = (
     'ripemd160', 'hash160',
     'hmac_digest', 'hmac_sha512', 'hmac_sha512_halves',
     'hash_to_hex_str', 'hex_str_to_hash', 'hash_to_value',
-    'merkle_root',
 )
 
 import hashlib
 import hmac
 
-from .misc import chunks
 from Cryptodome.Hash import RIPEMD160
 
 
@@ -91,19 +89,3 @@ def hmac_sha512(key, msg):
 def hmac_sha512_halves(key, msg):
     hmacd = hmac_sha512(key, msg)
     return hmacd[:32], hmacd[32:]
-
-
-def merkle_root(tx_hashes):
-    '''Return the merkle root of an iterable of transaction hashes.'''
-    if not isinstance(tx_hashes, list):
-        tx_hashes = list(tx_hashes)
-
-    if not tx_hashes:
-        raise ValueError('tx_hashes must contain at least one hash')
-
-    while len(tx_hashes) > 1:
-        if len(tx_hashes) % 2:
-            tx_hashes.append(tx_hashes[-1])
-        tx_hashes = [double_sha256(lhs + rhs) for lhs, rhs in chunks(tx_hashes, 2)]
-
-    return tx_hashes[0]

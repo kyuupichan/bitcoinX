@@ -10,10 +10,9 @@ import pytest
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet, BitcoinRegtest,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
-    deserialized_header, header_timestamp
+    deserialized_header, header_timestamp,
+    bits_to_target, target_to_bits, grind_header, bits_to_work
 )
-from bitcoinx.work import *
-
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 

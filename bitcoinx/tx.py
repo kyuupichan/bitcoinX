@@ -7,18 +7,18 @@
 
 
 __all__ = (
-    'Tx', 'TxInput', 'TxOutput',
+    'Tx', 'TxInput', 'TxOutput', 'TxInputContext',
 )
 
-import attr
 import datetime
+from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
 
 from .consts import JSONFlags, LOCKTIME_THRESHOLD, ZERO, ONE, SEQUENCE_FINAL
 from .errors import InterpreterError
 from .hashes import hash_to_hex_str, double_sha256
-from .interpreter import InterpreterLimits, TxInputContext
+from .interpreter import InterpreterLimits, verify_input
 from .packing import (
     pack_le_int32, pack_le_uint32, pack_varbytes, pack_le_int64, pack_list, varint_len,
     read_le_int32, read_le_uint32, read_varbytes, read_le_int64, read_list
@@ -27,13 +27,13 @@ from .script import Script, Ops
 from .signature import SigHash
 
 
-@attr.s(slots=True)
+@dataclass
 class Tx:
     '''A bitcoin transaction.'''
-    version: int = attr.ib()
-    inputs: List["TxInput"] = attr.ib()
-    outputs: List["TxOutput"] = attr.ib()
-    locktime: int = attr.ib()
+    version: int
+    inputs: List["TxInput"]
+    outputs: List["TxOutput"]
+    locktime: int
 
     EXTENDED_MARKER = b'\0\0\0\0\0\xef'
 
@@ -138,7 +138,7 @@ class Tx:
         for n, txin in enumerate(self.inputs):
             context = TxInputContext(self, n, txin.txo)
             try:
-                verifies = context.verify_input(limits, utxos_after_genesis[n])
+                verifies = verify_input(context, limits, utxos_after_genesis[n])
             except InterpreterError as e:
                 raise InterpreterError(f'input {n} failed to verify') from e
             if not verifies:
@@ -341,15 +341,15 @@ class Tx:
         return result
 
 
-@attr.s(slots=True, repr=False)
+@dataclass(repr=False)
 class TxInput:
     '''A bitcoin transaction input.'''
-    prev_hash: bytes = attr.ib()
-    prev_idx: int = attr.ib()
-    script_sig: Script = attr.ib()
-    sequence: int = attr.ib()
+    prev_hash: bytes
+    prev_idx: int
+    script_sig: Script
+    sequence: int
     # The TXO it spends (for an extended input)
-    txo: Optional['TxOutput'] = attr.ib(default=None)
+    txo: Optional['TxOutput'] = None
 
     def is_coinbase(self):
         '''Return True iff the input is the single input of a coinbase transaction.'''
@@ -459,11 +459,11 @@ class TxInput:
         )
 
 
-@attr.s(slots=True, repr=False)
+@dataclass(repr=False)
 class TxOutput:
     '''A bitcoin transaction output.'''
-    value: int = attr.ib()
-    script_pubkey: Script = attr.ib()
+    value: int
+    script_pubkey: Script
 
     @classmethod
     def read(cls, read):
@@ -515,6 +515,19 @@ class TxOutput:
 
 
 TxOutput.NULL_SERIALIZATION = TxOutput.null().to_bytes()
+
+
+@dataclass
+class TxInputContext:
+    '''The context of a transaction input when evaluating its script_sig against a previous
+    outputs script_pubkey.'''
+
+    # The transaction containing the input
+    tx: Tx
+    # The index of the input
+    input_index: int
+    # The previous output it is spending
+    utxo: TxOutput
 
 
 def locktime_description(locktime):

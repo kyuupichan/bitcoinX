@@ -15,8 +15,7 @@ __all__ = (
 
 import os
 import re
-
-import attr
+from dataclasses import dataclass
 
 from .base58 import base58_decode_check, base58_encode_check
 from .hashes import hmac_sha512_halves, hash160
@@ -29,13 +28,13 @@ BIP32_HARDENED = 1 << 31
 PART_REGEX = re.compile("([0-9]+)'?$")
 
 
-@attr.s(slots=True, frozen=True, repr=False)
+@dataclass(frozen=True, repr=False)
 class BIP32Derivation:
     '''Metadata about a BIP32 derivation.'''
-    chain_code = attr.ib()
-    n = attr.ib()
-    depth = attr.ib()
-    parent_fingerprint = attr.ib()
+    chain_code: bytes
+    n: int
+    depth: int
+    parent_fingerprint: bytes
 
     def extended_key(self, network, raw_serkey):
         '''Return the 78-byte extended key bytes.'''

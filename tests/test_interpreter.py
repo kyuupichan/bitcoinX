@@ -9,13 +9,40 @@ from bitcoinx.consts import (
     UINT32_MAX, INT32_MAX, INT64_MAX, UINT64_MAX, SEQUENCE_FINAL,
     SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG,
 )
-from bitcoinx.errors import *
+from bitcoinx.errors import (
+    InvalidNumber, InvalidPushSize, InvalidStackOperation, MinimalEncodingError,
+    NullFailError, InvalidSignature, OpReturnError, UnbalancedConditional, InvalidOpcode,
+    InvalidOperandSize, NegativeShiftCount, InvalidPublicKeyEncoding, LockTimeError,
+    DivisionByZero, VerifyFailed, EqualVerifyFailed, MinimalIfError, PushOnlyError,
+    DisabledOpcode, CleanStackError, InvalidSplit, NullDummyError, InvalidPublicKeyCount,
+    CheckMultiSigVerifyFailed, CheckSigVerifyFailed, StackMemoryUsageError, ScriptTooLarge,
+    TooManyOps, StackSizeTooLarge, InvalidSignatureCount, UpgradeableNopError,
+    NumEqualVerifyFailed,
+)
 from bitcoinx.hashes import ripemd160, hash160, sha1, sha256, double_sha256
-from bitcoinx.interpreter import *
-from bitcoinx.interpreter import MANDATORY_SCRIPT_VERIFY_FLAGS, STANDARD_SCRIPT_VERIFY_FLAGS
-from bitcoinx.script import *
+from bitcoinx.interpreter import (
+    MANDATORY_SCRIPT_VERIFY_FLAGS, STANDARD_SCRIPT_VERIFY_FLAGS, verify_input,
+    InterpreterFlags, InterpreterLimits, InterpreterState, MinerPolicy,
+)
+from bitcoinx.script import (
+    Script, TruncatedScriptError, int_to_item, item_to_int,
+    OP_0, OP_PUSHDATA1, OP_1NEGATE, OP_RESERVED, OP_1,
+    OP_2, OP_3, OP_4, OP_5, OP_6, OP_7, OP_8, OP_9, OP_10, OP_11, OP_12, OP_13, OP_14,
+    OP_15, OP_16, OP_NOP, OP_VER, OP_IF, OP_NOTIF, OP_VERIF, OP_VERNOTIF, OP_ELSE, OP_ENDIF,
+    OP_VERIFY, OP_RETURN, OP_TOALTSTACK, OP_FROMALTSTACK, OP_2DROP, OP_2DUP, OP_3DUP, OP_2OVER,
+    OP_2ROT, OP_2SWAP, OP_IFDUP, OP_DEPTH, OP_DROP, OP_DUP, OP_NIP, OP_OVER, OP_PICK, OP_ROLL,
+    OP_ROT, OP_SWAP, OP_TUCK, OP_CAT, OP_SPLIT, OP_NUM2BIN, OP_BIN2NUM, OP_SIZE, OP_INVERT,
+    OP_AND, OP_OR, OP_XOR, OP_EQUAL, OP_EQUALVERIFY, OP_RESERVED1, OP_RESERVED2, OP_1ADD, OP_1SUB,
+    OP_2MUL, OP_2DIV, OP_NEGATE, OP_ABS, OP_NOT, OP_0NOTEQUAL, OP_ADD, OP_SUB, OP_MUL, OP_DIV,
+    OP_MOD, OP_LSHIFT, OP_RSHIFT, OP_BOOLAND, OP_BOOLOR, OP_NUMEQUAL, OP_NUMEQUALVERIFY,
+    OP_NUMNOTEQUAL, OP_LESSTHAN, OP_GREATERTHAN, OP_LESSTHANOREQUAL, OP_GREATERTHANOREQUAL,
+    OP_MIN, OP_MAX, OP_WITHIN, OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH160, OP_HASH256,
+    OP_CODESEPARATOR, OP_CHECKSIG, OP_CHECKSIGVERIFY, OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY,
+    OP_NOP1, OP_CHECKLOCKTIMEVERIFY, OP_NOP2, OP_CHECKSEQUENCEVERIFY, OP_NOP3, OP_NOP4, OP_NOP5,
+    OP_NOP6, OP_NOP7, OP_NOP8, OP_NOP9, OP_NOP10
+)
 from bitcoinx import (
-    TxOutput, PrivateKey, pack_byte, varint_len, SigHash,
+    TxInputContext, TxOutput, PrivateKey, pack_byte, varint_len, SigHash,
     compact_signature_to_der, der_signature_to_compact, CURVE_ORDER, be_bytes_to_int,
     int_to_be_bytes,
 )
@@ -23,7 +50,7 @@ from bitcoinx import (
 from .utils import random_txinput_context, random_tx, read_tx, zeroes, non_zeroes
 
 
-policies = [ MinerPolicy.RESTRICTIVE, MinerPolicy.LOOSE ]
+policies = [MinerPolicy.RESTRICTIVE, MinerPolicy.LOOSE]
 
 
 @pytest.fixture(params=policies)
@@ -671,9 +698,9 @@ class TestVerifyInput(TestEvaluateScriptBase):
 
         if verify_limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY:
             with pytest.raises(PushOnlyError):
-                context.verify_input(verify_limits, False)
+                verify_input(context, verify_limits, False)
         else:
-            assert context.verify_input(verify_limits, False) is result
+            assert verify_input(context, verify_limits, False) is result
 
     @pytest.mark.parametrize('script_sig, script_pubkey, triggers, result', (
         (Script(), Script(), False, False),
@@ -693,9 +720,9 @@ class TestVerifyInput(TestEvaluateScriptBase):
 
         if verify_limits.flags & InterpreterFlags.REQUIRE_CLEANSTACK and triggers:
             with pytest.raises(CleanStackError):
-                context.verify_input(verify_limits, False)
+                verify_input(context, verify_limits, False)
         else:
-            assert context.verify_input(verify_limits, False) is result
+            assert verify_input(context, verify_limits, False) is result
 
     @pytest.mark.parametrize('succeed', (True, False))
     def test_P2SH_spend(self, P2SH_limits, succeed):
@@ -707,14 +734,14 @@ class TestVerifyInput(TestEvaluateScriptBase):
         context = TxInputContext(tx, 2, utxo)
         # Test success and failure by modifying an output
         if succeed:
-            assert context.verify_input(P2SH_limits, False)
+            assert verify_input(context, P2SH_limits, False)
         else:
             tx.outputs[0].value += 1
             if P2SH_limits.flags & InterpreterFlags.REQUIRE_NULLFAIL:
                 with pytest.raises(NullFailError):
-                    context.verify_input(P2SH_limits, False)
+                    verify_input(context, P2SH_limits, False)
             else:
-                assert not context.verify_input(P2SH_limits, False)
+                assert not verify_input(context, P2SH_limits, False)
 
     def test_P2SH_push_only(self, P2SH_limits):
         script_pubkey = Script.from_hex('a914748284390f9e263a4b766a75d0633c50426eb87587')
@@ -726,7 +753,7 @@ class TestVerifyInput(TestEvaluateScriptBase):
         tx.inputs[2].script_sig <<= OP_NOP
 
         with pytest.raises(PushOnlyError) as e:
-            context.verify_input(P2SH_limits, False)
+            verify_input(context, P2SH_limits, False)
         if P2SH_limits.flags & InterpreterFlags.REQUIRE_SIGPUSH_ONLY:
             assert 'script_sig is not pushdata only' == str(e.value)
         else:
@@ -2102,7 +2129,6 @@ def checkmultisig_scripts(context, sighash, op, kind, min_m=0):
 
     if sigs:
         index = random.randrange(0, len(sigs))
-        sig = sigs[index]
         if kind == 'not_strict_DER':
             sigs[index] = make_not_strict_DER(sigs[index])
         elif kind == 'not_low_S':

@@ -3,42 +3,57 @@ from io import BytesIO
 import pytest
 
 from bitcoinx.errors import PackingError
-from bitcoinx.packing import *
+from bitcoinx.packing import (
+    pack_le_uint64, pack_varint, varint_len, read_varbytes, read_le_int32, read_list,
+    pack_varbytes, pack_list, unpack_header, pack_le_int32, pack_le_int64, pack_le_uint16,
+    pack_be_uint32, pack_le_uint32, pack_be_uint16, pack_byte, pack_port, pack_be_uint64,
+    unpack_le_int32, unpack_le_int32_from, unpack_le_int64, unpack_le_int64_from,
+    unpack_le_uint16, unpack_le_uint16_from, unpack_le_uint32, unpack_le_uint32_from,
+    unpack_le_uint64, unpack_le_uint64_from, read_le_int64, read_le_uint16,
+    read_le_uint32, read_le_uint64
+)
 
 
 pack_cases = [
-    ('pack_le_int32', -258, b'\xfe\xfe\xff\xff'),
-    ('pack_le_int32', 258, b'\x02\x01\x00\x00'),
-    ('pack_le_int64', -2345684275723, b'\xf5mR\xda\xdd\xfd\xff\xff'),
-    ('pack_le_int64', 1234567890123456, b'\xc0\xba\x8a<\xd5b\x04\x00'),
-    ('pack_le_uint16', 987, b'\xdb\x03'),
-    ('pack_le_uint32', 4000000, b'\x00\t=\x00'),
-    ('pack_le_uint64', 3615905184676284416, b'\x00\x88\x1f\x8a\x9bF.2'),
-    ('pack_be_uint16', 12345, b'09'),
-    ('pack_be_uint32', 123456789, b'\x07[\xcd\x15'),
-    ('pack_be_uint64', 1234567890123456, bytes(reversed(pack_le_uint64(1234567890123456)))),
-    ('pack_byte', 144, b'\x90'),
-    ('pack_port', 8333, b' \x8d'),
-    ('pack_varint', 0, b'\x00'),
-    ('pack_varint', 252, b'\xfc'),
-    ('pack_varint', 253, b'\xfd\xfd\x00'),
-    ('pack_varint', 31000, b'\xfd\x18y'),
-    ('pack_varint', 65535, b'\xfd\xff\xff'),
-    ('pack_varint', 65536, b'\xfe\x00\x00\x01\x00'),
-    ('pack_varint', 1234567890, b'\xfe\xd2\x02\x96I'),
-    ('pack_varint', 4294967295, b'\xfe\xff\xff\xff\xff'),
-    ('pack_varint', 12345678901234567890, b'\xff\xd2\n\x1f\xeb\x8c\xa9T\xab'),
-    ('pack_varint', 1 << 64 - 1, b'\xff\x00\x00\x00\x00\x00\x00\x00\x80'),
+    (pack_le_int32, -258, b'\xfe\xfe\xff\xff'),
+    (pack_le_int32, 258, b'\x02\x01\x00\x00'),
+    (pack_le_int64, -2345684275723, b'\xf5mR\xda\xdd\xfd\xff\xff'),
+    (pack_le_int64, 1234567890123456, b'\xc0\xba\x8a<\xd5b\x04\x00'),
+    (pack_le_uint16, 987, b'\xdb\x03'),
+    (pack_le_uint32, 4000000, b'\x00\t=\x00'),
+    (pack_le_uint64, 3615905184676284416, b'\x00\x88\x1f\x8a\x9bF.2'),
+    (pack_be_uint16, 12345, b'09'),
+    (pack_be_uint32, 123456789, b'\x07[\xcd\x15'),
+    (pack_be_uint64, 1234567890123456, bytes(reversed(pack_le_uint64(1234567890123456)))),
+    (pack_byte, 144, b'\x90'),
+    (pack_port, 8333, b' \x8d'),
+    (pack_varint, 0, b'\x00'),
+    (pack_varint, 252, b'\xfc'),
+    (pack_varint, 253, b'\xfd\xfd\x00'),
+    (pack_varint, 31000, b'\xfd\x18y'),
+    (pack_varint, 65535, b'\xfd\xff\xff'),
+    (pack_varint, 65536, b'\xfe\x00\x00\x01\x00'),
+    (pack_varint, 1234567890, b'\xfe\xd2\x02\x96I'),
+    (pack_varint, 4294967295, b'\xfe\xff\xff\xff\xff'),
+    (pack_varint, 12345678901234567890, b'\xff\xd2\n\x1f\xeb\x8c\xa9T\xab'),
+    (pack_varint, 1 << 64 - 1, b'\xff\x00\x00\x00\x00\x00\x00\x00\x80'),
 ]
+
+unpack_map = {
+    pack_le_int32: (unpack_le_int32, unpack_le_int32_from, read_le_int32),
+    pack_le_int64: (unpack_le_int64, unpack_le_int64_from, read_le_int64),
+    pack_le_uint16: (unpack_le_uint16, unpack_le_uint16_from, read_le_uint16),
+    pack_le_uint32: (unpack_le_uint32, unpack_le_uint32_from, read_le_uint32),
+    pack_le_uint64: (unpack_le_uint64, unpack_le_uint64_from, read_le_uint64),
+}
 
 
 @pytest.mark.parametrize("pack_func,case,result", pack_cases)
 def test_pack_funcs(pack_func, case, result):
-    pack_func = globals()[pack_func]
     assert pack_func(case) == result
 
 
-@pytest.mark.parametrize("value", [case[1] for case in pack_cases if case[0] == 'pack_varint'])
+@pytest.mark.parametrize("value", [case[1] for case in pack_cases if case[0] is pack_varint])
 def test_varint_len(value):
     assert varint_len(value) == len(pack_varint(value))
 
@@ -49,12 +64,11 @@ def test_varint_len_bad(value):
         varint_len(value)
 
 
-@pytest.mark.parametrize("pack_func", [
-    func for func in set(case[0] for case in pack_cases)
-    if '_int' not in func
-])
+@pytest.mark.parametrize("pack_func", (
+    pack_le_uint16, pack_le_uint32, pack_le_uint64, pack_byte, pack_port,
+    pack_be_uint16, pack_be_uint32, pack_be_uint64, pack_varint,
+))
 def test_pack_negative(pack_func):
-    pack_func = globals()[pack_func]
     with pytest.raises(PackingError):
         pack_func(-127)
 
@@ -62,11 +76,10 @@ def test_pack_negative(pack_func):
 @pytest.mark.parametrize("pack_func", set(case[0] for case in pack_cases))
 def test_oversized(pack_func):
     big = 1 << 64
-    func = globals()[pack_func]
     with pytest.raises(PackingError):
-        assert func(big)
+        assert pack_func(big)
     with pytest.raises(PackingError):
-        assert func(-big)
+        assert pack_func(-big)
 
 
 @pytest.mark.parametrize("varbyte_len", (0, 252, 253, 254, 32757, 70000))
@@ -77,9 +90,9 @@ def test_pack_varbytes(varbyte_len):
 
 def unpack_cases():
     for func, case, result in pack_cases:
-        unfunc = globals().get(f'un{func}')
+        unfunc = unpack_map.get(func)
         if unfunc:
-            yield unfunc, result, case
+            yield unfunc[0], result, case
 
 
 @pytest.mark.parametrize("unpack_func,case,result", unpack_cases())
@@ -90,9 +103,9 @@ def test_unpack(unpack_func, case, result):
 
 def unpack_from_cases():
     for func, case, result in pack_cases:
-        unfunc = globals().get(f'un{func}_from')
+        unfunc = unpack_map.get(func)
         if unfunc:
-            yield unfunc, result, case
+            yield unfunc[1], result, case
 
 
 @pytest.mark.parametrize("unpack_from_func,case,result", unpack_from_cases())
@@ -103,12 +116,9 @@ def test_unpack_from(unpack_from_func, case, result):
 
 def read_tests():
     for func, value, result in pack_cases:
-        read_func_name = func.replace('pack_', 'read_')
-        read_func = globals().get(read_func_name)
+        read_func = unpack_map.get(func)
         if read_func:
-            yield read_func, result, value
-        else:
-            print('skipping ', read_func_name)
+            yield read_func[2], result, value
 
 
 @pytest.mark.parametrize("read_func,data,value", read_tests())

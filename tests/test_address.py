@@ -7,9 +7,10 @@ from bitcoinx import (
     Bitcoin, BitcoinTestnet, BitcoinScalingTestnet, int_to_be_bytes, PublicKey,
     Script, pack_byte, push_int, push_item,
     OP_RETURN, OP_CHECKMULTISIG, OP_0, OP_1, OP_DROP, OP_2DROP, OP_NOP, OP_CHECKSIG,
-    hash160, classify_output_script
+    hash160, classify_output_script,
+    P2PK_Output, OP_RETURN_Output, Unknown_Output, Address, P2MultiSig_Output,
+    P2SH_Address, P2PKH_Address,
 )
-from bitcoinx.address import *
 
 
 class TestAddress:
@@ -454,7 +455,6 @@ class TestClassification:
         assert out1.public_key == out2.public_key
         assert out1.public_key_bytes().hex() == pubkey_comp_hex
         assert out2.public_key_bytes().hex() == pubkey_uncomp_hex
-
 
     def test_P2MultiSig(self):
         script_hex = ('5221022812701688bc76ef3610b46c8e97f4b385241d5ed6eab6269b8af5f9bfd5a89c210'

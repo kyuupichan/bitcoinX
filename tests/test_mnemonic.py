@@ -3,7 +3,9 @@ import json
 import pytest
 
 from bitcoinx import BIP32PrivateKey, Bitcoin, int_to_be_bytes
-from bitcoinx.mnemonic import *
+from bitcoinx.mnemonic import (
+    ElectrumMnemonic, BIP39Mnemonic, Wordlists,
+)
 
 from .utils import Replace_os_urandom
 
@@ -147,7 +149,7 @@ class TestElectrumMnemonic:
 
         # Test we generate if not skip_old
         with Replace_os_urandom(one_entropy(entropy)):
-            m =  ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_old=False)
+            m = ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_old=False)
         assert m == mnemonic
 
         # Test we don't generate it with skip_old
@@ -164,7 +166,7 @@ class TestElectrumMnemonic:
 
         # Test we generate if not skip_BIP39
         with Replace_os_urandom(one_entropy(entropy)):
-            m =  ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=False)
+            m = ElectrumMnemonic.generate_new(wordlist, bits=132, prefix=prefix, skip_bip39=False)
         assert m == mnemonic
 
         # Test we don't generate it with skip_BIP39

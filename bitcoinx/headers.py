@@ -9,8 +9,7 @@
 
 
 import math
-
-import attr
+from dataclasses import dataclass
 
 from .base58 import base58_encode_check
 from .errors import MissingHeader, IncorrectBits, InsufficientPoW
@@ -30,19 +29,19 @@ __all__ = (
 )
 
 
-@attr.s(slots=True)
+@dataclass
 class Header:
-    version = attr.ib()
-    prev_hash = attr.ib()
-    merkle_root = attr.ib()
-    timestamp = attr.ib()
-    bits = attr.ib()
-    nonce = attr.ib()
+    version: int
+    prev_hash: bytes
+    merkle_root: bytes
+    timestamp: int
+    bits: int
+    nonce: int
 
     # Extra metadata
-    hash = attr.ib()
-    raw = attr.ib()
-    height = attr.ib()
+    hash: bytes
+    raw: bytes
+    height: int
 
     def work(self):
         return bits_to_work(self.bits)

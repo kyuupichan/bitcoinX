@@ -6,8 +6,8 @@ from bitcoinx import (
     PublicKey, SigHash, Bitcoin, BitcoinTestnet, JSONFlags, Script, OP_FALSE,
     InterpreterError
 )
-from bitcoinx.tx import *
-from bitcoinx.tx import LOCKTIME_THRESHOLD
+
+from bitcoinx.tx import LOCKTIME_THRESHOLD, Tx, TxInput, TxOutput
 
 from .utils import read_tx, read_text_file, read_signature_hashes, read_json_tx
 
@@ -466,7 +466,8 @@ class TestTxInput:
                 'idx': 0,
                 'script': {
                     'asm': '304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8'
-                    'cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d09[ALL]',
+                    'cd410220181522ec8eca07de4860a4acdd12'
+                    '909d831cc56cbbac4622082221a8768d1d09[ALL]',
                     'hex': '47304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5f'
                     'b8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901'
                 },
