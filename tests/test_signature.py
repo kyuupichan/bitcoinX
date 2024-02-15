@@ -4,7 +4,9 @@ import random
 from bitcoinx import (
     pack_byte, be_bytes_to_int, InvalidSignature, int_to_be_bytes, CURVE_ORDER,
 )
-from bitcoinx.signature import *
+from bitcoinx.signature import (
+    SigEncoding, SigHash, Signature, der_signature_to_compact, compact_signature_to_der,
+)
 
 
 # List of (der_sig, compact_sig)

@@ -1,10 +1,7 @@
 import hashlib
-from os import urandom
-
-import pytest
 
 from bitcoinx import (
-    sha1, sha256, merkle_root, double_sha256, hex_str_to_hash, hash_to_hex_str,
+    sha1, sha256, double_sha256, hex_str_to_hash, hash_to_hex_str,
     ripemd160, hash160, hmac_digest, hmac_sha512,
 )
 

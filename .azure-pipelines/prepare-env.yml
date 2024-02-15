@@ -4,7 +4,7 @@ parameters:
 steps:
 - script: |
     python -m pip install electrumsv-secp256k1 pycryptodomex attrs
-    python -m pip install pycodestyle pylint
+    python -m pip install flake8
     python -m pip install coveralls coverage
     python -m pip install pytest
   displayName: Prepare general environment

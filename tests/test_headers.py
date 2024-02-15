@@ -6,9 +6,12 @@ from os import urandom
 import pytest
 
 from bitcoinx.errors import MissingHeader, IncorrectBits, InsufficientPoW
-from bitcoinx.headers import *
+from bitcoinx.headers import (
+    Headers, Bitcoin, deserialized_header, header_hash, header_bits,
+    header_work, Chain, all_networks
+)
 
-from bitcoinx import pack_le_uint32, double_sha256
+from bitcoinx import pack_le_uint32
 
 
 some_good_bits = [486604799, 472518933, 453281356, 436956491]
@@ -33,6 +36,7 @@ class TestChainAndHeaders:
         cls.base_headers = []
         cls.fork_headers = []
         cls.headers = Headers(Bitcoin)
+        prev_hash = None
 
         for n in range(cls.N):
             raw_header = Bitcoin.genesis_header if n == 0 else random_raw_header(prev_hash)
@@ -76,6 +80,7 @@ class TestChainAndHeaders:
         assert self.base_chain.tip() == deserialized_header(self.base_headers[-1], self.N - 1)
         assert self.fork_chain.tip() == deserialized_header(self.fork_headers[-1],
                                                             self.common_height + self.N)
+
     def test_raw_header_at_height(self):
         for n in range(self.base_chain.height + 1):
             raw_header = self.base_chain.raw_header_at_height(n)

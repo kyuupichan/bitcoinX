@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import random
 import time
 from io import BytesIO
 from ipaddress import IPv4Address, IPv6Address
@@ -11,8 +12,11 @@ from bitcoinx import (
     Bitcoin, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
 )
 from bitcoinx.errors import ProtocolError
-from bitcoinx.net import *
-from bitcoinx.net import ServicePacking
+from bitcoinx.net import (
+    ServicePacking, NetAddress, NetworkProtocol, BitcoinService, Protoconf, MessageHeader,
+    ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
+    ServicePart,
+)
 
 
 @pytest.mark.parametrize("hostname,answer", (
@@ -47,7 +51,7 @@ from bitcoinx.net import ServicePacking
     (('a' * 62 + '.') * 4 + 'a', True),    # 253
     (('a' * 62 + '.') * 4 + 'ab', False),   # 254
 ))
-def test_is_valid_hostname(hostname,answer):
+def test_is_valid_hostname(hostname, answer):
     assert is_valid_hostname(hostname) == answer
 
 
@@ -78,6 +82,7 @@ def test_classify_host_bad_type(host):
 def test_classify_host_bad(host):
     with pytest.raises(ValueError):
         classify_host(host)
+
 
 @pytest.mark.parametrize("port,answer", (
     ('2', 2),
@@ -118,7 +123,7 @@ def test_validate_protocol(protocol, answer):
 
 class TestNetAddress:
 
-    @pytest.mark.parametrize("host,port,answer,host_type",(
+    @pytest.mark.parametrize("host,port,answer,host_type", (
         ('foo.bar', '23', 'foo.bar:23', str),
         ('foo.bar', 23, 'foo.bar:23', str),
         ('foo.bar', 23.0, TypeError, None),
@@ -129,7 +134,7 @@ class TestNetAddress:
         ('[::1]', 0, ValueError, None),
         ('[::1]', 65536, ValueError, None),
     ))
-    def test_constructor(self, host,port,answer,host_type):
+    def test_constructor(self, host, port, answer, host_type):
         if isinstance(answer, type) and issubclass(answer, Exception):
             with pytest.raises(answer):
                 NetAddress(host, port)
@@ -148,7 +153,7 @@ class TestNetAddress:
     def test_hashable(self):
         assert len({NetAddress('1.2.3.4', 23), NetAddress('1.2.3.4', '23')}) == 1
 
-    @pytest.mark.parametrize("host,port,answer",(
+    @pytest.mark.parametrize("host,port,answer", (
         ('foo.bar', '23', "NetAddress('foo.bar:23')"),
         ('foo.bar', 23, "NetAddress('foo.bar:23')"),
         ('::1', 15, "NetAddress('[::1]:15')"),
@@ -157,7 +162,7 @@ class TestNetAddress:
     def test_repr(self, host, port, answer):
         assert repr(NetAddress(host, port)) == answer
 
-    @pytest.mark.parametrize("string,default_func,answer",(
+    @pytest.mark.parametrize("string,default_func,answer", (
         ('foo.bar:23', None, NetAddress('foo.bar', 23)),
         (':23', NetAddress.default_host('localhost'), NetAddress('localhost', 23)),
         (':23', None, ValueError),
@@ -183,11 +188,11 @@ class TestNetAddress:
     def test_from_string(self, string, default_func, answer):
         if isinstance(answer, type) and issubclass(answer, Exception):
             with pytest.raises(answer):
-                NetAddress.from_string(string,default_func=default_func)
+                NetAddress.from_string(string, default_func=default_func)
         else:
-            assert NetAddress.from_string(string,default_func=default_func) == answer
+            assert NetAddress.from_string(string, default_func=default_func) == answer
 
-    @pytest.mark.parametrize("item,answer",(
+    @pytest.mark.parametrize("item,answer", (
         ('1.2.3.4:23', NetAddress('1.2.3.4', 23)),
         ('[::1]:22', NetAddress('::1', 22)),
         (NetAddress('1.2.3.4', 23), NetAddress('1.2.3.4', 23)),
@@ -203,7 +208,7 @@ class TestNetAddress:
         else:
             assert NetAddress.ensure_resolved(item) == answer
 
-    @pytest.mark.parametrize("address,answer",(
+    @pytest.mark.parametrize("address,answer", (
         (NetAddress('foo.bar', 23), 'foo.bar:23'),
         (NetAddress('abcd::dbca', 40), '[abcd::dbca]:40'),
         (NetAddress('1.2.3.5', 50000), '1.2.3.5:50000'),
@@ -218,7 +223,7 @@ class TestNetAddress:
             setattr(address, attr, 'foo')
         setattr(address, 'foo', '')
 
-    @pytest.mark.parametrize("address,answer",(
+    @pytest.mark.parametrize("address,answer", (
         (NetAddress('abcd::dbca', 50), bytes.fromhex('abcd000000000000000000000000dbca')),
         (NetAddress('1.2.3.5', 50), bytes.fromhex('00000000000000000000ffff01020305')),
         (NetAddress('foo.bar', 50), TypeError('address must be resolved: foo.bar')),
@@ -227,11 +232,11 @@ class TestNetAddress:
         if isinstance(answer, Exception):
             with pytest.raises(type(answer)) as e:
                 address.pack_host()
-            assert type(e.value) == type(answer) and str(e.value) == str(answer)
+            assert type(e.value) is type(answer) and str(e.value) == str(answer)
         else:
             assert address.pack_host() == answer
 
-    @pytest.mark.parametrize("address,answer",(
+    @pytest.mark.parametrize("address,answer", (
         (NetAddress('abcd::dbca', 50), bytes.fromhex('abcd000000000000000000000000dbca0032')),
         (NetAddress('1.2.3.5', 40), bytes.fromhex('00000000000000000000ffff010203050028')),
         (NetAddress('foo.bar', 30), TypeError('address must be resolved: foo.bar')),
@@ -240,7 +245,7 @@ class TestNetAddress:
         if isinstance(answer, Exception):
             with pytest.raises(type(answer)) as e:
                 address.pack()
-            assert type(e.value) == type(answer) and str(e.value) == str(answer)
+            assert type(e.value) is type(answer) and str(e.value) == str(answer)
         else:
             assert address.pack() == answer
 
@@ -355,7 +360,7 @@ pack_tests = (
 
 pack_ts_tests = (
     ('[1a00:23c6:cf86:6201:3cc8:85d1:c41f:9bf6]:8333', ServiceFlags.NODE_NETWORK,
-     123456789,'15cd5b0701000000000000001a0023c6cf8662013cc885d1c41f9bf6208d'),
+     123456789, '15cd5b0701000000000000001a0023c6cf8662013cc885d1c41f9bf6208d'),
     ('100.101.102.103:104', ServiceFlags.NODE_NONE, 987654321,
      'b168de3a000000000000000000000000000000000000ffff646566670068'),
 )
@@ -364,7 +369,7 @@ X_address = NetAddress.from_string('1.2.3.4:5678')
 X_protoconf = Protoconf(2_000_000, [b'Default', b'BlockPriority'])
 X_service = BitcoinService(
     services=ServiceFlags.NODE_NETWORK,
-    address = X_address,
+    address=X_address,
     protocol_version=80_000,
     user_agent='/foobar:1.0/',
     relay=False,
@@ -460,6 +465,7 @@ class TestBitcoinService:
 protoconf_tests = [
     (2_000_000, [b'foo', b'bar'], '0280841e0007666f6f2c626172'),
 ]
+
 
 class TestProtoconf:
 
@@ -618,6 +624,7 @@ class TestMessageHeader:
 
 net_addresses = ['1.2.3.4', '4.3.2.1', '001:0db8:85a3:0000:0000:8a2e:0370:7334',
                  '2001:db8:85a3:8d3:1319:8a2e:370:7348']
+
 
 def random_net_address():
     port = random.randrange(1024, 50000)
