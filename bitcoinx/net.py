@@ -276,6 +276,7 @@ def validate_protocol(protocol):
 #
 
 ZERO_NONCE = bytes(8)
+LARGE_MESSAGES_PROTOCOL_VERSION = 70016
 
 # Standard and extended message headers
 std_header_struct = Struct('<4s12sI4s')
@@ -465,7 +466,7 @@ class BitcoinService:
                         NetAddress.ensure_resolved(address))
         self.services = ServiceFlags(services)
         self.user_agent = user_agent or f'/bitcoinx/{_version_str}'
-        self.protocol_version = protocol_version or 70015
+        self.protocol_version = protocol_version or LARGE_MESSAGES_PROTOCOL_VERSION
         self.start_height = start_height
         self.relay = relay
         self.timestamp = timestamp
@@ -664,7 +665,10 @@ class Node:
         self.service = service
         self.network = network
         self.headers = headers
-        self.sessions = set()
+        self.outgoing_sessions = set()
+        self.incoming_sessions = set()
+        self.incoming_session_cls = None
+        self.started = False
 
     def random_nonce(self):
         while True:
@@ -673,7 +677,7 @@ class Node:
                 return nonce
 
     def is_our_nonce(self, nonce):
-        return any(nonce == session.nonce for session in self.sessions)
+        return any(nonce == session.nonce for session in self.outgoing_sessions)
 
     async def connect(self, service, *, session_cls=None):
         '''Establish an outgoing connection to a service (a BitcoinService instance).  When
@@ -684,44 +688,47 @@ class Node:
         reader, writer = await open_connection(str(address.host), address.port)
         connection = Connection(reader, writer)
         session = (session_cls or Session)(self, service, connection, True)
-        self.sessions.add(session)
+        self.outgoing_sessions.add(session)
         try:
             await session.maintain_connection(connection)
         finally:
-            self.sessions.remove(session)
+            self.outgoing_sessions.remove(session)
 
     def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
-        return Listener(self, session_cls or Session)
+        self.incoming_session_cls = session_cls or Session
+        host = str(self.service.address.host)
+        port = self.service.address.port
+        return Listener(asyncio.start_server(self.on_incoming_session, host, port))
 
-
-class Listener:
-    '''A helper for Node.listen() to ensure sessions are cleaned up properly.'''
-
-    def __init__(self, node, session_cls):
-        self.node = node
-        self.session_cls = session_cls
-        self.server = None
-
-    async def on_incoming(self, reader, writer):
+    async def on_incoming_session(self, reader, writer):
         host, port = writer.transport.get_extra_info('peername')
         remote_service = BitcoinService(address=NetAddress(host, port))
         connection = Connection(reader, writer)
-        session = self.session_cls(self.node, remote_service, connection, False)
+        session = self.incoming_session_cls(self, remote_service, connection, False)
+        self.started = True
+        self.incoming_sessions.add(session)
         try:
             await session.maintain_connection(connection)
         except Exception as e:
             logging.exception(f'error handling incoming connection: {e}')
         finally:
+            self.incoming_sessions.remove(session)
             writer.close()
             await writer.wait_closed()
 
+
+class Listener:
+    '''A helper for Node.listen() to ensure sessions are cleaned up properly.'''
+
+    def __init__(self, start_server):
+        self.start_server = start_server
+        self.server = None
+
     async def __aenter__(self):
-        host = str(self.node.service.address.host)
-        port = self.node.service.address.port
-        self.server = await asyncio.start_server(self.on_incoming, host, port)
+        self.server = await self.start_server
 
     async def __aexit__(self, *args):
         self.server.close()
@@ -769,6 +776,7 @@ class Session:
         self.protoconf_sent = False
         self.their_protoconf = None
         self.nonce = self.node.random_nonce()
+        self.can_send_large_messages = False
 
         # Logging
         logger = logging.getLogger('Session')
@@ -785,9 +793,10 @@ class Session:
         try:
             async with TaskGroup() as group:
                 group.create_task(self.recv_messages_loop(connection))
-                group.create_task(self.send_messages_loop(connection))
                 if self._perform_handshake:
                     group.create_task(self.perform_handshake(connection))
+                    await self.verack_received.wait()
+                group.create_task(self.send_messages_loop(connection))
                 if self._send_protoconf:
                     group.create_task(self.send_protoconf())
                 # if self.sync_headers:
@@ -799,17 +808,19 @@ class Session:
         '''Handle sending the queue of messages.  This sends all messages except the initial
         version / verack handshake.
         '''
-        await self.verack_received.wait()
-
         send = self.connection.send
         while True:
-            # FIXME: handle extended messages
             header, payload = await connection.outgoing_messages.get()
-            if len(payload) + len(header) <= 536:
-                await send(header + payload)
+            if len(header) == MessageHeader.STD_HEADER_SIZE:
+                if len(payload) + len(header) <= 536:
+                    await send(header + payload)
+                else:
+                    await send(header)
+                    await send(payload)
             else:
                 await send(header)
-                await send(payload)
+                async for part in payload:
+                    await send(part)
 
     async def recv_messages_loop(self, connection):
         '''Read messages from a stream and pass them to handlers for processing.'''
@@ -881,6 +892,14 @@ class Session:
         header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
         await connection.outgoing_messages.put((header, payload))
 
+    async def send_large_message(self, command, payload_len, payload_func):
+        '''Send a command as an extended message with its payload.'''
+        if not self.can_send_large_messages:
+            raise RuntimeError('large messages cannot be sent')
+        connection = self.connection_for_command(command)
+        header = MessageHeader.ext_bytes(self.node.network.magic, command, payload_len)
+        await connection.outgoing_messages.put((header, payload_func))
+
     async def handle_message(self, connection, header):
         if self.debug:
             self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
@@ -897,12 +916,14 @@ class Session:
         command = header.command()
 
         if header.is_extended:
-            # FIXME
-            pass
+            if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
+                raise ForceDisconnectError('large message received but invalid')
 
-        # FIXME: handle large payloads in a streaming fashion
+            if header.payload_len > 10_000_000:
+                # FIXME: handle large payloads in a streaming fashion
+                raise ForceDisconnectError('streaming messages not yet implemented')
+            # Payload is small - read it all in now, just as for standard messages
 
-        # Consume the payload
         payload = await connection.recv_exactly(header.payload_len)
         handler = getattr(self, f'on_{command}', None)
         if not handler:
@@ -984,6 +1005,8 @@ class Session:
         if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
         self.log_service_details(self.remote_service, 'received version message:')
+        self.can_send_large_messages = (self.remote_service.protocol_version
+                                        >= LARGE_MESSAGES_PROTOCOL_VERSION)
 
     async def on_verack(self, payload):
         if not self.version_sent:

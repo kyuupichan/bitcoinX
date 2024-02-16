@@ -13,6 +13,7 @@ from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
 )
 from bitcoinx.errors import ProtocolError, ForceDisconnectError
+from bitcoinx.misc import chunks
 from bitcoinx.net import (
     ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
@@ -455,7 +456,7 @@ class TestBitcoinService:
         service = BitcoinService()
         assert service.address == NetAddress('::', 0, check_port=False)
         assert service.services == ServiceFlags.NODE_NONE
-        assert service.protocol_version == 70_015
+        assert service.protocol_version in (70_015, 70_016)
         assert service.user_agent == f'/bitcoinx/{_version_str}'
         assert service.relay is True
         assert service.timestamp is None
@@ -561,10 +562,6 @@ ALL_COMMANDS = ('addr', 'authch', 'authresp', 'block', 'blocktxn', 'cmpctblock',
 
 class TestMessageHeader:
 
-    def test_basics(self):
-        assert MessageHeader.STD_HEADER_SIZE == 24
-        assert MessageHeader.EXT_HEADER_SIZE == 44
-
     @pytest.mark.parametrize("command", ALL_COMMANDS)
     def test_commands(self, command):
         padding = 12 - len(command)
@@ -573,10 +570,12 @@ class TestMessageHeader:
     @pytest.mark.parametrize("magic, command, payload, answer", std_header_tests)
     def test_std_bytes(self, magic, command, payload, answer):
         assert MessageHeader.std_bytes(magic, command, payload) == answer
+        assert len(answer) == MessageHeader.STD_HEADER_SIZE
 
     @pytest.mark.parametrize("magic, command, payload_len, answer", ext_header_tests)
     def test_ext_bytes(self, magic, command, payload_len, answer):
         assert MessageHeader.ext_bytes(magic, command, payload_len) == answer
+        assert len(answer) == MessageHeader.EXT_HEADER_SIZE
 
     @pytest.mark.parametrize("magic, command, payload, answer", std_header_tests)
     def test_from_stream_std(self, magic, command, payload, answer):
@@ -611,8 +610,9 @@ class TestMessageHeader:
     def test_from_stream_ext_bad(self, raw):
         async def main():
             dribble = Dribble(raw)
-            with pytest.raises(ProtocolError):
+            with pytest.raises(ProtocolError) as e:
                 await MessageHeader.from_stream(dribble.recv_exactly)
+            assert 'ill-formed extended message header' == str(e.value)
 
         asyncio.run(main())
 
@@ -762,6 +762,8 @@ def listening_node():
     service = BitcoinService(address=NetAddress(listen_host, 5656))
     node = Node(service, Bitcoin, None)
     yield node
+    assert not node.incoming_sessions
+    assert not node.outgoing_sessions
 
 
 def in_caplog(caplog, message, count=1):
@@ -829,6 +831,67 @@ class TestSession:
                 assert listen_session.our_protoconf == Protoconf.default()
 
         asyncio.run(test())
+
+    def test_bad_magic(self, caplog, listening_node):
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), BitcoinTestnet, None)
+                with pytest.raises(ConnectionResetError):
+                    await node.connect(listening_node.service)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
+                         'got 0xf4e5f3f4 expected 0xe3e1f3e8')
+
+    def test_bad_checksum(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def send_message(self, command, payload):
+                connection = self.connection_for_command(command)
+                header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
+                header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
+                # Mess up the checksum
+                header = bytearray(header)
+                header[-1] ^= 0x0f
+                await connection.outgoing_messages.put((header, payload))
+                await pause()
+                raise MemoryError
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'protocol error: bad checksum for protoconf command')
+
+    def test_unhandled_command(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def perform_handshake(self, connection):
+                from bitcoinx.net import _command
+
+                await super().perform_handshake(connection)
+                await self.send_message(_command('zombie'), b'')
+                await pause()
+                raise MemoryError
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.DEBUG):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'ignoring unhandled zombie command')
 
     #
     # VERSION message tests
@@ -1010,44 +1073,28 @@ class TestSession:
 
         assert in_caplog(caplog, 'verack message has payload')
 
-    def test_bad_magic(self, caplog, listening_node):
+    #
+    # PROTOCONF message tests
+    #
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), BitcoinTestnet, None)
-                with pytest.raises(ConnectionResetError):
-                    await node.connect(listening_node.service)
-
-        with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
-
-        assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
-                         'got 0xf4e5f3f4 expected 0xe3e1f3e8')
-
-    def test_bad_checksum(self, caplog, listening_node):
+    def test_protoconf_understood(self, caplog, listening_node):
 
         class ConnectingSession(Session):
-            async def send_message(self, command, payload):
-                connection = self.connection_for_command(command)
-                header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
-                header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
-                # Mess up the checksum
-                header = bytearray(header)
-                header[-1] ^= 0x0f
-                await connection.outgoing_messages.put((header, payload))
+            async def send_protoconf(self):
+                listener_session = list(listening_node.incoming_sessions)[0]
+                assert listener_session.their_protoconf is None
+                await super().send_protoconf()
                 await pause()
-                raise ConnectionResetError
+                assert listener_session.their_protoconf == self.our_protoconf
+                raise MemoryError
 
         async def test():
             async with listening_node.listen():
                 node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(ConnectionResetError):
+                with pytest.raises(MemoryError):
                     await node.connect(listening_node.service, session_cls=ConnectingSession)
 
-        with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
-
-        assert in_caplog(caplog, 'protocol error: bad checksum for protoconf command')
+        asyncio.run(test())
 
     def test_duplicate_protoconf_received(self, caplog, listening_node):
 
@@ -1057,12 +1104,12 @@ class TestSession:
                 self.protoconf_sent = False
                 await super().send_protoconf()
                 await pause()
-                raise ConnectionResetError
+                raise MemoryError
 
         async def test():
             async with listening_node.listen():
                 node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(ConnectionResetError):
+                with pytest.raises(MemoryError):
                     await node.connect(listening_node.service, session_cls=ConnectingSession)
 
         with caplog.at_level(logging.ERROR):
@@ -1077,9 +1124,64 @@ class TestSession:
                 await super().send_protoconf()
                 await super().send_protoconf()
                 await pause()
-                raise ConnectionResetError
+                raise MemoryError
 
         async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert not in_caplog(caplog, 'duplicate protoconf')
+
+    #
+    # EXTMSG message tests
+    #
+
+    def test_send_protoconf_as_large_message(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def send_protoconf(self):
+                listener_session = list(listening_node.incoming_sessions)[0]
+                assert listener_session.their_protoconf is None
+                payload = self.our_protoconf.payload()
+                async def feeder():
+                    for chunk in chunks(payload, 4):
+                        yield chunk
+                await self.send_large_message(MessageHeader.PROTOCONF, len(payload), feeder())
+                await pause()
+                assert listener_session.their_protoconf == self.our_protoconf
+                raise MemoryError
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        asyncio.run(test())
+
+    def test_large_message_reject_send_and_receive(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def send_protoconf(self):
+                payload = self.our_protoconf.payload()
+                async def feeder():
+                    for chunk in chunks(payload, 4):
+                        yield chunk
+                # We should not accept sending a large message
+                with pytest.raises(RuntimeError):
+                    await self.send_large_message(MessageHeader.PROTOCONF, len(payload), feeder())
+                # Override the check
+                self.can_send_large_messages = True
+                await self.send_large_message(MessageHeader.PROTOCONF, len(payload), feeder())
+                await pause()
+
+        async def test():
+            listening_node.service.protocol_version = 70_015
             async with listening_node.listen():
                 node = Node(BitcoinService(), Bitcoin, None)
                 with pytest.raises(ConnectionResetError):
@@ -1088,30 +1190,7 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             asyncio.run(test())
 
-        assert not in_caplog(caplog, 'duplicate protoconf')
+        assert in_caplog(caplog, 'large message received but invalid')
 
 
-    def test_unhandled_command(self, caplog, listening_node):
-
-        class ConnectingSession(Session):
-            async def perform_handshake(self, connection):
-                from bitcoinx.net import _command
-
-                await super().perform_handshake(connection)
-                await self.send_message(_command('zombie'), b'')
-                await pause()
-                raise ConnectionResetError
-
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(ConnectionResetError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
-        with caplog.at_level(logging.DEBUG):
-            asyncio.run(test())
-
-        print_caplog(caplog)
-        assert in_caplog(caplog, 'ignoring unhandled zombie command')
-
-    # TODO: extended messages
+    # TODO: streaming messages
