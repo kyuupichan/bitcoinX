@@ -648,7 +648,10 @@ class Connection:
 
     async def close(self):
         self.writer.close()
-        await self.writer.wait_closed()
+        try:
+            await self.writer.wait_closed()
+        except BrokenPipeError:
+            pass
 
     async def send(self, data):
         self.writer.write(data)
@@ -678,8 +681,6 @@ class Node:
         self.headers = headers
         self.outgoing_sessions = set()
         self.incoming_sessions = set()
-        self.incoming_session_cls = None
-        self.started = False
 
     def random_nonce(self):
         while True:
@@ -695,40 +696,41 @@ class Node:
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
-        address = service.address
-        reader, writer = await open_connection(str(address.host), address.port)
-        connection = Connection(reader, writer)
-        session = (session_cls or Session)(self, service, connection, True)
-        self.outgoing_sessions.add(session)
-        try:
-            await session.maintain_connection(connection)
-        finally:
-            self.outgoing_sessions.remove(session)
+        reader, writer = await open_connection(str(service.address.host), service.address.port)
+        await self.run_session(service, Connection(reader, writer), session_cls or Session, True)
 
     def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
-        self.incoming_session_cls = session_cls or Session
+        async def on_incoming_session(session_cls, reader, writer):
+            host, port = writer.transport.get_extra_info('peername')
+            remote_service = BitcoinService(address=NetAddress(host, port))
+            await self.run_session(remote_service, Connection(reader, writer), session_cls, False)
+
         host = str(self.service.address.host)
         port = self.service.address.port
-        return Listener(asyncio.start_server(self.on_incoming_session, host, port))
+        on_incoming_session = partial(on_incoming_session, session_cls or Session)
+        return Listener(asyncio.start_server(on_incoming_session, host, port))
 
-    async def on_incoming_session(self, reader, writer):
-        host, port = writer.transport.get_extra_info('peername')
-        remote_service = BitcoinService(address=NetAddress(host, port))
-        connection = Connection(reader, writer)
-        session = self.incoming_session_cls(self, remote_service, connection, False)
-        self.started = True
-        self.incoming_sessions.add(session)
+    async def run_session(self, service, connection, session_cls, is_outgoing):
+        '''Establish an outgoing connection to a service (a BitcoinService instance).  When
+        connected, call session_cls (a callable) and await its member funciont
+        maintain_connection().
+        '''
+        sessions = self.outgoing_sessions if is_outgoing else self.incoming_sessions
+        session = session_cls(self, service, connection, is_outgoing)
+        sessions.add(session)
         try:
             await session.maintain_connection(connection)
         except Exception as e:
-            logging.exception(f'error handling incoming connection: {e}')
+            if is_outgoing:
+                raise
+            else:
+                logging.exception(f'error handling incoming connection: {e}')
         finally:
-            self.incoming_sessions.remove(session)
-            writer.close()
-            await writer.wait_closed()
+            sessions.remove(session)
+            await connection.close()
 
 
 class Listener:
