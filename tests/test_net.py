@@ -14,9 +14,9 @@ from bitcoinx import (
 )
 from bitcoinx.errors import ProtocolError, ForceDisconnectError
 from bitcoinx.net import (
-    ServicePacking, NetAddress, NetworkProtocol, BitcoinService, Protoconf, MessageHeader,
+    ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart, Node, Session,
+    ServicePart, Node, Session, version_payload, read_version_payload, pack_block_locator,
 )
 
 
@@ -649,55 +649,55 @@ class TestNetworkProtocol:
         protocol = 100
         answer = pack_le_int32(protocol) + pack_list(locator, pack_hash)
 
-        assert NetworkProtocol.pack_block_locator(protocol, locator) == answer + bytes(32)
-        assert NetworkProtocol.pack_block_locator(protocol, locator, None) == answer + bytes(32)
-        assert NetworkProtocol.pack_block_locator(protocol, locator, hash_stop) \
+        assert pack_block_locator(protocol, locator) == answer + bytes(32)
+        assert pack_block_locator(protocol, locator, None) == answer + bytes(32)
+        assert pack_block_locator(protocol, locator, hash_stop) \
             == answer + hash_stop
 
     def test_version_payload_bad_nonce(self):
         with pytest.raises(ValueError) as e:
-            NetworkProtocol.version_payload(X_service, BitcoinService(), bytes(7))
+            version_payload(X_service, BitcoinService(), bytes(7))
         assert 'nonce must be 8 bytes' == str(e.value)
 
     def test_version_payload_theirs_default(self):
         nonce = b'1234beef'
         remote_service = BitcoinService()
-        payload = NetworkProtocol.version_payload(X_service, remote_service, nonce)
+        payload = version_payload(X_service, remote_service, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000000000000000000000000000000000000000000000'
             '0000000000010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
             '666f6f6261723a312e302f05000000000744656661756c74')
         service = BitcoinService()
         service.address = X_service.address
-        result = NetworkProtocol.read_version_payload(service, payload)
+        result = read_version_payload(service, payload)
         assert service == X_service
         assert result == (remote_service.address, remote_service.services, nonce)
 
     def test_version_payload_theirs_X(self):
         nonce = b'1234beef'
         remote_service = copy.copy(X_service)
-        payload = NetworkProtocol.version_payload(X_service, remote_service, nonce)
+        payload = version_payload(X_service, remote_service, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000010000000000000000000000000000000000ffff01'
             '020304162e010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
             '666f6f6261723a312e302f05000000000744656661756c74')
         service = BitcoinService()
         service.address = X_service.address
-        result = NetworkProtocol.read_version_payload(service, payload)
+        result = read_version_payload(service, payload)
         assert service == X_service
         assert result == (remote_service.address, remote_service.services, nonce)
 
     def test_version_payload_NetAddress(self):
         nonce = b'cabbages'
         address = NetAddress('1.2.3.4', 5)
-        payload = NetworkProtocol.version_payload(X_service, address, nonce)
+        payload = version_payload(X_service, address, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000000000000000000000000000000000000000ffff01'
             '0203040005010000000000000000000000000000000000ffff01020304162e63616262616765730c2f'
             '666f6f6261723a312e302f05000000000744656661756c74')
         service = BitcoinService(address=address)
         service_copy = copy.copy(service)
-        result = NetworkProtocol.read_version_payload(service, payload)
+        result = read_version_payload(service, payload)
         assert service == service_copy
         assert result == (address, ServiceFlags.NODE_NONE, nonce)
 
@@ -705,10 +705,10 @@ class TestNetworkProtocol:
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.timestamp = None
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload)
+        result = read_version_payload(service2, payload)
         assert 0 < time.time() - service2.timestamp < 5
         service.timestamp = service2.timestamp
         assert service == service2
@@ -718,10 +718,10 @@ class TestNetworkProtocol:
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.assoc_id = None
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload)
+        result = read_version_payload(service2, payload)
         assert service2.assoc_id is None
         assert service == service2
         assert result == (X_service.address, X_service.services, nonce)
@@ -730,12 +730,12 @@ class TestNetworkProtocol:
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.user_agent = 'xxx'
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
         # Non-UTF8 user agent
         payload = payload.replace(b'xxx', b'\xff' * 3)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload)
+        result = read_version_payload(service2, payload)
         assert service2.user_agent == '0xffffff'
         service2.user_agent = service.user_agent
         assert service == service2
@@ -744,10 +744,10 @@ class TestNetworkProtocol:
     def test_read_version_payload_no_relay(self):
         nonce = b'cabbages'
         service = BitcoinService()
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload[:-1])
+        result = read_version_payload(service2, payload[:-1])
         assert service2.assoc_id is None
         assert service2.relay is True
         assert service == service2
@@ -767,6 +767,11 @@ def listening_node():
 def in_caplog(caplog, message, count=1):
     return sum(message in record.message
                for record in caplog.records) == count
+
+
+def print_caplog(caplog):
+    for record in caplog.records:
+        print(record.message)
 
 
 async def pause():
@@ -825,6 +830,10 @@ class TestSession:
 
         asyncio.run(test())
 
+    #
+    # VERSION message tests
+    #
+
     def test_listener_waits_for_version_message(self, listening_node):
         async def test():
             async with listening_node.listen():
@@ -844,7 +853,7 @@ class TestSession:
 
         class ListeningSession(Session):
             async def on_version(self, payload):
-                NetworkProtocol.read_version_payload(self.remote_service, payload)
+                read_version_payload(self.remote_service, payload)
                 raise ForceDisconnectError('test')
 
         async def test():
@@ -957,3 +966,48 @@ class TestSession:
 
         assert in_caplog(caplog, 'error handling incoming connection: connected to ourself')
         assert in_caplog(caplog, 'connection closed remotely')
+
+    #
+    # VERACK message tests
+    #
+
+    def test_duplicate_verack_message(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def send_verack_message(self, connection):
+                await super().send_verack_message(connection)
+                await super().send_verack_message(connection)
+                await pause()
+                raise MemoryError
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'protocol error: duplicate verack message')
+
+    def test_verack_payload(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def send_verack_message(self, connection):
+                await self._send_unqueued(connection, MessageHeader.VERACK, b'0')
+                await pause()
+                raise MemoryError
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.INFO):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'verack message has payload')
+
+    # TODO: bad magic, bad checksum, unhandled commands, extended messages

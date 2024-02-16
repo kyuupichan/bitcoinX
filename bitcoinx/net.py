@@ -29,7 +29,7 @@ from .packing import (
 
 __all__ = (
     'is_valid_hostname', 'classify_host', 'validate_port', 'validate_protocol',
-    'NetAddress', 'Service', 'ServicePart', 'NetworkProtocol',
+    'NetAddress', 'Service', 'ServicePart',
     'BitcoinService', 'ServiceFlags', 'Protoconf', 'MessageHeader',
 )
 
@@ -584,56 +584,53 @@ def read_version_payload(service, payload):
     return (our_address, our_services, nonce)
 
 
-class NetworkProtocol:
+def version_payload(service, remote_service, nonce):
+    '''Create a version message payload.
 
-    @classmethod
-    def version_payload(cls, service, remote_service, nonce):
-        '''Create a version message payload.
-
-        If self.timestamp is None, then the current time is used.
+    If self.timestamp is None, then the current time is used.
         remote_service is a NetAddress or BitcoinService.
-        '''
-        if len(nonce) != 8:
-            raise ValueError('nonce must be 8 bytes')
+    '''
+    if len(nonce) != 8:
+        raise ValueError('nonce must be 8 bytes')
 
-        if isinstance(remote_service, NetAddress):
-            remote_service_packed = ServicePacking.pack(remote_service, ServiceFlags.NODE_NONE)
-        else:
-            remote_service_packed = remote_service.pack()
+    if isinstance(remote_service, NetAddress):
+        remote_service_packed = ServicePacking.pack(remote_service, ServiceFlags.NODE_NONE)
+    else:
+        remote_service_packed = remote_service.pack()
 
-        timestamp = int(time.time()) if service.timestamp is None else service.timestamp
-        assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
+    timestamp = int(time.time()) if service.timestamp is None else service.timestamp
+    assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
 
-        return b''.join((
-            pack_le_int32(service.protocol_version),
-            pack_le_uint64(service.services),
-            pack_le_int64(timestamp),
-            remote_service_packed,
-            service.pack(),   # In practice this is ignored by receiver
-            nonce,
-            pack_varbytes(service.user_agent.encode()),
-            pack_le_int32(service.start_height),
-            pack_byte(service.relay),
-            assoc_id,
-        ))
+    return b''.join((
+        pack_le_int32(service.protocol_version),
+        pack_le_uint64(service.services),
+        pack_le_int64(timestamp),
+        remote_service_packed,
+        service.pack(),   # In practice this is ignored by receiver
+        nonce,
+        pack_varbytes(service.user_agent.encode()),
+        pack_le_int32(service.start_height),
+        pack_byte(service.relay),
+        assoc_id,
+    ))
 
-    @classmethod
-    def pack_block_locator(cls, protocol_version, locator, hash_stop=None):
-        parts = [pack_le_int32(protocol_version), pack_varint(len(locator))]
-        parts.extend(locator)
-        parts.append(hash_stop or bytes(32))
-        return b''.join(parts)
 
-    @classmethod
-    def unpack_headers(cls, payload):
-        def read_one(read):
-            raw_header = read(80)
-            # A stupid tx count which seems to always be zero...
-            read_varint(read)
-            return raw_header
+def pack_block_locator(protocol_version, locator, hash_stop=None):
+    parts = [pack_le_int32(protocol_version), pack_varint(len(locator))]
+    parts.extend(locator)
+    parts.append(hash_stop or bytes(32))
+    return b''.join(parts)
 
-        read = BytesIO(payload).read
-        return read_list(read, read_one)
+
+def unpack_headers(cls, payload):
+    def read_one(read):
+        raw_header = read(80)
+        # A stupid tx count which seems to always be zero...
+        read_varint(read)
+        return raw_header
+
+    read = BytesIO(payload).read
+    return read_list(read, read_one)
 
 
 class Connection:
@@ -849,8 +846,7 @@ class Session:
         our_service = self.node.service
         our_service.start_height = 1000  # self.node.headers.height
         self.log_service_details(our_service, 'sending version message:')
-        return NetworkProtocol.version_payload(our_service, self.remote_service.address,
-                                               self.nonce)
+        return version_payload(our_service, self.remote_service.address, self.nonce)
 
     async def send_version_message(self, connection):
         payload = await self.version_payload()
@@ -941,8 +937,7 @@ class Session:
         '''
         # self.headers_synced.clear()
         # locator = (chain or self.node.headers.longest_chain()).block_locator()
-        # payload = NetworkProtocol.pack_block_locator(self.node.service.protocol_version,
-        #                                              locator)
+        # payload = pack_block_locator(self.node.service.protocol_version, locator)
         # if self.debug:
         #     self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         # await self.send_message(MessageHeader.GETHEADERS, payload)
@@ -957,7 +952,7 @@ class Session:
 
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
-        raw_headers = NetworkProtocol.unpack_headers(payload)
+        raw_headers = unpack_headers(payload)
         if len(raw_headers) > 2000:
             self.logger.warning(f'{len(raw_headers):,d} headers in headers message')
 
@@ -994,10 +989,10 @@ class Session:
         if not self.version_sent:
             raise ProtocolError('verack message received before version message sent')
         if self.verack_received.is_set():
-            self.logger.error('duplicate verack message')
-        if payload:
-            self.logger.error('verack message has payload')
+            raise ProtocolError('duplicate verack message')
         self.verack_received.set()
+        if payload:
+            self.logger.info('verack message has payload')
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
