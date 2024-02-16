@@ -796,10 +796,6 @@ class Session:
         self.logger = SessionLogger(logger, context)
         self.debug = logger.isEnabledFor(logging.DEBUG)
 
-    async def close(self):
-        await self.connection.close()
-        self.connection = None
-
     async def maintain_connection(self, connection):
         '''Maintains a connection.'''
         try:
@@ -961,12 +957,6 @@ class Session:
         else:
             await handler(connection, size)
         return True
-
-    async def read_and_ignore_payload(self, connection, payload_len):
-        while payload_len > 0:
-            size = min(1_000_000, payload_len)
-            await connection.recv_exactly(size)
-            payload_len -= size
 
     # Call to request various things from the peer
 
