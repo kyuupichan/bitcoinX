@@ -650,7 +650,7 @@ class Connection:
         self.writer.close()
         try:
             await self.writer.wait_closed()
-        except BrokenPipeError:
+        except (BrokenPipeError, ConnectionResetError):   # CRE happens on Windows it seems
             pass
 
     async def send(self, data):
