@@ -783,7 +783,7 @@ async def achunks(payload, size):
 
 
 async def pause():
-    await asyncio.sleep(0.001)
+    await asyncio.sleep(0.005)
 
 
 class TestNode:
