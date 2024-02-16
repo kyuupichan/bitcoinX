@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import time
-from asyncio import Event, Queue, TaskGroup, open_connection, CancelledError
+from asyncio import Event, Queue, TaskGroup, open_connection
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 from functools import partial
@@ -17,7 +17,7 @@ from ipaddress import ip_address, IPv4Address, IPv6Address
 from struct import Struct, error as struct_error
 from typing import List
 
-from .errors import ProtocolError, ForceDisconnectError
+from .errors import ProtocolError, ForceDisconnectError, PackingError
 from .hashes import double_sha256
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
@@ -537,6 +537,9 @@ class Protoconf:
         stream_policies = read_varbytes(read)
         return Protoconf(max_payload, stream_policies.split(b','))
 
+#
+# Network Protocol
+#
 
 def random_nonce():
     '''A nonce suitable for a PING or VERSION messages.'''
@@ -545,6 +548,40 @@ def random_nonce():
         nonce = os.urandom(8)
         if nonce != ZERO_NONCE:
             return nonce
+
+def read_version_payload(service, payload):
+    '''Read a version payload and update member variables of service (except address).  Return
+     a tuple (our_address, our_services, nonce) in the payload.
+
+     This is not a constructor because there is no reliable source for the address.
+    '''
+    read = BytesIO(payload).read
+    service.protocol_version = read_le_uint32(read)
+    service.services = read_le_uint64(read)
+    service.timestamp = read_le_int64(read)
+    our_address, our_services = ServicePacking.read(read)
+    ServicePacking.read(read)   # Ignore
+    nonce = read(8)
+
+    user_agent = read_varbytes(read)
+    try:
+        service.user_agent = user_agent.decode()
+    except UnicodeDecodeError:
+        service.user_agent = '0x' + user_agent.hex()
+
+    service.start_height = read_le_int32(read)
+    # Relay is optional, defaulting to True
+    service.relay = read(1) != b'\0'
+    # Association ID is optional.  We set it to None if not provided.
+    try:
+        service.assoc_id = read_varbytes(read)
+    except struct_error:
+        service.assoc_id = None
+
+    if read(1) != b'':
+        logging.info('extra bytes at end of version payload')
+
+    return (our_address, our_services, nonce)
 
 
 class NetworkProtocol:
@@ -579,38 +616,6 @@ class NetworkProtocol:
             pack_byte(service.relay),
             assoc_id,
         ))
-
-    @classmethod
-    def read_version_payload(cls, service, payload):
-        '''Read a version payload and update member variables of service (except address).  Return
-        a tuple (our_address, our_services, nonce) in the payload.
-
-        This is not a constructor because there is no reliable source for the address.
-        '''
-        read = BytesIO(payload).read
-        service.protocol_version = read_le_uint32(read)
-        service.services = read_le_uint64(read)
-        service.timestamp = read_le_int64(read)
-        our_address, our_services = ServicePacking.read(read)
-        ServicePacking.read(read)   # Ignore
-        nonce = read(8)
-
-        user_agent = read_varbytes(read)
-        try:
-            service.user_agent = user_agent.decode()
-        except UnicodeDecodeError:
-            service.user_agent = '0x' + user_agent.hex()
-
-        service.start_height = read_le_int32(read)
-        # Relay is optional, defaulting to True
-        service.relay = read(1) != b'\0'
-        # Association ID is optional.  We set it to None if not provided.
-        try:
-            service.assoc_id = read_varbytes(read)
-        except struct_error:
-            service.assoc_id = None
-
-        return (our_address, our_services, nonce)
 
     @classmethod
     def pack_block_locator(cls, protocol_version, locator, hash_stop=None):
@@ -819,7 +824,7 @@ class Session:
             except (asyncio.IncompleteReadError, ConnectionResetError):
                 self.logger.error('connection closed remotely')
                 raise ConnectionResetError('connection closed remotely') from None
-            except ForceDisconnectError as e:
+            except ForceDisconnectError:
                 raise
             except ProtocolError as e:
                 self.logger.error(f'protocol error: {e}')
@@ -839,33 +844,36 @@ class Session:
         self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
                          f'relay={serv.relay} timestamp={serv.timestamp} assoc_id={serv.assoc_id}')
 
-    async def _send_version_message(self, connection):
+    async def version_payload(self):
         # Send version message with our current height
         our_service = self.node.service
-        our_service.start_height = 1000 # self.node.headers.height
+        our_service.start_height = 1000  # self.node.headers.height
         self.log_service_details(our_service, 'sending version message:')
-        payload = NetworkProtocol.version_payload(our_service, self.remote_service.address,
-                                                  self.nonce)
+        return NetworkProtocol.version_payload(our_service, self.remote_service.address,
+                                               self.nonce)
+
+    async def send_version_message(self, connection):
+        payload = await self.version_payload()
         await self._send_unqueued(connection, MessageHeader.VERSION, payload)
         self.version_sent = True
+
+    async def send_verack_message(self, connection):
+        await self._send_unqueued(connection, MessageHeader.VERACK, b'')
 
     async def perform_handshake(self, connection):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
-        if not self.is_outgoing:
-            # Incoming connections wait for version message first
-            await self.version_received.wait()
-
-        await self._send_version_message(connection)
-
         if self.is_outgoing:
+            await self.send_version_message(connection)
             # Outoing connections wait now
             await self.version_received.wait()
+        else:
+            # Incoming connections wait for version message first
+            await self.version_received.wait()
+            await self.send_version_message(connection)
 
-        # Send verack
-        await self._send_unqueued(connection, MessageHeader.VERACK, b'')
-
-        # Handhsake is complete once verack is received
+        # Send verack.  The handhsake is complete once verack is received
+        await self.send_verack_message(connection)
         await self.verack_received.wait()
 
     def connection_for_command(self, _command):
@@ -974,7 +982,10 @@ class Session:
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
         self.version_received.set()
-        _, _, nonce = NetworkProtocol.read_version_payload(self.remote_service, payload)
+        try:
+            _, _, nonce = read_version_payload(self.remote_service, payload)
+        except PackingError:
+            raise ForceDisconnectError('corrupt version message')
         if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
         self.log_service_details(self.remote_service, 'received version message:')
@@ -999,5 +1010,4 @@ class Session:
             self.logger.warning('protoconf message already sent')
             return
         self.protoconf_sent = True
-        await self.send_message(MessageHeader.PROTOCONF,
-                                self.our_protoconf.payload())
+        await self.send_message(MessageHeader.PROTOCONF, self.our_protoconf.payload())

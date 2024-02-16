@@ -756,6 +756,7 @@ class TestNetworkProtocol:
 
 listen_host = IPv4Address('127.0.0.1')
 
+
 @pytest.fixture
 def listening_node():
     service = BitcoinService(address=NetAddress(listen_host, 5656))
@@ -766,6 +767,10 @@ def listening_node():
 def in_caplog(caplog, message, count=1):
     return sum(message in record.message
                for record in caplog.records) == count
+
+
+async def pause():
+    await asyncio.sleep(0.001)
 
 
 class TestNode:
@@ -783,6 +788,7 @@ class TestSession:
 
     def test_simple_connect(self, listening_node):
         conn_pair = None
+        listen_pair = None
         event = asyncio.Event()
 
         class ConnectingSession(Session):
@@ -791,7 +797,6 @@ class TestSession:
                 conn_pair = (self, connection)
                 await event.wait()
 
-        listen_pair = None
         class ListeningSession(Session):
             async def maintain_connection(self, connection):
                 nonlocal listen_pair
@@ -845,7 +850,7 @@ class TestSession:
         async def test():
             async with listening_node.listen(session_cls=ListeningSession):
                 node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(ConnectionResetError) as e:
+                with pytest.raises(ConnectionResetError):
                     await node.connect(listening_node.service)
 
         asyncio.run(test())
@@ -854,9 +859,9 @@ class TestSession:
 
         class ConnectingSession(Session):
             async def maintain_connection(self, connection):
-                 await self._send_version_message(connection)
-                 await self._send_version_message(connection)
-                 await asyncio.sleep(0.001)
+                await self.send_version_message(connection)
+                await self.send_version_message(connection)
+                await pause()
 
         async def test():
             async with listening_node.listen():
@@ -866,7 +871,79 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             asyncio.run(test())
 
-        assert in_caplog(caplog, f'protocol error: duplicate version message')
+        assert in_caplog(caplog, 'protocol error: duplicate version message')
+
+    def test_send_verack_first(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def maintain_connection(self, connection):
+                await self.send_verack_message(connection)
+                await pause()
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'verack message received before version message sent')
+
+    def test_send_protoconf_first(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def maintain_connection(self, connection):
+                await self._send_unqueued(connection, MessageHeader.PROTOCONF,
+                                          self.our_protoconf.payload())
+                await pause()
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'protocol error: protoconf command '
+                         'received before handshake finished')
+
+    def test_send_corrupt_version_message(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def maintain_connection(self, connection):
+                await self._send_unqueued(connection, MessageHeader.VERSION,
+                                          bytes(10))
+                await pause()
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'corrupt version message')
+
+    def test_send_long_version_message(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def maintain_connection(self, connection):
+                await self._send_unqueued(connection, MessageHeader.VERSION,
+                                          await self.version_payload() + bytes(2))
+                await pause()
+
+        async def test():
+            async with listening_node.listen():
+                node = Node(BitcoinService(), Bitcoin, None)
+                await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        with caplog.at_level(logging.INFO):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, 'extra bytes at end of version payload')
 
     def test_self_connect(self, caplog, listening_node):
 
@@ -878,22 +955,5 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             asyncio.run(test())
 
-        assert in_caplog(caplog, f'error handling incoming connection: connected to ourself')
-        assert in_caplog(caplog, f'connection closed remotely')
-
-    # def test_bad_version_message(self, caplog, listening_node):
-
-    #     class ConnectingSession(Session):
-    #         async def maintain_connection(self, connection):
-    #              await self._send_version_message(connection)
-    #              await asyncio.sleep(0.001)
-
-    #     async def test():
-    #         async with listening_node.listen():
-    #             node = Node(BitcoinService(), Bitcoin, None)
-    #             await node.connect(listening_node.service, session_cls=ConnectingSession)
-
-    #     with caplog.at_level(logging.ERROR):
-    #         asyncio.run(test())
-
-    #     assert in_caplog(caplog, f'protocol error: duplicate version message')
+        assert in_caplog(caplog, 'error handling incoming connection: connected to ourself')
+        assert in_caplog(caplog, 'connection closed remotely')
