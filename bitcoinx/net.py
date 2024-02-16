@@ -542,6 +542,7 @@ class Protoconf:
 # Network Protocol
 #
 
+
 def random_nonce():
     '''A nonce suitable for a PING or VERSION messages.'''
     # bitcoind doesn't like zero nonces
@@ -549,6 +550,7 @@ def random_nonce():
         nonce = os.urandom(8)
         if nonce != ZERO_NONCE:
             return nonce
+
 
 def read_version_payload(service, payload):
     '''Read a version payload and update member variables of service (except address).  Return
@@ -654,6 +656,15 @@ class Connection:
 
     async def recv_exactly(self, nbytes):
         return await self.reader.readexactly(nbytes)
+
+    async def recv_chunks(self, size, chunk_size=None):
+        '''Read size bytes, returning it in chunks.  An asynchronous iterator.'''
+        chunk_size = chunk_size or 1_000_000
+        while size > 0:
+            recv_size = min(size, chunk_size)
+            chunk = await self.recv_exactly(recv_size)
+            yield chunk
+            size -= recv_size
 
 
 class Node:
@@ -767,6 +778,7 @@ class Session:
         self._perform_handshake = perform_handshake
         self._send_protoconf = send_protoconf
         self.sync_headers = sync_headers
+        self.streaming_min_size = 10_000_000
 
         # State
         self.version_sent = False
@@ -829,7 +841,7 @@ class Session:
             try:
                 header = await MessageHeader.from_stream(connection.recv_exactly)
                 await self.handle_message(connection, header)
-            except (asyncio.IncompleteReadError, ConnectionResetError):
+            except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
                 self.logger.error('connection closed remotely')
                 raise ConnectionResetError('connection closed remotely') from None
             except ForceDisconnectError:
@@ -913,17 +925,10 @@ class Session:
             if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
                 raise ProtocolError(f'{header} command received before handshake finished')
 
+        if header.is_extended and await self.handle_large_message(connection, header):
+            return
+
         command = header.command()
-
-        if header.is_extended:
-            if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
-                raise ForceDisconnectError('large message received but invalid')
-
-            if header.payload_len > 10_000_000:
-                # FIXME: handle large payloads in a streaming fashion
-                raise ForceDisconnectError('streaming messages not yet implemented')
-            # Payload is small - read it all in now, just as for standard messages
-
         payload = await connection.recv_exactly(header.payload_len)
         handler = getattr(self, f'on_{command}', None)
         if not handler:
@@ -937,6 +942,31 @@ class Session:
             raise error(f'bad checksum for {header} command')
 
         await handler(payload)
+
+    async def handle_large_message(self, connection, header):
+        if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
+            raise ForceDisconnectError('large message received but invalid')
+
+        # If the payload is small read it all in - just as for standard messages
+        if header.payload_len < self.streaming_min_size:
+            return False
+
+        command = header.command()
+        size = header.payload_len
+        handler = getattr(self, f'on_{command}_large', None)
+        if not handler:
+            self.logger.warning(f'ignoring large {command} with payload of {size:,d} bytes')
+            async for _chunk in connection.recv_chunks(size):
+                pass
+        else:
+            await handler(connection, size)
+        return True
+
+    async def read_and_ignore_payload(self, connection, payload_len):
+        while payload_len > 0:
+            size = min(1_000_000, payload_len)
+            await connection.recv_exactly(size)
+            payload_len -= size
 
     # Call to request various things from the peer
 

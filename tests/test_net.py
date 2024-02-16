@@ -18,6 +18,7 @@ from bitcoinx.net import (
     ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Session, version_payload, read_version_payload, pack_block_locator,
+    _command
 )
 
 
@@ -776,6 +777,11 @@ def print_caplog(caplog):
         print(record.message)
 
 
+async def achunks(payload, size):
+    for chunk in chunks(payload, size):
+        yield chunk
+
+
 async def pause():
     await asyncio.sleep(0.001)
 
@@ -875,8 +881,6 @@ class TestSession:
 
         class ConnectingSession(Session):
             async def perform_handshake(self, connection):
-                from bitcoinx.net import _command
-
                 await super().perform_handshake(connection)
                 await self.send_message(_command('zombie'), b'')
                 await pause()
@@ -1027,6 +1031,7 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             asyncio.run(test())
 
+        print_caplog(caplog)
         assert in_caplog(caplog, 'error handling incoming connection: connected to ourself')
         assert in_caplog(caplog, 'connection closed remotely')
 
@@ -1148,10 +1153,8 @@ class TestSession:
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
                 payload = self.our_protoconf.payload()
-                async def feeder():
-                    for chunk in chunks(payload, 4):
-                        yield chunk
-                await self.send_large_message(MessageHeader.PROTOCONF, len(payload), feeder())
+                await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                              achunks(payload, 4))
                 await pause()
                 assert listener_session.their_protoconf == self.our_protoconf
                 raise MemoryError
@@ -1169,15 +1172,14 @@ class TestSession:
         class ConnectingSession(Session):
             async def send_protoconf(self):
                 payload = self.our_protoconf.payload()
-                async def feeder():
-                    for chunk in chunks(payload, 4):
-                        yield chunk
                 # We should not accept sending a large message
                 with pytest.raises(RuntimeError):
-                    await self.send_large_message(MessageHeader.PROTOCONF, len(payload), feeder())
+                    await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                                  achunks(payload, 4))
                 # Override the check
                 self.can_send_large_messages = True
-                await self.send_large_message(MessageHeader.PROTOCONF, len(payload), feeder())
+                await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                              achunks(payload, 4))
                 await pause()
 
         async def test():
@@ -1192,5 +1194,39 @@ class TestSession:
 
         assert in_caplog(caplog, 'large message received but invalid')
 
+    def test_send_streaming_message(self, caplog, listening_node):
 
-    # TODO: streaming messages
+        class ListeningSession(Session):
+            async def on_zombie_large(self, connection, size):
+                parts = [chunk async for chunk in connection.recv_chunks(size)]
+                self.zombie_payload = b''.join(parts)
+
+            async def on_zombie(self, payload):
+                self.zombie_payload2 = payload
+
+        class ConnectingSession(Session):
+            async def send_protoconf(self):
+                listener_session = list(listening_node.incoming_sessions)[0]
+                listener_session.streaming_min_size = 200
+                await self.send_large_message(_command('zombie'), len(payload),
+                                              achunks(payload, 100))
+                await self.send_message(_command('zombie'), payload)
+                await self.send_large_message(_command('ghoul'), len(payload),
+                                              achunks(payload, 100))
+                await pause()
+                assert listener_session.zombie_payload == payload
+                assert listener_session.zombie_payload2 == payload
+                raise MemoryError
+
+        async def test():
+            async with listening_node.listen(session_cls=ListeningSession):
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(MemoryError):
+                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        payload = urandom(2000)
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(test())
+
+        print_caplog(caplog)
+        assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
