@@ -538,16 +538,16 @@ class Protoconf:
         return Protoconf(max_payload, stream_policies.split(b','))
 
 
-class NetworkProtocol:
+def random_nonce():
+    '''A nonce suitable for a PING or VERSION messages.'''
+    # bitcoind doesn't like zero nonces
+    while True:
+        nonce = os.urandom(8)
+        if nonce != ZERO_NONCE:
+            return nonce
 
-    @classmethod
-    def random_nonce(cls):
-        '''A nonce suitable for a PING or VERSION messages.'''
-        # bitcoind doesn't like zero nonces
-        while True:
-            nonce = os.urandom(8)
-            if nonce != ZERO_NONCE:
-                return nonce
+
+class NetworkProtocol:
 
     @classmethod
     def version_payload(cls, service, remote_service, nonce):
@@ -650,21 +650,7 @@ class Connection:
         await self.writer.drain()
 
     async def recv_exactly(self, nbytes):
-        recv = self.reader.readexactly
-        parts = []
-        while nbytes > 0:
-            try:
-                part = await recv(nbytes)
-            except CancelledError as e:
-                e.bytes_read = b''.join(parts)
-                raise
-            if not part:
-                e = EOFError('unexpected end of data')
-                e.bytes_read = b''.join(parts)
-                raise e
-            parts.append(part)
-            nbytes -= len(part)
-        return b''.join(parts)
+        return await self.reader.readexactly(nbytes)
 
 
 class Node:
@@ -676,6 +662,16 @@ class Node:
         self.service = service
         self.network = network
         self.headers = headers
+        self.sessions = set()
+
+    def random_nonce(self):
+        while True:
+            nonce = random_nonce()
+            if not self.is_our_nonce(nonce):
+                return nonce
+
+    def is_our_nonce(self, nonce):
+        return any(nonce == session.nonce for session in self.sessions)
 
     async def connect(self, service, *, session_cls=None):
         '''Establish an outgoing connection to a service (a BitcoinService instance).  When
@@ -686,7 +682,11 @@ class Node:
         reader, writer = await open_connection(str(address.host), address.port)
         connection = Connection(reader, writer)
         session = (session_cls or Session)(self, service, connection, True)
-        await session.maintain_connection(connection)
+        self.sessions.add(session)
+        try:
+            await session.maintain_connection(connection)
+        finally:
+            self.sessions.remove(session)
 
     def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
@@ -708,7 +708,13 @@ class Listener:
         remote_service = BitcoinService(address=NetAddress(host, port))
         connection = Connection(reader, writer)
         session = self.session_cls(self.node, remote_service, connection, False)
-        await session.maintain_connection(connection)
+        try:
+            await session.maintain_connection(connection)
+        except Exception as e:
+            logging.exception(f'error handling incoming connection: {e}')
+        finally:
+            writer.close()
+            await writer.wait_closed()
 
     async def __aenter__(self):
         host = str(self.node.service.address.host)
@@ -760,7 +766,7 @@ class Session:
         self.headers_synced = Event()
         self.protoconf_sent = False
         self.their_protoconf = None
-        self.nonce = NetworkProtocol.random_nonce()
+        self.nonce = self.node.random_nonce()
 
         # Logging
         logger = logging.getLogger('Session')
@@ -774,15 +780,18 @@ class Session:
 
     async def maintain_connection(self, connection):
         '''Maintains a connection.'''
-        async with TaskGroup() as group:
-            group.create_task(self.recv_messages_loop(connection))
-            group.create_task(self.send_messages_loop(connection))
-            if self._perform_handshake:
-                group.create_task(self.perform_handshake(connection))
-            if self._send_protoconf:
-                group.create_task(self.send_protoconf())
-            # if self.sync_headers:
-            #     group.create_task(self.get_headers())
+        try:
+            async with TaskGroup() as group:
+                group.create_task(self.recv_messages_loop(connection))
+                group.create_task(self.send_messages_loop(connection))
+                if self._perform_handshake:
+                    group.create_task(self.perform_handshake(connection))
+                if self._send_protoconf:
+                    group.create_task(self.send_protoconf())
+                # if self.sync_headers:
+                #     group.create_task(self.get_headers())
+        except ExceptionGroup as e:
+            raise e.exceptions[0] from None
 
     async def send_messages_loop(self, connection):
         '''Handle sending the queue of messages.  This sends all messages except the initial
@@ -807,16 +816,16 @@ class Session:
             try:
                 header = await MessageHeader.from_stream(connection.recv_exactly)
                 await self.handle_message(connection, header)
-            except EOFError:
-                self.logger.info('connection closed remotely')
-                raise
+            except (asyncio.IncompleteReadError, ConnectionResetError):
+                self.logger.error('connection closed remotely')
+                raise ConnectionResetError('connection closed remotely') from None
             except ForceDisconnectError as e:
-                self.logger.error(f'fatal protocol error, disconnecting: {e}')
                 raise
             except ProtocolError as e:
                 self.logger.error(f'protocol error: {e}')
             except Exception:
-                self.logger.exception(f'internal error handling {header} message')
+                self.logger.exception(f'unexpected error handling {header} message')
+                raise
 
     async def _send_unqueued(self, connection, command, payload):
         '''Send a command without queueing.  For use with handshake negotiation.'''
@@ -830,13 +839,7 @@ class Session:
         self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
                          f'relay={serv.relay} timestamp={serv.timestamp} assoc_id={serv.assoc_id}')
 
-    async def perform_handshake(self, connection):
-        '''Perform the initial handshake.  Send version and verack messages, and wait until a
-        verack is received back.'''
-        if not self.is_outgoing:
-            # Incoming connections wait for version message first
-            await self.version_received.wait()
-
+    async def _send_version_message(self, connection):
         # Send version message with our current height
         our_service = self.node.service
         our_service.start_height = 1000 # self.node.headers.height
@@ -844,8 +847,17 @@ class Session:
         payload = NetworkProtocol.version_payload(our_service, self.remote_service.address,
                                                   self.nonce)
         await self._send_unqueued(connection, MessageHeader.VERSION, payload)
-
         self.version_sent = True
+
+    async def perform_handshake(self, connection):
+        '''Perform the initial handshake.  Send version and verack messages, and wait until a
+        verack is received back.'''
+        if not self.is_outgoing:
+            # Incoming connections wait for version message first
+            await self.version_received.wait()
+
+        await self._send_version_message(connection)
+
         if self.is_outgoing:
             # Outoing connections wait now
             await self.version_received.wait()
@@ -961,9 +973,9 @@ class Session:
         they report it (except the address is unchanged).'''
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
-        await self.version_received.set()
-        _, _, nonce = self.remote_service.read_version_payload(payload)
-        if nonce == self.nonce:
+        self.version_received.set()
+        _, _, nonce = NetworkProtocol.read_version_payload(self.remote_service, payload)
+        if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
         self.log_service_details(self.remote_service, 'received version message:')
 
@@ -974,7 +986,7 @@ class Session:
             self.logger.error('duplicate verack message')
         if payload:
             self.logger.error('verack message has payload')
-        await self.verack_received.set()
+        self.verack_received.set()
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''

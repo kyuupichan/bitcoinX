@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import random
 import time
 from io import BytesIO
@@ -11,7 +12,7 @@ import pytest
 from bitcoinx import (
     Bitcoin, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
 )
-from bitcoinx.errors import ProtocolError
+from bitcoinx.errors import ProtocolError, ForceDisconnectError
 from bitcoinx.net import (
     ServicePacking, NetAddress, NetworkProtocol, BitcoinService, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
@@ -753,11 +754,18 @@ class TestNetworkProtocol:
         assert result == (X_service.address, X_service.services, nonce)
 
 
+listen_host = IPv4Address('127.0.0.1')
+
 @pytest.fixture
 def listening_node():
-    service = BitcoinService(address=NetAddress('127.0.0.1', 5656))
+    service = BitcoinService(address=NetAddress(listen_host, 5656))
     node = Node(service, Bitcoin, None)
     yield node
+
+
+def in_caplog(caplog, message, count=1):
+    return sum(message in record.message
+               for record in caplog.records) == count
 
 
 class TestNode:
@@ -765,28 +773,127 @@ class TestNode:
     def test_simple_listen(self, listening_node):
         async def test():
             async with listening_node.listen():
-                assert str(listening_node.service.address.host) == '127.0.0.1'
+                assert listening_node.service.address.host == listen_host
                 assert listening_node.network is Bitcoin
 
         asyncio.run(test())
 
+
+class TestSession:
+
     def test_simple_connect(self, listening_node):
-        pair = None
+        conn_pair = None
+        event = asyncio.Event()
+
         class ConnectingSession(Session):
             async def maintain_connection(self, connection):
-                nonlocal pair
-                pair = (self, connection)
+                nonlocal conn_pair
+                conn_pair = (self, connection)
+                await event.wait()
+
+        listen_pair = None
+        class ListeningSession(Session):
+            async def maintain_connection(self, connection):
+                nonlocal listen_pair
+                listen_pair = (self, connection)
+                event.set()
+
+        async def test():
+            async with listening_node.listen(session_cls=ListeningSession):
+                node = Node(BitcoinService(), Bitcoin, None)
+                await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+                conn_session, connection = conn_pair
+                assert isinstance(conn_session, ConnectingSession)
+                assert conn_session.node is node
+                assert conn_session.remote_service is listening_node.service
+                assert conn_session.connection is connection
+                assert conn_session.is_outgoing
+                assert conn_session.our_protoconf == Protoconf.default()
+
+                listen_session, connection = listen_pair
+                assert isinstance(listen_session, ListeningSession)
+                assert listen_session.node is listening_node
+                assert listen_session.remote_service.address.host == listen_host
+                assert not listen_session.is_outgoing
+                assert listen_session.our_protoconf == Protoconf.default()
+
+        asyncio.run(test())
+
+    def test_listener_waits_for_version_message(self, listening_node):
+        async def test():
+            async with listening_node.listen():
+
+                class ConnectingSession(Session):
+                    async def maintain_connection(self, connection):
+                        await connection.recv_exactly(1)
+
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(asyncio.TimeoutError):
+                    async with asyncio.timeout(0.05):
+                        await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+        asyncio.run(test())
+
+    def test_connector_sends_version_message(self, listening_node):
+
+        class ListeningSession(Session):
+            async def on_version(self, payload):
+                NetworkProtocol.read_version_payload(self.remote_service, payload)
+                raise ForceDisconnectError('test')
+
+        async def test():
+            async with listening_node.listen(session_cls=ListeningSession):
+                node = Node(BitcoinService(), Bitcoin, None)
+                with pytest.raises(ConnectionResetError) as e:
+                    await node.connect(listening_node.service)
+
+        asyncio.run(test())
+
+    def test_duplicate_version_message(self, caplog, listening_node):
+
+        class ConnectingSession(Session):
+            async def maintain_connection(self, connection):
+                 await self._send_version_message(connection)
+                 await self._send_version_message(connection)
+                 await asyncio.sleep(0.001)
 
         async def test():
             async with listening_node.listen():
                 node = Node(BitcoinService(), Bitcoin, None)
                 await node.connect(listening_node.service, session_cls=ConnectingSession)
-                session, connection = pair
-                assert isinstance(session, ConnectingSession)
-                assert session.node is node
-                assert session.remote_service is listening_node.service
-                assert session.connection is connection
-                assert session.is_outgoing
-                assert session.our_protoconf == Protoconf.default()
 
-        asyncio.run(test())
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, f'protocol error: duplicate version message')
+
+    def test_self_connect(self, caplog, listening_node):
+
+        async def test():
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    await listening_node.connect(listening_node.service)
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(test())
+
+        assert in_caplog(caplog, f'error handling incoming connection: connected to ourself')
+        assert in_caplog(caplog, f'connection closed remotely')
+
+    # def test_bad_version_message(self, caplog, listening_node):
+
+    #     class ConnectingSession(Session):
+    #         async def maintain_connection(self, connection):
+    #              await self._send_version_message(connection)
+    #              await asyncio.sleep(0.001)
+
+    #     async def test():
+    #         async with listening_node.listen():
+    #             node = Node(BitcoinService(), Bitcoin, None)
+    #             await node.connect(listening_node.service, session_cls=ConnectingSession)
+
+    #     with caplog.at_level(logging.ERROR):
+    #         asyncio.run(test())
+
+    #     assert in_caplog(caplog, f'protocol error: duplicate version message')
