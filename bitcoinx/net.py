@@ -705,8 +705,11 @@ class Node:
         '''
         async def on_incoming_session(session_cls, reader, writer):
             host, port = writer.transport.get_extra_info('peername')
-            remote_service = BitcoinService(address=NetAddress(host, port))
-            await self.run_session(remote_service, Connection(reader, writer), session_cls, False)
+            remote = BitcoinService(address=NetAddress(host, port))
+            try:
+                await self.run_session(remote, Connection(reader, writer), session_cls, False)
+            except Exception as e:
+                logging.exception(f'error handling incoming connection: {e}')
 
         host = str(self.service.address.host)
         port = self.service.address.port
@@ -723,11 +726,6 @@ class Node:
         sessions.add(session)
         try:
             await session.maintain_connection(connection)
-        except Exception as e:
-            if is_outgoing:
-                raise
-            else:
-                logging.exception(f'error handling incoming connection: {e}')
         finally:
             sessions.remove(session)
             await connection.close()
