@@ -699,6 +699,12 @@ class Connection:
             yield chunk
             size -= recv_size
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
 
 class Node:
     '''A node talks on a single network, e.g., mainnet.  Connections to peers are represented
@@ -712,6 +718,13 @@ class Node:
         self.outgoing_sessions = set()
         self.incoming_sessions = set()
         self.genesis_header = None
+
+    async def ensure_genesis_header(self):
+        if not self.genesis_header:
+            self.genesis_header = await self.headers.header_from_hash(
+                header_hash(self.network.genesis_header))
+            if not self.genesis_header:
+                raise RuntimeError(f'cannot find genesis header for {self.network}')
 
     async def height(self):
         return (await self.longest_chain()).tip.height
@@ -769,17 +782,19 @@ class Node:
         maintain_connection().
         '''
         reader, writer = await open_connection(str(service.address.host), service.address.port)
-        await self.run_session(service, Connection(reader, writer), session_cls or Session, True)
+        async with Connection(reader, writer) as connection:
+            await self.run_session(service, connection, session_cls or Session, True)
 
     def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
         async def on_incoming_session(session_cls, reader, writer):
-            host, port = writer.transport.get_extra_info('peername')
-            remote = BitcoinService(address=NetAddress(host, port))
             try:
-                await self.run_session(remote, Connection(reader, writer), session_cls, False)
+                async with Connection(reader, writer) as connection:
+                    host, port = writer.transport.get_extra_info('peername')
+                    remote = BitcoinService(address=NetAddress(host, port))
+                    await self.run_session(remote, connection, session_cls, False)
             except Exception as e:
                 logging.exception(f'error handling incoming connection: {e}')
 
@@ -793,9 +808,7 @@ class Node:
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
-        if not self.genesis_header:
-            self.genesis_header = await self.headers.header_from_hash(
-                header_hash(self.network.genesis_header))
+        await self.ensure_genesis_header()
         sessions = self.outgoing_sessions if is_outgoing else self.incoming_sessions
         session = session_cls(self, service, connection, is_outgoing)
         sessions.add(session)
@@ -803,7 +816,6 @@ class Node:
             await session.maintain_connection(connection)
         finally:
             sessions.remove(session)
-            await connection.close()
 
 
 class Listener:
@@ -843,7 +855,7 @@ class Session:
                  protoconf=None,
                  perform_handshake=True,
                  send_protoconf=True,
-                 sync_headers=True):
+                 sync_headers=False):
         self.node = node
         self.remote_service = remote_service
         # The main connection.  For now, the only one.

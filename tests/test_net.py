@@ -8,10 +8,13 @@ from io import BytesIO
 from ipaddress import IPv4Address, IPv6Address
 from os import urandom
 
+import asqlite3
 import pytest
+import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
+    Headers,
 )
 from bitcoinx.errors import ProtocolError, ForceDisconnectError
 from bitcoinx.misc import chunks
@@ -789,10 +792,36 @@ class TestNetworkProtocol:
 listen_host = IPv4Address('127.0.0.1')
 
 
+@pytest_asyncio.fixture
+async def listening_headers():
+    async with asqlite3.connect(':memory:') as conn:
+        headers = Headers(conn)
+        await headers.create_tables_if_not_present('main')
+        await headers.insert_genesis_header(Bitcoin.genesis_header)
+        yield headers
+
+
 @pytest.fixture
-def listening_node():
+def listening_node(listening_headers):
     service = BitcoinService(address=NetAddress(listen_host, 5656))
-    node = Node(service, Bitcoin, None)
+    node = Node(service, Bitcoin, listening_headers)
+    yield node
+    assert not node.incoming_sessions
+    assert not node.outgoing_sessions
+
+
+@pytest_asyncio.fixture
+async def client_headers():
+    async with asqlite3.connect(':memory:') as conn:
+        headers = Headers(conn)
+        await headers.create_tables_if_not_present('main')
+        await headers.insert_genesis_header(Bitcoin.genesis_header)
+        yield headers
+
+
+@pytest.fixture
+def client_node(client_headers):
+    node = Node(BitcoinService(), Bitcoin, client_headers)
     yield node
     assert not node.incoming_sessions
     assert not node.outgoing_sessions
@@ -820,23 +849,22 @@ async def pause(secs=None):
 
 class TestNode:
 
-    def test_simple_listen(self, listening_node):
-        async def test():
-            async with listening_node.listen():
-                assert listening_node.service.address.host == listen_host
-                assert listening_node.network is Bitcoin
-
-        asyncio.run(test())
+    @pytest.mark.asyncio
+    async def test_simple_listen(self, listening_node):
+        async with listening_node.listen():
+            assert listening_node.service.address.host == listen_host
+            assert listening_node.network is Bitcoin
 
 
 class TestSession:
 
-    def test_simple_connect(self, listening_node):
+    @pytest.mark.asyncio
+    async def test_simple_connect(self, client_node, listening_node):
         conn_pair = None
         listen_pair = None
         event = asyncio.Event()
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def maintain_connection(self, connection):
                 nonlocal conn_pair
                 conn_pair = (self, connection)
@@ -850,11 +878,10 @@ class TestSession:
 
         async def test():
             async with listening_node.listen(session_cls=ListeningSession):
-                node = Node(BitcoinService(), Bitcoin, None)
-                await node.connect(listening_node.service, session_cls=ConnectingSession)
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
                 conn_session, connection = conn_pair
-                assert isinstance(conn_session, ConnectingSession)
+                assert isinstance(conn_session, OutSession)
                 assert conn_session.node is node
                 assert conn_session.remote_service is listening_node.service
                 assert conn_session.connection is connection
@@ -868,25 +895,22 @@ class TestSession:
                 assert not listen_session.is_outgoing
                 assert listen_session.our_protoconf == Protoconf.default()
 
-        asyncio.run(test())
-
-    def test_bad_magic(self, caplog, listening_node):
-
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), BitcoinTestnet, None)
-                with pytest.raises(ConnectionResetError):
-                    await node.connect(listening_node.service)
-
+    @pytest.mark.asyncio
+    async def test_bad_magic(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                client_node.network = BitcoinTestnet
+                await client_node.headers.insert_genesis_header(BitcoinTestnet.genesis_header)
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
 
         assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
                          'got 0xf4e5f3f4 expected 0xe3e1f3e8')
 
-    def test_bad_checksum(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_bad_checksum(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_message(self, command, payload):
                 connection = self.connection_for_command(command)
                 header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
@@ -898,34 +922,27 @@ class TestSession:
                 await pause()
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'protocol error: bad checksum for protoconf command')
 
-    def test_unhandled_command(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_unhandled_command(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def perform_handshake(self, connection):
                 await super().perform_handshake(connection)
                 await self.send_message(_command('zombie'), b'')
                 await pause()
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.DEBUG):
-            asyncio.run(test())
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'ignoring unhandled zombie command')
 
@@ -933,137 +950,116 @@ class TestSession:
     # VERSION message tests
     #
 
-    def test_listener_waits_for_version_message(self, listening_node):
-        async def test():
-            async with listening_node.listen():
+    @pytest.mark.asyncio
+    async def test_listener_waits_for_version_message(self, client_node, listening_node):
+        async with listening_node.listen():
 
-                class ConnectingSession(Session):
-                    async def maintain_connection(self, connection):
-                        await connection.recv_exactly(1)
+            class OutSession(Session):
+                async def maintain_connection(self, connection):
+                    await connection.recv_exactly(1)
 
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(asyncio.TimeoutError):
-                    async with asyncio.timeout(0.05):
-                        await node.connect(listening_node.service, session_cls=ConnectingSession)
+            with pytest.raises(asyncio.TimeoutError):
+                async with asyncio.timeout(0.05):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
-        asyncio.run(test())
-
-    def test_connector_sends_version_message(self, listening_node):
+    @pytest.mark.asyncio
+    async def test_connector_sends_version_message(self, client_node, listening_node):
 
         class ListeningSession(Session):
             async def on_version(self, payload):
                 read_version_payload(self.remote_service, payload)
                 raise ForceDisconnectError('test')
 
-        async def test():
-            async with listening_node.listen(session_cls=ListeningSession):
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(ConnectionResetError):
-                    await node.connect(listening_node.service)
+        async with listening_node.listen(session_cls=ListeningSession):
+            with pytest.raises(ConnectionResetError):
+                await client_node.connect(listening_node.service)
 
-        asyncio.run(test())
 
-    def test_duplicate_version_message(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_duplicate_version_message(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def maintain_connection(self, connection):
                 await self.send_version_message(connection)
                 await self.send_version_message(connection)
                 await pause()
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                await node.connect(listening_node.service, session_cls=ConnectingSession)
 
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'protocol error: duplicate version message')
 
-    def test_send_verack_first(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_send_verack_first(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def maintain_connection(self, connection):
                 await self.send_verack_message(connection)
                 await pause()
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'verack message received before version message sent')
 
-    def test_send_protoconf_first(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_send_protoconf_first(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def maintain_connection(self, connection):
                 await self._send_unqueued(connection, MessageHeader.PROTOCONF,
                                           self.our_protoconf.payload())
                 await pause()
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'protocol error: protoconf command '
                          'received before handshake finished')
 
-    def test_send_corrupt_version_message(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_send_corrupt_version_message(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def maintain_connection(self, connection):
                 await self._send_unqueued(connection, MessageHeader.VERSION,
                                           bytes(10))
                 await pause()
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'corrupt version message')
 
-    def test_send_long_version_message(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_send_long_version_message(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def maintain_connection(self, connection):
                 await self._send_unqueued(connection, MessageHeader.VERSION,
                                           await self.version_payload() + bytes(2))
                 await pause()
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                await node.connect(listening_node.service, session_cls=ConnectingSession)
 
         with caplog.at_level(logging.INFO):
-            asyncio.run(test())
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'extra bytes at end of version payload')
 
-    def test_self_connect(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_self_connect(self, listening_node, caplog):
 
-        async def test():
+        with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
                     await listening_node.connect(listening_node.service)
 
-        with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
-
-        print_caplog(caplog)
         assert in_caplog(caplog, 'error handling incoming connection: connected to ourself')
         assert in_caplog(caplog, 'connection closed remotely')
 
@@ -1071,42 +1067,36 @@ class TestSession:
     # VERACK message tests
     #
 
-    def test_duplicate_verack_message(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_duplicate_verack_message(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_verack_message(self, connection):
                 await super().send_verack_message(connection)
                 await super().send_verack_message(connection)
                 await pause()
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'protocol error: duplicate verack message')
 
-    def test_verack_payload(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_verack_payload(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_verack_message(self, connection):
                 await self._send_unqueued(connection, MessageHeader.VERACK, b'0')
                 await pause()
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.INFO):
-            asyncio.run(test())
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'verack message has payload')
 
@@ -1114,9 +1104,10 @@ class TestSession:
     # PROTOCONF message tests
     #
 
-    def test_protoconf_understood(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_protoconf_understood(self, client_node, listening_node):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_protoconf(self):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
@@ -1125,17 +1116,14 @@ class TestSession:
                 assert listener_session.their_protoconf == self.our_protoconf
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
-        asyncio.run(test())
+    @pytest.mark.asyncio
+    async def test_duplicate_protoconf_received(self, client_node, listening_node, caplog):
 
-    def test_duplicate_protoconf_received(self, caplog, listening_node):
-
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_protoconf(self):
                 await super().send_protoconf()
                 self.protoconf_sent = False
@@ -1143,34 +1131,27 @@ class TestSession:
                 await pause()
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'protocol error: duplicate protoconf message received')
 
-    def test_duplicate_protoconf_not_sent(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_duplicate_protoconf_not_sent(self, client_node, listening_node, caplog):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_protoconf(self):
                 await super().send_protoconf()
                 await super().send_protoconf()
                 await pause()
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert not in_caplog(caplog, 'duplicate protoconf')
 
@@ -1178,9 +1159,10 @@ class TestSession:
     # EXTMSG message tests
     #
 
-    def test_send_protoconf_as_large_message(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_send_protoconf_as_large_message(self, client_node, listening_node):
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_protoconf(self):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
@@ -1191,17 +1173,14 @@ class TestSession:
                 assert listener_session.their_protoconf == self.our_protoconf
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=OutSession)
 
-        asyncio.run(test())
+    @pytest.mark.asyncio
+    async def test_large_message_rejections(self, client_node, listening_node, caplog):
 
-    def test_large_message_reject_send_and_receive(self, caplog, listening_node):
-
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_protoconf(self):
                 payload = self.our_protoconf.payload()
                 # We should not accept sending a large message
@@ -1214,19 +1193,16 @@ class TestSession:
                                               achunks(payload, 4))
                 await pause()
 
-        async def test():
+        with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
             async with listening_node.listen():
-                node = Node(BitcoinService(), Bitcoin, None)
                 with pytest.raises(ConnectionResetError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
-        with caplog.at_level(logging.ERROR):
-            asyncio.run(test())
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'large message received but invalid')
 
-    def test_send_streaming_message(self, caplog, listening_node):
+    @pytest.mark.asyncio
+    async def test_send_streaming_message(self, client_node, listening_node, caplog):
 
         class ListeningSession(Session):
             async def on_zombie_large(self, connection, size):
@@ -1236,7 +1212,7 @@ class TestSession:
             async def on_zombie(self, payload):
                 self.zombie_payload2 = payload
 
-        class ConnectingSession(Session):
+        class OutSession(Session):
             async def send_protoconf(self):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 listener_session.streaming_min_size = 200
@@ -1250,15 +1226,10 @@ class TestSession:
                 assert listener_session.zombie_payload2 == payload
                 raise MemoryError
 
-        async def test():
-            async with listening_node.listen(session_cls=ListeningSession):
-                node = Node(BitcoinService(), Bitcoin, None)
-                with pytest.raises(MemoryError):
-                    await node.connect(listening_node.service, session_cls=ConnectingSession)
-
         payload = urandom(2000)
         with caplog.at_level(logging.WARNING):
-            asyncio.run(test())
+            async with listening_node.listen(session_cls=ListeningSession):
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
 
-        print_caplog(caplog)
         assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
