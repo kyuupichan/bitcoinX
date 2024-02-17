@@ -18,7 +18,8 @@ from bitcoinx.misc import chunks
 from bitcoinx.net import (
     ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart, Node, Session, version_payload, read_version_payload, pack_block_locator,
+    ServicePart, Node, Session, version_payload, read_version_payload,
+    pack_getheaders_payload, unpack_getheaders_payload,
     _command
 )
 
@@ -642,7 +643,36 @@ def random_service():
 
 class TestNetworkProtocol:
 
-    def test_pack_block_locator(self):
+    @pytest.mark.parametrize("version, count, hash_stop", (
+        (70_015, 5, False),
+        (70_016, 20, True),
+        (70_015, 0, True),
+    ))
+    def test_getheaders_payload(self, version, count, hash_stop):
+        locator = [urandom(32) for _ in range(count)]
+        hash_stop = urandom(32) if hash_stop else None
+        payload = pack_getheaders_payload(version, locator, hash_stop)
+        result = unpack_getheaders_payload(payload)
+        assert result == (version, locator, hash_stop or bytes(32))
+
+    def test_getheaders_payload_short(self):
+        payload = pack_getheaders_payload(700, [urandom(32)], urandom(31))
+        with pytest.raises(ProtocolError) as e:
+            unpack_getheaders_payload(payload)
+        assert str(e.value) == 'truncated getheaders payload'
+
+    def test_getheaders_payload_long(self, caplog):
+        version = 700
+        locator = [urandom(32) for _ in range(3)]
+        hash_stop = urandom(32)
+        payload = pack_getheaders_payload(version, locator, hash_stop + b'0')
+        with caplog.at_level(logging.INFO):
+            result = unpack_getheaders_payload(payload)
+
+        assert result == (version, locator, hash_stop)
+        assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
+
+    def test_pack_getheaders_payload(self):
         def pack_hash(h):
             return h
 
@@ -651,9 +681,9 @@ class TestNetworkProtocol:
         protocol = 100
         answer = pack_le_int32(protocol) + pack_list(locator, pack_hash)
 
-        assert pack_block_locator(protocol, locator) == answer + bytes(32)
-        assert pack_block_locator(protocol, locator, None) == answer + bytes(32)
-        assert pack_block_locator(protocol, locator, hash_stop) \
+        assert pack_getheaders_payload(protocol, locator) == answer + bytes(32)
+        assert pack_getheaders_payload(protocol, locator, None) == answer + bytes(32)
+        assert pack_getheaders_payload(protocol, locator, hash_stop) \
             == answer + hash_stop
 
     def test_version_payload_bad_nonce(self):
