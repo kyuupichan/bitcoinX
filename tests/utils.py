@@ -68,13 +68,13 @@ def random_txinput_context():
     return TxInputContext(tx, input_index, utxo)
 
 
-def read_file(filename):
-    with open(os.path.join(data_dir, filename)) as f:
-        return f.read()
+def read_file(filename, count=None):
+    with open(os.path.join(data_dir, filename), 'rb') as f:
+        return f.read(count)
 
 
 def read_text_file(filename):
-    return read_file(filename).strip()
+    return read_file(filename).decode().strip()
 
 
 def read_tx(filename):

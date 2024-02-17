@@ -652,7 +652,7 @@ def pack_headers_payload(raw_headers):
             yield raw_header
             yield zero
 
-    return b''.join(parts)
+    return b''.join(parts())
 
 
 def unpack_headers_payload(payload):
@@ -750,7 +750,7 @@ class Node:
             if not header:
                 continue
             try:
-                chain_header = await self.headers.header_at_height(header.height)
+                chain_header = await self.headers.header_at_height(chain, header.height)
             except MissingHeader:
                 continue
             if header.hash == chain_header.hash:
@@ -1064,8 +1064,8 @@ class Session:
         is to synchronize the peer's headers.
         '''
         self.headers_synced.clear()
-        locator = await self.node.block_locator(self.their_tip.hash)
-        payload = pack_getheaders_payload(self.node.service.protocol_version, locator)
+        block_locator = await self.node.block_locator(self.their_tip.hash)
+        payload = pack_getheaders_payload(self.node.service.protocol_version, block_locator)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, payload)
@@ -1098,11 +1098,7 @@ class Session:
     async def on_getheaders(self, payload):
         _version, block_locator, hash_stop = unpack_getheaders_payload(payload)
         raw_headers = await self.node.get_raw_headers(block_locator, hash_stop, 2000)
-        if not raw_headers:
-            self.logger.warning(f'ignoring getheaders request for unknown block '
-                                f'{hash_to_hex_str(hash_stop)}')
-        else:
-            await self.send_message(MessageHeader.HEADERS, pack_headers_payload(raw_headers))
+        await self.send_message(MessageHeader.HEADERS, pack_headers_payload(raw_headers))
 
     async def on_inv(self, items):
         '''Called when an inv message is received advertising availability of various objects.'''

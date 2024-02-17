@@ -11,6 +11,8 @@ from bitcoinx import (
 )
 from bitcoinx.misc import chunks
 
+from .utils import read_file
+
 
 def run_test_with_headers(test_func):
     async def run():
@@ -189,8 +191,7 @@ class TestHeaders:
 
     @staticmethod
     async def insert_first_headers(headers, count):
-        with open('/Users/neil/raw_wallets/headers-mainnet.raw', 'rb') as f:
-            raw_headers = f.read(count * 80)[80:]
+        raw_headers = read_file('mainnet-headers-2016.raw', count * 80)[80:]
         await headers.insert_headers(raw_headers, Bitcoin)
         return raw_headers
 

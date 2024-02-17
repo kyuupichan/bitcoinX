@@ -1233,3 +1233,28 @@ class TestSession:
                     await client_node.connect(listening_node.service, session_cls=OutSession)
 
         assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
+
+    #
+    # EXTMSG message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_getheaders(self, client_node, listening_node, caplog):
+
+        headers_payload = None
+        class OutSession(Session):
+            async def on_headers(self, payload):
+                nonlocal headers_payload
+                headers_payload = payload
+
+            async def perform_handshake(self, connection):
+                await super().perform_handshake(connection)
+                await self.get_headers()
+                await pause()
+                raise MemoryError
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert headers_payload is not None

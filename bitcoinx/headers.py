@@ -42,9 +42,9 @@ def bits_to_difficulty(bits):
     return Bitcoin.max_target / bits_to_target(bits)
 
 
-def deserialized_header(raw, height):
+def deserialized_header(raw):
     '''Returns a deserialized header object.'''
-    return Header(*unpack_header(raw), header_hash(raw), raw, height)
+    return SimpleHeader(*unpack_header(raw), header_hash(raw))
 
 
 def header_bits(raw_header):

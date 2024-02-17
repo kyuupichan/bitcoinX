@@ -47,21 +47,19 @@ def test_Bitcoin(raw_header, hdr_hash, version, prev_hash, merkle_root,
     assert header_work(raw_header) == bits_to_work(bits)
     assert header_timestamp(raw_header) == timestamp
 
-    header = deserialized_header(raw_header, 0)
+    header = deserialized_header(raw_header)
     assert header.version == version
     assert header.prev_hash == prev_hash
     assert header.merkle_root == merkle_root
     assert header.timestamp == timestamp
     assert header.bits == bits
     assert header.nonce == nonce
-    assert header.raw == raw_header
+    assert header.to_bytes() == raw_header
     assert header.hash == hdr_hash
-    assert header.height == 0
     assert header.work() == header_work(raw_header)
     assert header.target() == bits_to_target(bits)
     assert header.hash_value() == hash_to_value(hdr_hash)
     assert header.hex_str() == hash_to_hex_str(hdr_hash)
-    assert 'height=0' in str(header)
 
 
 def test_from_WIF_byte():
