@@ -782,7 +782,7 @@ async def achunks(payload, size):
         yield chunk
 
 
-async def pause(secs=0.005):
+async def pause(secs=0.01):
     await asyncio.sleep(secs)
 
 
@@ -1089,7 +1089,7 @@ class TestSession:
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
                 await super().send_protoconf()
-                await pause(0.1)
+                await pause()
                 assert listener_session.their_protoconf == self.our_protoconf
                 raise MemoryError
 
@@ -1155,7 +1155,7 @@ class TestSession:
                 payload = self.our_protoconf.payload()
                 await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
                                               achunks(payload, 4))
-                await pause(0.1)
+                await pause()
                 assert listener_session.their_protoconf == self.our_protoconf
                 raise MemoryError
 
@@ -1213,7 +1213,7 @@ class TestSession:
                 await self.send_message(_command('zombie'), payload)
                 await self.send_large_message(_command('ghoul'), len(payload),
                                               achunks(payload, 100))
-                await pause(0.1)
+                await pause()
                 assert listener_session.zombie_payload == payload
                 assert listener_session.zombie_payload2 == payload
                 raise MemoryError
