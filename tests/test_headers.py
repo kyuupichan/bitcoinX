@@ -1,293 +1,442 @@
-import copy
-import math
+import dataclasses
+import os
 import random
-from os import urandom
+import sqlite3
 
 import pytest
-
-from bitcoinx.errors import MissingHeader, IncorrectBits, InsufficientPoW
-from bitcoinx.headers import (
-    Headers, Bitcoin, deserialized_header, header_hash, header_bits,
-    header_work, Chain, all_networks
+from bitcoinx import (
+    Bitcoin, BitcoinTestnet, header_hash, pack_header, MissingHeader, InsufficientPoW,
+    bits_to_work, Headers, SimpleHeader
 )
-
-from bitcoinx import pack_le_uint32
-
-
-some_good_bits = [486604799, 472518933, 453281356, 436956491]
+from bitcoinx.misc import chunks
 
 
-def random_raw_header(prev_hash=None, good_bits=None):
-    good_bits = good_bits or some_good_bits
-    raw_header = bytearray(urandom(80))
-    raw_header[72:76] = pack_le_uint32(random.choice(good_bits))
-    if prev_hash:
-        raw_header[4:36] = prev_hash
-    return bytes(raw_header)
+@pytest.fixture
+def conn():
+    conn = sqlite3.connect(':memory:')
+    yield conn
+    conn.close()
 
 
-class TestChainAndHeaders:
+@pytest.fixture
+def headers(conn):
+    result = Headers(conn, 'main')
+    with conn:
+        result.create_tables()
+        for network in (Bitcoin, BitcoinTestnet):
+            result.insert_genesis_header(network.genesis_header)
+    yield result
 
-    @classmethod
-    def setup_class(cls):
-        cls.N = 10
-        cls.common_height = cls.N // 2
 
-        cls.base_headers = []
-        cls.fork_headers = []
-        cls.headers = Headers(Bitcoin)
-        prev_hash = None
+class TestSimpleHeader:
 
-        for n in range(cls.N):
-            raw_header = Bitcoin.genesis_header if n == 0 else random_raw_header(prev_hash)
-            cls.base_headers.append(raw_header)
-            cls.headers.connect(raw_header, False)
-            prev_hash = header_hash(raw_header)
+    def test_eq(self):
+        assert (SimpleHeader.from_bytes(Bitcoin.genesis_header) !=
+                SimpleHeader.from_bytes(BitcoinTestnet.genesis_header))
 
-        cls.base_chain = list(cls.headers.tips)[0]
+    def test_hash(self):
+        assert len({
+            SimpleHeader.from_bytes(Bitcoin.genesis_header),
+            SimpleHeader.from_bytes(BitcoinTestnet.genesis_header)
+        }) == 2
 
-        prev_hash = header_hash(cls.base_headers[cls.common_height])
-        for n in range(cls.N):
-            raw_header = random_raw_header(prev_hash)
-            cls.fork_headers.append(raw_header)
-            cls.headers.connect(raw_header, False)
-            prev_hash = header_hash(raw_header)
+    @pytest.mark.parametrize('network', (Bitcoin, BitcoinTestnet))
+    def test_to_bytes(self, network):
+        raw = SimpleHeader.from_bytes(network.genesis_header).to_bytes()
+        assert raw == network.genesis_header
 
-        chains = set(cls.headers.tips)
-        chains.remove(cls.base_chain)
-        cls.fork_chain = chains.pop()
 
-    def test_parent(self):
-        assert self.base_chain.parent is None
-        assert self.fork_chain.parent is self.base_chain
+def same_headers(simple, detailed):
+    return all(getattr(simple, field.name) == getattr(detailed, field.name)
+               for field in dataclasses.fields(SimpleHeader))
 
-    def test_first_height(self):
-        assert self.base_chain.first_height == 0
-        assert self.fork_chain.first_height == self.common_height + 1
 
-    def test_height(self):
-        assert self.base_chain.height == self.N - 1
-        assert self.fork_chain.height == self.N + self.common_height
+def create_random_header(prev_header):
+    version = random.randrange(0, 10)
+    merkle_root = os.urandom(32)
+    timestamp = prev_header.timestamp + random.randrange(-300, 900)
+    bits = prev_header.bits
+    nonce = random.randrange(0, 1 << 32)
+    raw_header = pack_header(version, prev_header.hash, merkle_root, timestamp, bits, nonce)
+    return SimpleHeader.from_bytes(raw_header)
 
-    def test_chainwork(self):
-        assert self.base_chain.chainwork == sum(header_work(header)
-                                                for header in self.base_headers)
-        common_work = sum(header_work(self.base_headers[n]) for n in range(self.common_height + 1))
-        fork_work = sum(header_work(header) for header in self.fork_headers)
-        assert self.fork_chain.chainwork == common_work + fork_work
 
-    def test_tip(self):
-        assert self.base_chain.tip() == deserialized_header(self.base_headers[-1], self.N - 1)
-        assert self.fork_chain.tip() == deserialized_header(self.fork_headers[-1],
-                                                            self.common_height + self.N)
+def create_random_branch(prev_header, length):
+    branch = []
+    for _ in range(length):
+        header = create_random_header(prev_header)
+        branch.append(header)
+        prev_header = header
+    return branch
 
-    def test_raw_header_at_height(self):
-        for n in range(self.base_chain.height + 1):
-            raw_header = self.base_chain.raw_header_at_height(n)
-            assert isinstance(raw_header, bytes)
-            assert raw_header == self.base_headers[n]
 
-        for n in range(self.fork_chain.height + 1):
-            raw_header = self.fork_chain.raw_header_at_height(n)
-            assert isinstance(raw_header, bytes)
-            if n <= self.common_height:
-                assert raw_header == self.base_headers[n]
+def create_random_tree(base_header, branch_count=10, max_branch_length=10):
+    headers = [base_header]
+    tree = []
+    for _ in range(branch_count):
+        branch_header = random.choice(headers)
+        branch_length = random.randrange(1, max_branch_length + 1)
+        branch = create_random_branch(branch_header, branch_length)
+        tree.append((branch_header, branch))
+        # To form a branch, a branch must be based on other than a tip
+        headers.extend(branch[:-1])
+
+    return tree
+
+
+def insert_tree(headers, tree):
+    for _, branch in tree:
+        headers.insert_headers(b''.join(header.to_bytes() for header in branch), None)
+
+
+COLNAMES = ('prev_hdr_id', 'height', 'chain_id', 'chain_work', 'hash', 'merkle_root', 'version',
+            'timestamp', 'bits', 'nonce')
+
+
+class TestHeaders:
+
+    COMMON_KEYS = ('hash', 'merkle_root', 'version', 'timestamp', 'bits', 'nonce')
+
+    def test_headers(self, headers):
+        assert not headers.conn.in_transaction
+
+    @pytest.mark.parametrize('network', (Bitcoin, BitcoinTestnet))
+    def test_genesis_header(self, headers, network):
+        header = SimpleHeader.from_bytes(network.genesis_header)
+        header2 = headers.header_from_hash(header.hash)
+        assert same_headers(header, header2)
+
+    def test_genesis_merkle_root(self, headers):
+        # Only test for Bitcoin, as Testnet genesis merkle root is identical
+        header = SimpleHeader.from_bytes(Bitcoin.genesis_header)
+        header2 = headers.header_from_merkle_root(header.merkle_root)
+        assert same_headers(header, header2)
+
+    @pytest.mark.parametrize('chain_id', (1, 2))
+    def test_genesis_chains_table(self, headers, chain_id):
+        cursor = headers.conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        row = cursor.execute(f'SELECT * FROM Chains WHERE chain_id={chain_id}').fetchone()
+        assert row['parent_chain_id'] is None
+        assert row['base_hdr_id'] == row['tip_hdr_id']
+        assert row['base_hdr_id'] == chain_id
+
+    def test_genesis_chains(self, headers):
+        mainnet_genesis = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        testnet_genesis = headers.header_from_hash(header_hash(BitcoinTestnet.genesis_header))
+
+        chains = headers.chains()
+        assert len(chains) == 2
+        if headers.header_at_height(chains[0], 0) == mainnet_genesis:
+            mainnet, testnet = chains
+        else:
+            testnet, mainnet = chains
+
+        assert mainnet.tip == headers.header_at_height(mainnet, 0) == mainnet_genesis
+        assert testnet.tip == headers.header_at_height(testnet, 0) == testnet_genesis
+
+    @pytest.mark.parametrize('colname', ('hash', 'merkle_root'))
+    def test_unique_columns(self, headers, colname):
+        header = SimpleHeader.from_bytes(Bitcoin.genesis_header)
+        blob_literal = f"x'{getattr(header, colname).hex()}'"
+        columns, values = self.columns_and_values(colname, blob_literal)
+        with pytest.raises(sqlite3.IntegrityError) as e:
+            headers.conn.execute(f'INSERT INTO Headers({columns}) VALUES ({values});')
+        assert f'UNIQUE constraint failed: Headers.{colname}' == str(e.value)
+
+    @staticmethod
+    def columns_and_values(colname, value):
+        columns = ', '.join(COLNAMES)
+        values = [0] * len(COLNAMES)
+        if colname:
+            values[COLNAMES.index(colname)] = value
+        values = ', '.join(str(value) for value in values)
+        return columns, values
+
+    @pytest.mark.parametrize('colname', COLNAMES[1:])
+    def test_null_insertions(self, headers, colname):
+        columns, values = self.columns_and_values(colname, 'NULL')
+        with pytest.raises(sqlite3.IntegrityError) as e:
+            headers.conn.execute(f'INSERT INTO Headers({columns}) VALUES ({values});')
+        assert 'NOT NULL constraint failed' in str(e.value)
+
+    # Tests that test_null_insertions() logic works
+    def test_no_null_insertions(self, headers):
+        columns, values = self.columns_and_values(None, None)
+        headers.conn.execute(f'INSERT INTO Headers({columns}) VALUES ({values});')
+
+    @staticmethod
+    def insert_first_headers(headers, count):
+        with open('/Users/neil/raw_wallets/headers-mainnet.raw', 'rb') as f:
+            raw_headers = f.read(count * 80)[80:]
+        headers.insert_headers(raw_headers, Bitcoin)
+        return raw_headers
+
+    def test_insert_headers(self, headers):
+        assert not headers.conn.in_transaction
+        raw_headers = self.insert_first_headers(headers, 10)
+        cursor = headers.conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        result = cursor.execute('SELECT * from Headers WHERE height ORDER BY height').fetchall()
+        for row, (height, raw_header) in zip(result, enumerate(chunks(raw_headers, 80), start=1)):
+            header = SimpleHeader.from_bytes(raw_header)
+            for attrib in self.COMMON_KEYS:
+                assert row[attrib] == getattr(header, attrib)
+            assert row['height'] == height
+
+        chains = headers.chains()
+        assert len(chains) == 2
+        genesis_hash = header_hash(Bitcoin.genesis_header)
+        mainnet = (chains[0] if headers.header_at_height(chains[0], 0).hash == genesis_hash
+                   else chains[1])
+        assert mainnet.tip.hash == header_hash(raw_headers[-80:])
+
+    def test_insert_headers_bad(self, headers):
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        branch = create_random_branch(genesis_header, 4)
+        raw_headers = [bytearray(header.to_bytes()) for header in branch]
+        # muck up prev_hash
+        raw_headers[2][7] ^= 1
+        with pytest.raises(MissingHeader):
+            headers.insert_headers(raw_headers, None)
+
+    def test_insert_existing_headers(self, headers):
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        N = 5
+        branch = create_random_branch(genesis_header, N)
+        headers.insert_headers([header.to_bytes() for header in branch[:N - 1]], None)
+        chain = headers.longest_chain(genesis_header)
+        assert chain.tip.height == 4
+        headers.insert_headers([header.to_bytes() for header in branch], None)
+        assert chain.tip.height == 4
+
+    def test_header_from_hash(self, headers):
+        raw_headers = self.insert_first_headers(headers, 10)
+        for raw_header in chunks(raw_headers, 80):
+            header = SimpleHeader.from_bytes(raw_header)
+            header2 = headers.header_from_hash(header.hash)
+            assert same_headers(header, header2)
+
+    def test_header_from_hash_fail(self, headers):
+        assert headers.header_from_hash(b'a' * 32) is None
+
+    def test_header_from_merkle_root(self, headers):
+        raw_headers = self.insert_first_headers(headers, 10)
+        for raw_header in chunks(raw_headers, 80):
+            header = SimpleHeader.from_bytes(raw_header)
+            header2 = headers.header_from_merkle_root(header.merkle_root)
+            assert same_headers(header, header2)
+
+    def test_header_from_merkle_root_fail(self, headers):
+        assert headers.header_from_merkle_root(b'a' * 32) is None
+
+    @pytest.mark.parametrize('network, chain_id', ((Bitcoin, 1), (BitcoinTestnet, 2)))
+    def test_chain_id_genesis(self, headers, network, chain_id):
+        header = headers.header_from_hash(header_hash(network.genesis_header))
+        assert header.chain_id == chain_id
+
+    def test_headers_height_1(self, headers):
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        header1 = create_random_header(genesis_header)
+        headers.insert_headers(header1.to_bytes(), None)
+        header1 = headers.header_from_hash(header1.hash)
+        assert header1.chain_id == genesis_header.chain_id
+
+        header2 = create_random_header(genesis_header)
+        headers.insert_headers(header2.to_bytes(), None)
+        header2 = headers.header_from_hash(header2.hash)
+        assert header2.chain_id != genesis_header.chain_id
+
+    @staticmethod
+    def insert_random_tree(headers, *args):
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        tree = create_random_tree(genesis_header, *args)
+        insert_tree(headers, tree)
+        return tree, genesis_header
+
+    def test_tree_chain_ids(self, headers):
+        tree, genesis_header = self.insert_random_tree(headers)
+
+        chain_ids = []
+        for _, branch in tree:
+            db_headers = [headers.header_from_hash(header.hash) for header in branch]
+            assert all(header.chain_id == db_headers[0].chain_id for header in db_headers)
+            chain_ids.append(db_headers[0].chain_id)
+
+        assert len(set(chain_ids)) == len(tree)
+        assert chain_ids[0] == genesis_header.chain_id
+
+    @staticmethod
+    def full_chains_of_tree(tree, genesis_header):
+        # Map from tip hash to a List of headers from genesis
+        chains = {}
+
+        # Laboriously build all header chains from the branches
+        for branch_header, branch in tree:
+            prefix = None
+            if branch_header == genesis_header:
+                prefix = [genesis_header]
             else:
-                assert raw_header == self.fork_headers[n - self.common_height - 1]
+                for chain in chains.values():
+                    try:
+                        idx = chain.index(branch_header)
+                    except ValueError:
+                        continue
+                    prefix = chain[:idx + 1]
+                    break
 
-    def test_raw_header_missing(self):
-        with pytest.raises(MissingHeader):
-            self.base_chain.raw_header_at_height(-1)
-        with pytest.raises(MissingHeader):
-            self.base_chain.raw_header_at_height(self.N * 2)
+            assert prefix
+            chain = prefix + branch
+            chains[chain[-1].hash] = chain
 
-    def test_header_at_height(self):
-        for n in range(self.base_chain.height + 1):
-            assert self.base_chain.header_at_height(n) == deserialized_header(
-                self.base_headers[n], n)
-        for n in range(self.fork_chain.height + 1):
-            header = self.fork_chain.header_at_height(n)
-            raw_header = self.fork_chain.raw_header_at_height(n)
-            assert header == deserialized_header(raw_header, n)
+        return chains
 
-    def test_header_missing(self):
-        with pytest.raises(MissingHeader):
-            self.base_chain.header_at_height(-1)
-        with pytest.raises(MissingHeader):
-            self.base_chain.header_at_height(self.N * 2)
+    def test_tree_chains(self, headers):
+        tree, genesis_header = self.insert_random_tree(headers)
 
-    def test_chainwork_at_height(self):
-        for n in range(self.base_chain.height + 1):
-            assert self.base_chain.chainwork_at_height(n) == sum(
-                header_work(self.base_headers[i]) for i in range(n + 1))
-        for n in range(self.fork_chain.height + 1):
-            fork_chainwork = self.fork_chain.chainwork_at_height(n)
-            if n <= self.common_height:
-                assert fork_chainwork == self.base_chain.chainwork_at_height(n)
+        chains = headers.chains_containing(genesis_header)
+        full_chains = self.full_chains_of_tree(tree, genesis_header)
+        assert len(chains) == len(tree)
+
+        chains = {chain.tip.hash: chain for chain in chains}
+        for branch_header, branch in tree:
+            tip_hash = branch[-1].hash
+            branch_height = full_chains[tip_hash].index(branch_header)
+            chain = chains[tip_hash]
+
+            # Now check all headers in the branch match
+            for height, header in enumerate(branch, start=branch_height + 1):
+                db_header = headers.header_at_height(chain, height)
+                assert same_headers(header, db_header)
+
+            assert same_headers(branch[-1], chain.tip)
+
+    def test_header_at_height(self, headers):
+        tree, genesis_header = self.insert_random_tree(headers)
+
+        chains = headers.chains_containing(genesis_header)
+        full_chains = self.full_chains_of_tree(tree, genesis_header)
+        assert len(chains) == len(full_chains)
+
+        for chain in chains:
+            full_chain = full_chains[chain.tip.hash]
+
+            assert chain.tip.height + 1 == len(full_chain)
+
+            for height in range(chain.tip.height + 1):
+                # Compare hashes as chain_id is not set for the tree
+                assert headers.header_at_height(chain, height).hash == full_chain[height].hash
+
+    def test_chain_work(self, headers):
+        tree, genesis_header = self.insert_random_tree(headers)
+
+        all_hashes = set(header.hash for _, branch in tree for header in branch)
+        all_hashes.add(genesis_header.hash)
+        all_headers = {header.hash: header
+                       for header in (headers.header_from_hash(hash) for hash in all_hashes)}
+        for header in all_headers.values():
+            if header.hash == genesis_header.hash:
+                prev_work = 0
             else:
-                assert fork_chainwork == (
-                    self.base_chain.chainwork_at_height(self.common_height) +
-                    sum(header_work(self.fork_headers[i]) for i in range(n - self.common_height))
-                )
+                prev_work = all_headers[header.prev_hash].chain_work()
+            assert header.chain_work() == prev_work + bits_to_work(header.bits)
 
-    def test_chainwork_missing(self):
+        # Check longest_chain()
+        chains = headers.chains_containing(genesis_header)
+        longest = headers.longest_chain(genesis_header)
+        assert longest in chains
+        assert all(chain.chain_work() <= longest.chain_work() for chain in chains)
+
+    def check_tree(self, headers, genesis_header, tree):
+        chains = headers.chains_containing(genesis_header)
+
+        all_headers = [header for _, branch in tree for header in branch]
+        for header in all_headers:
+            # Make sure chain_id is set
+            header = headers.header_from_hash(header.hash)
+            chains_with_header = set(chain for chain in chains
+                                     if chain.tip.height >= header.height
+                                     and headers.header_at_height(chain, header.height) == header)
+            assert set(headers.chains_containing(header)) == set(chains_with_header)
+
+    def test_chains_containing(self, headers):
+        tree, genesis_header = self.insert_random_tree(headers)
+        self.check_tree(headers, genesis_header, tree)
+
+    def test_chains_containing_manual(self, headers):
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        # Create a tree like so:
+        #              / H5    chain_2
+        #         / H3 - H4    chain_1
+        # genesis - H1 - H2    chain_0
+        #              \ H6    chain_3
+        H1, H2 = create_random_branch(genesis_header, 2)
+        H3, H4 = create_random_branch(genesis_header, 2)
+        H5, = create_random_branch(H3, 1)
+        H6, = create_random_branch(H1, 1)
+
+        H = (H1, H2, H3, H4, H5, H6)
+        headers.insert_headers(b''.join(h.to_bytes() for h in H), None)
+
+        # This ensures chain_id is set
+        H1, H2, H3, H4, H5, H6 = [headers.header_from_hash(h.hash) for h in H]
+
+        chains = {chain.tip.hash: chain for chain in headers.chains() if chain.tip.height}
+        chain_0 = chains[H2.hash]
+        chain_1 = chains[H4.hash]
+        chain_2 = chains[H5.hash]
+        chain_3 = chains[H6.hash]
+
+        assert set(headers.chains_containing(genesis_header)) == {chain_0, chain_1,
+                                                                  chain_2, chain_3}
+        assert set(headers.chains_containing(H1)) == {chain_0, chain_3}
+        assert set(headers.chains_containing(H2)) == {chain_0}
+        assert set(headers.chains_containing(H3)) == {chain_1, chain_2}
+        assert set(headers.chains_containing(H4)) == {chain_1}
+        assert set(headers.chains_containing(H5)) == {chain_2}
+        assert set(headers.chains_containing(H6)) == {chain_3}
+
+    def test_median_time_past(self, headers):
+        count = 100
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        branch = create_random_branch(genesis_header, count)
+        insert_tree(headers, [(None, branch)])
+
+        cheaders = [genesis_header]
+        cheaders.extend(branch)
+        timestamps = [header.timestamp for header in cheaders]
+
+        check_mtps = []
+        for height, header in enumerate(cheaders, start=1):
+            past_timestamps = timestamps[max(0, height - 11): height]
+            mtp = sorted(past_timestamps)[len(past_timestamps) // 2]
+            check_mtps.append(mtp)
+
+        mtps = [headers.median_time_past(prev_header.hash) for prev_header in cheaders]
+        assert mtps == check_mtps
+
+    def test_median_time_past_missing(self, headers):
         with pytest.raises(MissingHeader):
-            self.fork_chain.chainwork_at_height(-1)
-        with pytest.raises(MissingHeader):
-            self.fork_chain.chainwork_at_height(self.fork_chain.height + 1)
+            headers.median_time_past(bytes(32))
 
-    def test_desc(self):
-        assert self.base_chain.desc()
-        assert self.fork_chain.desc()
+    def test_block_locator(self, headers):
+        count = 100
+        genesis_header = headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        branch = create_random_branch(genesis_header, count)
+        insert_tree(headers, [(None, branch)])
+        chain = headers.longest_chain(genesis_header)
+        locator = headers.block_locator(chain)
+        assert len(locator) == 8
+        for loc_pos in range(7):
+            assert locator[loc_pos] == branch[-(1 << loc_pos)].hash
+        assert locator[-1] == genesis_header.hash
 
-    def test_parent_chains(self):
-        assert self.base_chain.parent_chains() == [self.base_chain]
-        assert self.fork_chain.parent_chains() == [self.fork_chain, self.base_chain]
+    # @pytest.mark.parametrize('network', all_networks)
+    # def test_block_locator_empty_headers(self, headers, network):
+    #     headers = Headers(network)
+    #     assert headers.block_locator() == [header_hash(network.genesis_header)]
 
-    def test_common_chain_and_height(self):
-        assert self.fork_chain.common_chain_and_height(self.fork_chain) == (
-            self.fork_chain, self.fork_chain.height)
-        assert self.fork_chain.common_chain_and_height(self.base_chain) == (
-            self.base_chain, self.common_height)
-        assert self.base_chain.common_chain_and_height(self.fork_chain) == (
-            self.base_chain, self.common_height)
-        other_chain = Chain(None, 0)
-        assert self.base_chain.common_chain_and_height(other_chain) == (None, -1)
-
-    def test_unpersisted_headers(self):
-        for chain, headers in ((self.base_chain, self.base_headers),
-                               (self.fork_chain, self.fork_headers)):
-            for height in range(chain.first_height - 1, chain.height + 1):
-                start = height - (chain.first_height - 1)
-                assert chain.unpersisted_headers(height) == b''.join(
-                    headers[i] for i in range(start, len(headers)))
-
-    def test_unpersisted_headers_fails(self):
-        with pytest.raises(ValueError):
-            self.base_chain.unpersisted_headers(-2)
-        with pytest.raises(ValueError):
-            self.base_chain.unpersisted_headers(self.base_chain.height + 1)
-
-    def test_lt(self):
-        assert self.base_chain < self.fork_chain
-        assert not (self.fork_chain < self.base_chain)
-
-    # Headers
-
-    def test_headers_len(self):
-        assert len(self.headers) == self.N * 2
-
-    def test_lookup(self):
-        for height, header in enumerate(self.base_headers):
-            hash_ = header_hash(header)
-            assert self.headers.lookup(hash_) == (self.base_chain, height)
-
-        for height, header in enumerate(self.fork_headers, start=self.common_height + 1):
-            hash_ = header_hash(header)
-            assert self.headers.lookup(hash_) == (self.fork_chain, height)
-
-    def test_failed_lookup(self):
-        assert self.headers.lookup(bytes(32)) == (None, -1)
-
-    def test_connect_missing(self):
-        header = random_raw_header(bytes(32))
-        with pytest.raises(MissingHeader):
-            self.headers.connect(header)
-
-    def test_connect_duplicate(self):
-        for n in range(0, self.N):
-            assert self.headers.connect(self.base_headers[n]) == self.base_chain
-
-    def test_incorrect_bits(self):
-        prev_hash = header_hash(Bitcoin.genesis_header)
-        header = random_raw_header(prev_hash, [436956491])
-        with pytest.raises(IncorrectBits) as e:
-            self.headers.connect(header)
-        assert 'requires bits' in str(e.value)
-
-    def test_header_hash_at_height(self):
-        for chain in self.headers.chains():
-            for height in range(chain.height):
-                assert (chain.header_hash_at_height(height) ==
-                        header_hash(chain.raw_header_at_height(height)))
-
-    def test_insufficient_pow(self):
-        prev_hash = header_hash(Bitcoin.genesis_header)
-        header = random_raw_header(prev_hash, [header_bits(Bitcoin.genesis_header)])
-        with pytest.raises(InsufficientPoW) as e:
-            self.headers.connect(header)
-        assert 'exceeds its target' in str(e.value)
-
-    def test_chain_count(self):
-        assert self.headers.chain_count() == 2
-
-    def test_longest_chain(self):
-        assert all(self.headers.longest_chain().chainwork >= chain.chainwork
-                   for chain in self.headers.chains())
-
-    def test_cursor(self):
-        assert self.headers.cursor() == {chain: chain.height for chain in self.headers.chains()}
-
-    def test_persistence(self):
-        cursor = {}
-        raw_headers = self.headers.unpersisted_headers(cursor)
-        assert len(raw_headers) == 80 * len(self.headers)
-
-        new_headers = Headers(self.headers.network)
-        cursor = new_headers.connect_many(raw_headers)
-        assert cursor == new_headers.cursor()
-        assert len(new_headers) == len(self.headers)
-
-        new_chains_by_tip = {hash: chain for chain, hash in new_headers.tips.items()}
-        for chain in self.headers.chains():
-            new_chain = new_chains_by_tip[self.headers.tips[chain]]
-            assert chain.first_height == new_chain.first_height
-            assert chain._raw_headers == new_chain._raw_headers
-            assert chain.chainwork == new_chain.chainwork
-            for height in range(chain.height + 1):
-                assert chain.raw_header_at_height(height) == new_chain.raw_header_at_height(height)
-
-    def test_persistence_sorting(self):
-        # Add a new fork at height 1 than the fork chain
-        headers = copy.copy(self.headers)
-        raw_header = random_raw_header(header_hash(headers.network.genesis_header))
-        chain = headers.connect(raw_header, check_work=False)
-        assert headers.chain_count() == 3
-        assert chain.first_height == 1
-
-        # Check unpersisted headers are topologically sorted
-        raw_headers = headers.unpersisted_headers({})
-        assert raw_headers == (b''.join(self.base_headers)
-                               + raw_header
-                               + b''.join(self.fork_headers))
-
-        # Add a new fork after the base of the fork fork chain
-        raw_header2 = random_raw_header(header_hash(self.fork_headers[0]))
-        chain = headers.connect(raw_header2, check_work=False)
-        assert headers.chain_count() == 4
-        assert chain.first_height == self.fork_chain.first_height + 1
-
-        # Check unpersisted headers are topologically sorted
-        raw_headers = headers.unpersisted_headers({})
-        assert raw_headers == (b''.join(self.base_headers)
-                               + raw_header
-                               + b''.join(self.fork_headers)
-                               + raw_header2)
-
-    def test_block_locator(self):
-        for chain in (self.base_chain, self.fork_chain):
-            locator = chain.block_locator()
-            log2h = math.log(chain.height + 1, 2)
-            assert log2h <= len(locator) <= log2h + 2
-
-            heights = [self.headers.lookup(header_hash)[1] for header_hash in locator]
-            for n, height in enumerate(heights):
-                assert chain.header_hash_at_height(height) == locator[n]
-            assert sorted(heights) == list(reversed(heights))
-
-        assert self.headers.block_locator() == self.headers.longest_chain().block_locator()
-
-    @pytest.mark.parametrize('network', all_networks)
-    def test_block_locator_empty_headers(self, network):
-        headers = Headers(network)
-        assert headers.block_locator() == [header_hash(network.genesis_header)]
+    def test_target_checked(self, headers):
+        header = create_random_header(SimpleHeader.from_bytes(Bitcoin.genesis_header))
+        with pytest.raises(InsufficientPoW):
+            headers.insert_headers(header.to_bytes(), Bitcoin)

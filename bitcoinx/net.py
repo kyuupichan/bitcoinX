@@ -448,7 +448,8 @@ class BitcoinService:
     '''Represents a bitcoin network service.
 
     Stores various details obtained from the version message.  Comparison and hashing is
-    only done on the (resolved) network address.
+    only done on the (resolved) network address.  start_height is the height at the time
+    a connection waas made.
     '''
 
     def __init__(self, *,
