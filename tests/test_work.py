@@ -1,18 +1,23 @@
 import array
+import asyncio
 import gzip
 import io
 import os
 import random
 import time
 
+import asqlite3
 import pytest
+
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet, BitcoinRegtest,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
-    deserialized_header, header_timestamp,
-    bits_to_target, target_to_bits, grind_header, bits_to_work
+    deserialized_header, header_timestamp, Header, unpack_header, header_hash, header_work,
+    bits_to_target, target_to_bits, grind_header, bits_to_work, int_to_le_bytes,
 )
+
+from .utils import read_file
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 
@@ -88,60 +93,24 @@ def test_bits_to_work(bits, answer):
     assert bits_to_work(bits) == answer
 
 
-def setup_headers(network, headers_file):
+def read_sparse_headers(headers_file):
     # File is a sequence of 84-bytes in the form height:raw_header. height is le_uint32
     # encoded.  Headers are part of a single chain
-    with open(os.path.join(data_dir, headers_file), 'rb') as f:
-        raw_data = f.read()
+    raw_data = read_file(headers_file)
 
     # last_height, = unpack_le_uint32(raw_data[-84:-80])
     # last_raw = raw_data[-80:]
-    headers = Headers(network)
-    chain = headers.connect(network.genesis_header)
-
     raw_headers = {}
     for offset in range(0, len(raw_data), 84):
         height, = unpack_le_uint32(raw_data[offset: offset + 4])
         raw_headers[height] = raw_data[offset + 4: offset + 84]
 
-    def set_raw_header(height, raw_header):
-        raw_headers[height] = raw_header
-
-    def raw_header_at_height(height):
-        return raw_headers[height]
-
-    chain.raw_header_at_height = raw_header_at_height
-    chain.set_raw_header = set_raw_header
-    max_height = max(raw_headers.keys())
-
-    return headers, max_height
+    return raw_headers
 
 
-def test_mainnet_2016_headers():
-    # Mainnet headers 0, 2015, 2016, 4031, 4032, ... 4249808
-    headers, max_height = setup_headers(Bitcoin, 'mainnet-headers-2016')
-
-    chain = next(iter(headers.chains()))
-    for height in range(0, max_height + 1, 2016):
-        header = headers.header_at_height(chain, height)
-        assert headers.required_bits(chain, height, None) == header.bits
-        assert headers.required_bits(chain, height + 1, None) == header.bits
-
-    assert header.difficulty() == 860_221_984_436.2223
-
-    bounded_bits = 403011440
-    # Test // 4 is lower bound for the last one
-    raw_header = bytearray(headers.raw_header_at_height(chain, height - 2016))
-    timestamp = header_timestamp(raw_header)
-    # Add 8 weeks and a 14 seconds; the minimum to trigger it
-    raw_header[68:72] = pack_le_uint32(timestamp + 4 * 2016 * 600 + 14)
-    chain.set_raw_header(height - 1, raw_header)
-    assert headers.required_bits(chain, height, ) == bounded_bits
-
-
-def setup_compressed_headers(headers_file, ts_offset, network):
-    with open(os.path.join(data_dir, headers_file), 'rb') as f:
-        raw_data = f.read()
+def read_compressed_headers(headers_file, ts_offset):
+    # Compressed headers just store bits and timestamps...
+    raw_data = read_file(headers_file)
 
     all_times = array.array('I')
     all_bits = array.array('I')
@@ -156,6 +125,7 @@ def setup_compressed_headers(headers_file, ts_offset, network):
     for _ in range(1, header_count):
         diff, = unpack_le_uint16(read(2))
         all_times.append(all_times[-1] + diff - ts_offset)
+
     # Bits
     while True:
         raw = read(4)
@@ -173,71 +143,102 @@ def setup_compressed_headers(headers_file, ts_offset, network):
     assert len(all_bits) == header_count
 
     raw_header = bytearray(80)
-    raw_header[0] = 1
-
-    headers = Headers(network)
-    chain = headers.connect(network.genesis_header)
+    prev_hash = bytes(32)
 
     raw_headers = {}
-
-    def set_raw_header(height, raw_header):
-        raw_headers[height] = raw_header
-
-    def raw_header_at_height(height):
-        return raw_headers[height]
-
-    chain.raw_header_at_height = raw_header_at_height
-    chain.set_raw_header = set_raw_header
-
     for height, (bits, timestamp) in enumerate(zip(all_bits, all_times), start=first_height):
+        raw_header[4:36] = prev_hash
         raw_header[68:72] = pack_le_uint32(timestamp)
         raw_header[72:76] = pack_le_uint32(bits)
-        chain.set_raw_header(height, raw_header.copy())
+        raw_headers[height] = raw_header.copy()
+        prev_hash = header_hash(raw_header)
 
-    max_height = max(raw_headers.keys())
-
-    return headers, max_height
+    return raw_headers
 
 
-def setup_gzipped_headers(headers_file, network):
-    headers = Headers(network)
-    chain = headers.connect(network.genesis_header)
-
+def read_gzipped_headers(headers_file):
     raw_headers = {}
-
-    def set_raw_header(height, raw_header):
-        raw_headers[height] = raw_header
-
-    def raw_header_at_height(height):
-        return raw_headers[height]
-
-    chain.raw_header_at_height = raw_header_at_height
-    chain.set_raw_header = set_raw_header
-
     with gzip.open(os.path.join(data_dir, headers_file), 'rb') as f:
         first_height = unpack_le_uint32(f.read(4))[0]
         header_count = unpack_le_uint32(f.read(4))[0]
 
-        raw_header = bytearray(80)
-        raw_header[0] = 1
-
         for height in range(first_height, header_count):
-            chain.set_raw_header(height, f.read(80))
+            raw_headers[height] = f.read(80)
 
-        return headers, first_height + header_count - 1
+    return raw_headers
+
+
+async def override_headers(headers, raw_headers, network):
+    Headers = {}
+
+    cum_work = 0
+    for height in sorted(raw_headers):
+        raw = raw_headers[height]
+        cum_work += header_work(raw)
+        Headers[height] = Header(*unpack_header(raw), header_hash(raw), height, 1,
+                                 int_to_le_bytes(cum_work))
+
+    Headers_by_hash = {header.hash: header for header in Headers.values()}
+
+    async def header_at_height(_chain, height):
+        return Headers[height]
+
+    async def median_time_past(prev_hash):
+        height = Headers_by_hash[prev_hash].height + 1
+        timestamps = [Headers[height].timestamp for height in range(height - 11, height)]
+        return sorted(timestamps)[len(timestamps) // 2]
+
+    headers.median_time_past = median_time_past
+    headers._header_at_height = header_at_height
+    headers.header_at_height = header_at_height
+
+
+async def check_bits(headers, raw_headers, network, first_height=None):
+    chain = None
+    first_height = first_height or min(raw_headers)
+    required_bits = headers.required_bits[network]
+    for height in range(first_height, max(raw_headers)):
+        header = await headers.header_at_height(chain, height)
+        req_bits = await required_bits(network, header)
+        assert req_bits == header.bits
+
+
+def test_mainnet_2016_headers():
+    # Mainnet headers 0, 2015, 2016, 4031, 4032, ... 4249808
+    async def test(headers):
+        network = Bitcoin
+        chain = None
+        raw_headers = read_sparse_headers('mainnet-headers-2016')
+        await override_headers(headers, raw_headers, network)
+
+        required_bits = headers.required_bits[network]
+        for height in range(0, max(raw_headers) + 1, 2016):
+            header = await headers.header_at_height(chain, height)
+            assert await required_bits(network, header) == header.bits
+
+        assert header.difficulty() == 860_221_984_436.2223
+
+        bounded_bits = 403011440
+        # Test // 4 is lower bound for the last one
+        prev_header = await headers.header_at_height(chain, height - 1)
+        prior_header = await headers.header_at_height(chain, height - 2016)
+        # Add 8 weeks and a 14 seconds; the minimum to trigger it
+        prev_header.timestamp = prior_header.timestamp + 4 * 2016 * 600 + 14
+        assert await required_bits(network, header) == bounded_bits
+
+    run_test_with_headers(test)
 
 
 def test_mainnet_EDA_and_DAA():
     # Mainnet bits and timestamps from height 478400 to 564528 inclusive
-    headers, max_height = setup_compressed_headers('mainnet-headers-compressed', 300, Bitcoin)
+    async def test(headers):
+        network = Bitcoin
+        raw_headers = read_compressed_headers('mainnet-headers-compressed', 300)
+        await override_headers(headers, raw_headers, network)
+        EDA_height = 478558
+        await check_bits(headers, raw_headers, network, EDA_height - 3)
 
-    EDA_height = 478558
-    chain = next(iter(headers.chains()))
-
-    for height in range(EDA_height - 3, max_height + 1):
-        header = headers.header_at_height(chain, height)
-        required_bits = headers.required_bits(chain, height, None)
-        assert required_bits == header.bits
+    run_test_with_headers(test)
 
 
 @pytest.mark.parametrize("filename, first_height", (
@@ -246,29 +247,41 @@ def test_mainnet_EDA_and_DAA():
     ('testnet-headers-1175328', 1175329),
 ))
 def test_testnet(filename, first_height):
-    headers, max_height = setup_compressed_headers(filename, 3600, BitcoinTestnet)
+    async def test(headers):
+        network = BitcoinTestnet
+        raw_headers = read_compressed_headers(filename, 3600)
+        await override_headers(headers, raw_headers, network)
+        await check_bits(headers, raw_headers, network, first_height)
 
-    chain = next(iter(headers.chains()))
-    for height in range(first_height, max_height + 1):
-        header = chain.header_at_height(height)
-        required_bits = headers.required_bits(chain, height, header.timestamp)
-        assert required_bits == header.bits
+    run_test_with_headers(test)
 
 
 def test_scalingtestnet():
-    headers, max_height = setup_gzipped_headers("stnheaders.gz", BitcoinScalingTestnet)
+    async def test(headers):
+        network = BitcoinScalingTestnet
+        raw_headers = read_gzipped_headers("stnheaders.gz")
+        await override_headers(headers, raw_headers, network)
+        await check_bits(headers, raw_headers, network)
 
-    first_height = 150
-    chain = next(iter(headers.chains()))
-    for height in range(first_height, max_height + 1):
-        header = headers.header_at_height(chain, height)
-        required_bits = headers.required_bits(chain, height, header.timestamp)
-        assert required_bits == header.bits
+    run_test_with_headers(test)
 
 
 def test_regtest():
-    headers = Headers(BitcoinRegtest)
-    assert headers.required_bits(None, 5, None) == BitcoinRegtest.genesis_bits
+    async def test(headers):
+        assert (await headers.required_bits_regtest(BitcoinRegtest, None)
+                == BitcoinRegtest.genesis_bits)
+
+    run_test_with_headers(test)
+
+
+def run_test_with_headers(test_func):
+    async def run():
+        async with asqlite3.connect(':memory:') as conn:
+            headers = Headers(conn)
+            await headers.create_tables_if_not_present('main')
+            await test_func(headers)
+
+    asyncio.run(run())
 
 
 def test_grind_header():
@@ -281,7 +294,7 @@ def test_grind_header():
     timestamp = int(time.time())
 
     raw = grind_header(version, prev_hash, tx_merkle_root, timestamp, bits)
-    header = deserialized_header(raw, 1)
+    header = deserialized_header(raw)
 
     assert header.version == version
     assert header.prev_hash == prev_hash

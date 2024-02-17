@@ -288,6 +288,7 @@ class Headers:
             chain_id)'''
 
         execute = self.conn.execute
+        required_bits = self.required_bits[network or Bitcoin]
         for header in headers(raw_headers):
             cursor = await execute('SELECT hdr_id, chain_id, height, chain_work FROM Headers '
                                    'WHERE hash=?', (header.prev_hash, ))
@@ -299,7 +300,7 @@ class Headers:
             if network:
                 header.height = height + 1
                 header.chain_id = chain_id
-                bits = await self.required_bits[network](header)
+                bits = await required_bits(network, header)
                 if header.bits != bits:
                     raise IncorrectBits(header, bits)
                 if header.hash_value() > header.target():
@@ -415,17 +416,20 @@ class Headers:
         return [(await self.header_at_height(chain, height)).hash
                 for height in block_heights(chain.tip.height)]
 
-    async def required_bits_mainnet(self, header):
+    async def required_bits_mainnet(self, network, header):
         # Unlike testnet, required_bits is not a function of the timestamp
         if header.height < 478558:
-            return await self._required_bits_fortnightly(Bitcoin, header)
+            return await self._required_bits_fortnightly(network, header)
         elif header.height <= 504031:
-            return await self._required_bits_EDA(Bitcoin, header)
+            return await self._required_bits_EDA(network, header)
         else:
-            return await self._required_bits_DAA(Bitcoin, header)
+            return await self._required_bits_DAA(network, header)
 
     async def _required_bits_fortnightly(self, network, header):
         '''Bitcoin's original DAA.'''
+        if header.height == 0:
+            return network.genesis_bits
+
         prev = await self._header_at_height(header.chain_id, header.height - 1)
         if header.height % 2016:
             return prev.bits
@@ -446,9 +450,9 @@ class Headers:
         if header.height % 2016 == 0:
             return bits
 
-        prior_hash = await self._header_at_height(header.chain_id, header.height - 7).hash
+        earlier = await self._header_at_height(header.chain_id, header.height - 7)
         mtp_diff = (await self.median_time_past(header.prev_hash)
-                    - await self.median_time_past(prior_hash))
+                    - await self.median_time_past(earlier.hash))
         if mtp_diff < 12 * 3600:
             return bits
 
@@ -485,10 +489,13 @@ class Headers:
     async def _required_bits_testnet(self, network, header, daa_height, has_daa_minpow):
         async def prior_non_special_bits(genesis_bits):
             for test_height in range(header.height - 1, -1, -1):
-                bits = await self._header_at_height(header.chain_id, test_height).bits
+                bits = (await self._header_at_height(header.chain_id, test_height)).bits
                 if test_height % 2016 == 0 or bits != genesis_bits:
                     return bits
             # impossible to fall through here
+
+        if header.height == 0:
+            return network.genesis_bits
 
         prior = await self._header_at_height(header.chain_id, header.height - 1)
         is_slow = (header.timestamp - prior.timestamp) > 20 * 60
