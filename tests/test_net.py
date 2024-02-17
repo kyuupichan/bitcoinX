@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+import platform
 import random
 import time
 from io import BytesIO
@@ -782,7 +783,8 @@ async def achunks(payload, size):
         yield chunk
 
 
-async def pause(secs=0.01):
+async def pause(secs=None):
+    secs = 0.05 if platform.system() == 'Windows' else 0.002
     await asyncio.sleep(secs)
 
 
