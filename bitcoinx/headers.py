@@ -7,8 +7,10 @@
 
 
 from dataclasses import dataclass
+import logging
 import math
-import sqlite3
+
+import asqlite3
 
 from .base58 import base58_encode_check
 from .errors import InsufficientPoW, IncorrectBits, MissingHeader
@@ -147,9 +149,72 @@ class Chain:
 
 class Headers:
 
-    def __init__(self, conn, schema):
+    CREATE_HEADERS_TABLE = '''
+      CREATE TABLE {schema}.Headers (
+        hdr_id       INTEGER PRIMARY KEY,
+        prev_hdr_id  INTEGER REFERENCES Headers(hdr_id),
+        height       INTEGER NOT NULL,
+        chain_id     INTEGER NOT NULL,
+        chain_work   BLOB NOT NULL,
+        hash         BLOB UNIQUE NOT NULL,      -- unique therefore indexed
+        merkle_root  BLOB UNIQUE NOT NULL,      -- unique therefore indexed
+        version      INTEGER NOT NULL,
+        timestamp    INTEGER NOT NULL,
+        bits         INTEGER NOT NULL,
+        nonce        INTEGER NOT NULL
+      );'''
+    CREATE_HEIGHT_INDEX = '''
+      CREATE INDEX {schema}.HeightIdx on Headers(height);'''
+    CREATE_HEADERS_VIEW = '''
+      CREATE VIEW {schema}.HeadersView(hdr_id, height, chain_id, chain_work, hash, version,
+                                       prev_hash, merkle_root, timestamp, bits, nonce)
+        AS SELECT hdr_id, height, chain_id, chain_work, hash, version, iif(
+          prev_hdr_id ISNULL,
+          zeroblob(32),
+          (SELECT hash from Headers where hdr_id=H.prev_hdr_id)
+        ), substr(merkle_root, 1, 32), timestamp, bits, nonce
+        FROM Headers H;'''
+    CREATE_CHAINS_TABLE = '''
+      CREATE TABLE {schema}.Chains (
+        chain_id         INTEGER PRIMARY KEY,
+        parent_chain_id  INTEGER REFERENCES Chains(chain_id),
+        base_hdr_id      INTEGER NOT NULL,
+        tip_hdr_id       INTEGER NOT NULL
+      );'''
+    CREATE_CHAINS_VIEW = '''
+      CREATE VIEW {schema}.ChainsView(chain_id, parent_chain_id, base_hdr_id,
+                                      tip_hdr_id, base_height, tip_height)
+        AS SELECT chain_id, parent_chain_id, base_hdr_id, tip_hdr_id,
+            (SELECT height from Headers WHERE hdr_id=base_hdr_id),
+            (SELECT height from Headers WHERE hdr_id=tip_hdr_id)
+          FROM Chains;'''
+    CREATE_ANCESTORS_VIEW = '''
+      CREATE VIEW {schema}.AncestorsView(chain_id, anc_chain_id, branch_height)
+        AS WITH RECURSIVE
+          Ancestors(chain_id, anc_chain_id, branch_height) AS (
+            SELECT chain_id, chain_id, tip_height FROM ChainsView
+            UNION ALL
+            SELECT A.chain_id, CV.parent_chain_id, CV.base_height - 1
+              FROM ChainsView CV, Ancestors A
+              WHERE CV.chain_id=A.anc_chain_id AND CV.parent_chain_id NOT NULL
+          )
+        SELECT chain_id, anc_chain_id, branch_height from Ancestors;'''
+    CREATE_HEADERS_TRIGGER = '''
+      CREATE TRIGGER {schema}.UpdateChains AFTER INSERT ON Headers
+      FOR EACH ROW
+        BEGIN
+          -- Insert new chain if one is formed
+          INSERT INTO Chains(chain_id, parent_chain_id, base_hdr_id, tip_hdr_id)
+            SELECT new.chain_id, (SELECT chain_id FROM Headers
+                                  WHERE hdr_id=new.prev_hdr_id), new.hdr_id, new.hdr_id
+            WHERE NOT EXISTS(SELECT 1 FROM Chains WHERE chain_id=new.chain_id);
+
+          -- Set new chain tip
+          UPDATE Chains SET tip_hdr_id=new.hdr_id WHERE chain_id=new.chain_id;
+        END;'''
+
+    def __init__(self, conn):
         self.conn = conn
-        self.schema = schema
         self.required_bits = {
             Bitcoin: self.required_bits_mainnet,
             BitcoinTestnet: self.required_bits_testnet,
@@ -157,119 +222,54 @@ class Headers:
             BitcoinRegtest: self.required_bits_regtest,
         }
 
-    def has_tables(self):
+    async def create_tables_if_not_present(self, schema):
+        '''Create the tables and views needed to maintain headers.'''
         try:
-            self.conn.execute('SELECT 1 FROM Headers')
-            return True
-        except sqlite3.OperationalError:
-            return False
+            await self.conn.execute('SELECT 1 FROM Headers')
+            logging.info('database tables found')
+            return
+        except asqlite3.OperationalError:
+            pass
 
-    def create_tables(self):
-        '''Create the Header table for this network.'''
-        with self.conn:
-            self.conn.execute(f'''
-              CREATE TABLE {self.schema}.Headers (
-                hdr_id       INTEGER PRIMARY KEY,
-                prev_hdr_id  INTEGER REFERENCES Headers(hdr_id),
-                height       INTEGER NOT NULL,
-                chain_id     INTEGER NOT NULL,
-                chain_work   BLOB NOT NULL,
-                hash         BLOB UNIQUE NOT NULL,      -- unique therefore indexed
-                merkle_root  BLOB UNIQUE NOT NULL,      -- unique therefore indexed
-                version      INTEGER NOT NULL,
-                timestamp    INTEGER NOT NULL,
-                bits         INTEGER NOT NULL,
-                nonce        INTEGER NOT NULL
-              );
-            ''')
-
-            self.conn.execute(f'CREATE INDEX {self.schema}.HeightIdx on Headers(height);')
-
-            # This veiw cleans up prev_hash and merkle_root for pesky cases
-            self.conn.execute(f'''
-              CREATE VIEW {self.schema}.HeadersView
-                  (hdr_id, prev_hash, height, chain_id, chain_work, hash, merkle_root, version,
-                  timestamp, bits, nonce)
-                AS SELECT hdr_id, iif(
-                      prev_hdr_id ISNULL,
-                      zeroblob(32),
-                      (SELECT hash from Headers where hdr_id=H1.prev_hdr_id)
-                    ), height, chain_id, chain_work, hash, substr(H1.merkle_root, 1, 32),
-                    version, timestamp, bits, nonce
-                  FROM Headers H1''')
-
-            self.conn.execute(f'''
-              CREATE TABLE {self.schema}.Chains (
-                chain_id         INTEGER PRIMARY KEY,
-                parent_chain_id  INTEGER REFERENCES Chains(chain_id),
-                base_hdr_id      INTEGER NOT NULL,
-                tip_hdr_id       INTEGER NOT NULL
-              );
-            ''')
-
+        async with self.conn:
+            await self.conn.execute(self.CREATE_HEADERS_TABLE.replace('{schema}', schema))
+            await self.conn.execute(self.CREATE_HEIGHT_INDEX.replace('{schema}', schema))
+            # This view cleans up prev_hash and merkle_root for pesky cases
+            await self.conn.execute(self.CREATE_HEADERS_VIEW.replace('{schema}', schema))
+            await self.conn.execute(self.CREATE_CHAINS_TABLE.replace('{schema}', schema))
             # A view that adds base_height and tip_height.
-            self.conn.execute(f'''
-              CREATE VIEW {self.schema}.ChainsView
-                  (chain_id, parent_chain_id, base_hdr_id, tip_hdr_id, base_height, tip_height)
-                AS SELECT chain_id, parent_chain_id, base_hdr_id, tip_hdr_id,
-                    (SELECT height from Headers WHERE hdr_id=base_hdr_id),
-                    (SELECT height from Headers WHERE hdr_id=tip_hdr_id)
-                  FROM Chains;''')
-
+            await self.conn.execute(self.CREATE_CHAINS_VIEW.replace('{schema}', schema))
             # A view to easily obtain ancestor chains
-            self.conn.execute(f'''
-              CREATE VIEW {self.schema}.AncestorsView(chain_id, anc_chain_id, branch_height)
-                AS WITH RECURSIVE
-                  Ancestors(chain_id, anc_chain_id, branch_height) AS (
-                    SELECT chain_id, chain_id, tip_height FROM ChainsView
-                    UNION ALL
-                    SELECT A.chain_id, CV.parent_chain_id, CV.base_height - 1
-                      FROM ChainsView CV, Ancestors A
-                      WHERE CV.chain_id=A.anc_chain_id AND CV.parent_chain_id NOT NULL
-                  )
-                SELECT chain_id, anc_chain_id, branch_height from Ancestors;
-            ''')
+            await self.conn.execute(self.CREATE_ANCESTORS_VIEW.replace('{schema}', schema))
+            await self.conn.execute(self.CREATE_HEADERS_TRIGGER.replace('{schema}', schema))
+            logging.info('database tables and views created')
 
-            self.conn.execute(f'''
-              CREATE TRIGGER {self.schema}.update_chains AFTER INSERT ON Headers
-              FOR EACH ROW
-                BEGIN
-                  -- Insert new chain if one is formed
-                  INSERT INTO Chains(chain_id, parent_chain_id, base_hdr_id, tip_hdr_id)
-                    SELECT new.chain_id, (SELECT chain_id FROM Headers
-                                          WHERE hdr_id=new.prev_hdr_id), new.hdr_id, new.hdr_id
-                    WHERE NOT EXISTS(SELECT 1 FROM Chains WHERE chain_id=new.chain_id);
-
-                  -- Set new chain tip
-                  UPDATE Chains SET tip_hdr_id=new.hdr_id WHERE chain_id=new.chain_id;
-                END;
-            ''')
-
-    def insert_genesis_header(self, raw_header):
+    async def insert_genesis_header(self, raw_header):
         gh = SimpleHeader.from_bytes(raw_header)
         if gh.prev_hash != bytes(32):
             raise ValueError('not a genesis header')
 
         merkle_root = gh.merkle_root
-        count = self.conn.execute('SELECT count(hdr_id) from Headers WHERE merkle_root=?',
-                                  (gh.merkle_root, )).fetchone()[0]
+        cursor = await self.conn.execute('SELECT count(hdr_id) from Headers WHERE merkle_root=?',
+                                         (gh.merkle_root, ))
+        count = (await cursor.fetchone())[0]
         if count:
             merkle_root += bytes(count)
 
-        with self.conn:
+        async with self.conn:
             # Determine a chain ID to give the new
-            chain_id = self.conn.execute('SELECT max(chain_id) + 1 FROM Chains').fetchone()[0]
-            chain_id = chain_id or 1
+            cursor = await self.conn.execute('SELECT max(chain_id) + 1 FROM Chains')
+            chain_id = (await cursor.fetchone())[0] or 1
             chain_work = int_to_le_bytes(bits_to_work(gh.bits))
 
-            self.conn.execute('''
+            await self.conn.execute('''
               INSERT INTO Headers (prev_hdr_id, height, chain_id, chain_work, hash, merkle_root,
                                    version, timestamp, bits, nonce)
                 VALUES (NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?);
             ''', (chain_id, chain_work, gh.hash, merkle_root, gh.version, gh.timestamp,
                   gh.bits, gh.nonce))
 
-    def insert_headers(self, raw_headers, network):
+    async def insert_headers(self, raw_headers, network):
         '''Insert headers into the Headers table.
 
         raw_headers can either be a sequence of raw headers, or a concatenated sequence of
@@ -289,8 +289,9 @@ class Headers:
 
         execute = self.conn.execute
         for header in headers(raw_headers):
-            row = execute('SELECT hdr_id, chain_id, height, chain_work FROM Headers WHERE hash=?',
-                          (header.prev_hash, )).fetchone()
+            cursor = await execute('SELECT hdr_id, chain_id, height, chain_work FROM Headers '
+                                   'WHERE hash=?', (header.prev_hash, ))
+            row = await cursor.fetchone()
             if not row:
                 raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
             prev_hdr_id, chain_id, height, chain_work = row
@@ -298,7 +299,7 @@ class Headers:
             if network:
                 header.height = height + 1
                 header.chain_id = chain_id
-                bits = self.required_bits[network](header)
+                bits = await self.required_bits[network](header)
                 if header.bits != bits:
                     raise IncorrectBits(header, bits)
                 if header.hash_value() > header.target():
@@ -306,50 +307,53 @@ class Headers:
 
             chain_work = int_to_le_bytes(le_bytes_to_int(chain_work) + bits_to_work(header.bits))
 
-            execute(f'''INSERT OR IGNORE INTO Headers(prev_hdr_id, height, chain_id, chain_work,
-                hash, merkle_root, version, timestamp, bits, nonce)
+            await execute(f'''INSERT OR IGNORE INTO Headers(prev_hdr_id, height, chain_id,
+                chain_work, hash, merkle_root, version, timestamp, bits, nonce)
               SELECT ?, height + 1, {calc_chain_id}, ?, ?, ?, ?, ?, ?, ?
                 FROM Headers H WHERE hash=?''',
-                    (prev_hdr_id, chain_work, header.hash, header.merkle_root, header.version,
-                     header.timestamp, header.bits, header.nonce, header.prev_hash))
+                          (prev_hdr_id, chain_work, header.hash, header.merkle_root,
+                           header.version, header.timestamp, header.bits, header.nonce,
+                           header.prev_hash))
 
-    def _query_headers(self, where_clause, params, is_multi):
-        result = self.conn.execute(
-            f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, hash, height,
-                       chain_id, chain_work FROM HeadersView WHERE {where_clause}''',
-            params).fetchall()
+    async def _query_headers(self, where_clause, params, is_multi):
+        sql = f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, hash, height,
+                  chain_id, chain_work FROM HeadersView WHERE {where_clause};'''
+        cursor = await self.conn.execute(sql, params)
 
         if is_multi:
-            return [Header(*row) for row in result]
-        else:
-            return Header(*(result[0])) if result else None
+            return [Header(*row) async for row in cursor]
 
-    def _chains(self, tip_hdr_id_query):
-        tips = self._query_headers(f'hdr_id IN ({tip_hdr_id_query})', (), True)
+        async for row in cursor:
+            return Header(*row)
+        return None
+
+    async def _chains(self, tip_hdr_id_query):
+        tips = await self._query_headers(f'hdr_id IN ({tip_hdr_id_query})', (), True)
         return [Chain(tip.chain_id, tip) for tip in tips]
 
-    def header_from_hash(self, block_hash):
+    async def header_from_hash(self, block_hash):
         '''Look up the block hash and return the block header.'''
-        return self._query_headers('hash=?', (block_hash, ), False)
+        return await self._query_headers('hash=?', (block_hash, ), False)
 
-    def header_from_merkle_root(self, merkle_root):
+    async def header_from_merkle_root(self, merkle_root):
         '''Look up the merkle root and return the block header.'''
-        return self._query_headers('merkle_root=?', (merkle_root, ), False)
+        return await self._query_headers('merkle_root=?', (merkle_root, ), False)
 
-    def chains(self):
+    async def chains(self):
         '''Return all chains.'''
-        return self._chains('SELECT tip_hdr_id FROM Chains')
+        return await self._chains('SELECT tip_hdr_id FROM Chains')
 
-    def chains_containing(self, header):
+    async def chains_containing(self, header):
         '''Return all chains containing the given header.'''
-        return self._chains(f'''SELECT tip_hdr_id FROM Chains C, AncestorsView AV
-                                  WHERE AV.anc_chain_id={header.chain_id}
-                                    AND AV.branch_height >= {header.height}
-                                    AND C.chain_id=AV.chain_id''')
+        return await self._chains(f'''
+          SELECT tip_hdr_id FROM Chains C, AncestorsView AV
+          WHERE AV.anc_chain_id = {header.chain_id}
+          AND AV.branch_height >= {header.height}
+          AND C.chain_id = AV.chain_id''')
 
-    def longest_chain(self, header):
+    async def longest_chain(self, header):
         '''Return the longest chain containing the given header.'''
-        chains = self.chains_containing(header)
+        chains = await self.chains_containing(header)
         if not chains:
             raise MissingHeader('no chains contain the header')
         longest, max_work = None, -1
@@ -359,7 +363,7 @@ class Headers:
                 longest, max_work = chain, chain_work
         return longest
 
-    def _header_at_height(self, chain_id, height):
+    async def _header_at_height(self, chain_id, height):
         where_clause = f'''height={height} AND chain_id=(
             SELECT chain_id FROM (
                 SELECT ChainsView.chain_id, ChainsView.base_height
@@ -368,20 +372,20 @@ class Headers:
                     AND {height} BETWEEN base_height AND tip_height
                     AND AncestorsView.chain_id={chain_id}
              ) ORDER BY base_height DESC LIMIT 1)'''
-        return self._query_headers(where_clause, (), False)
+        return await self._query_headers(where_clause, (), False)
 
-    def header_at_height(self, chain, height):
+    async def header_at_height(self, chain, height):
         '''Return the header on chain at height.'''
         if not 0 <= height <= chain.tip.height:
             raise MissingHeader(f'no header at height {height:,d}; '
                                 f'chain tip height is {chain.tip.height:,d}')
-        return self._header_at_height(chain.chain_id, height)
+        return await self._header_at_height(chain.chain_id, height)
 
-    def median_time_past(self, prev_hash):
+    async def median_time_past(self, prev_hash):
         '''Return the MTP of a header that would be chained onto a header with hash prev_hash.
         MTP is the median of the timestamps of the 11 blocks up to and including prev_hash.
         '''
-        cursor = self.conn.execute(f'''
+        cursor = await self.conn.execute(f'''
           WITH RECURSIVE HdrIds(hdr_id) AS (
             SELECT hdr_id FROM Headers WHERE hash={blob_literal(prev_hash)}
             UNION ALL
@@ -390,13 +394,13 @@ class Headers:
           SELECT timestamp FROM Headers WHERE hdr_id IN HdrIds
         ''')
 
-        timestamps = [row[0] for row in cursor]
+        timestamps = [row[0] async for row in cursor]
         if not timestamps:
             raise MissingHeader(f'no header with hash {hash_to_hex_str(prev_hash)} found')
 
         return sorted(timestamps)[len(timestamps) // 2]
 
-    def block_locator(self, chain):
+    async def block_locator(self, chain):
         '''Returns a block locator for the chain.  A block locator is a list of block hashes
         starting from the chain tip back to the genesis block, that become increasingly
         sparse.
@@ -408,24 +412,24 @@ class Headers:
                 step += step
             yield stop
 
-        return [self.header_at_height(chain, height).hash
+        return [(await self.header_at_height(chain, height)).hash
                 for height in block_heights(chain.tip.height)]
 
-    def required_bits_mainnet(self, header):
+    async def required_bits_mainnet(self, header):
         # Unlike testnet, required_bits is not a function of the timestamp
         if header.height < 478558:
-            return self._required_bits_fortnightly(Bitcoin, header)
+            return await self._required_bits_fortnightly(Bitcoin, header)
         elif header.height <= 504031:
-            return self._required_bits_EDA(Bitcoin, header)
+            return await self._required_bits_EDA(Bitcoin, header)
         else:
-            return self._required_bits_DAA(Bitcoin, header)
+            return await self._required_bits_DAA(Bitcoin, header)
 
-    def _required_bits_fortnightly(self, network, header):
+    async def _required_bits_fortnightly(self, network, header):
         '''Bitcoin's original DAA.'''
-        prev = self._header_at_height(header.chain_id, header.height - 1)
+        prev = await self._header_at_height(header.chain_id, header.height - 1)
         if header.height % 2016:
             return prev.bits
-        prior = self._header_at_height(header.chain_id, header.height - 2016)
+        prior = await self._header_at_height(header.chain_id, header.height - 2016)
 
         # Off-by-one with prev.timestamp.  Constrain the actual time.
         period = prev.timestamp - prior.timestamp
@@ -436,14 +440,15 @@ class Headers:
         new_target = (prior_target * adj_period) // target_period
         return target_to_bits(min(new_target, network.max_target))
 
-    def _required_bits_EDA(self, network, header):
+    async def _required_bits_EDA(self, network, header):
         '''The less said the better.'''
-        bits = self._required_bits_fortnightly(network, header)
+        bits = await self._required_bits_fortnightly(network, header)
         if header.height % 2016 == 0:
             return bits
 
-        prior_hash = self._header_at_height(header.chain_id, header.height - 7).hash
-        mtp_diff = self.median_time_past(header.prev_hash) - self.median_time_past(prior_hash)
+        prior_hash = await self._header_at_height(header.chain_id, header.height - 7).hash
+        mtp_diff = (await self.median_time_past(header.prev_hash)
+                    - await self.median_time_past(prior_hash))
         if mtp_diff < 12 * 3600:
             return bits
 
@@ -452,23 +457,23 @@ class Headers:
         new_target += new_target >> 2
         return target_to_bits(min(new_target, network.max_target))
 
-    def _required_bits_DAA(self, network, header):
+    async def _required_bits_DAA(self, network, header):
         '''BCH's shoddy difficulty adjustment algorithm.  He was warned, he shrugged.'''
-        def median_prior_header(chain_id, ref_height):
+        async def median_prior_header(chain_id, ref_height):
             '''Select the median of the 3 prior headers, for a curious definition of median.'''
             def maybe_swap(m, n):
                 if prev3[m].timestamp > prev3[n].timestamp:
                     prev3[m], prev3[n] = prev3[n], prev3[m]
 
-            prev3 = [self._header_at_height(chain_id, height)
+            prev3 = [await self._header_at_height(chain_id, height)
                      for height in range(ref_height - 3, ref_height)]
             maybe_swap(0, 2)
             maybe_swap(0, 1)
             maybe_swap(1, 2)
             return prev3[1]
 
-        start = median_prior_header(header.chain_id, header.height - 144)
-        end = median_prior_header(header.chain_id, header.height)
+        start = await median_prior_header(header.chain_id, header.height - 144)
+        end = await median_prior_header(header.chain_id, header.height)
 
         period_work = end.chain_work() - start.chain_work()
         period_time = min(max(end.timestamp - start.timestamp, 43200), 172800)
@@ -477,38 +482,38 @@ class Headers:
         new_target = (1 << 256) // Wn - 1
         return target_to_bits(min(new_target, network.max_target))
 
-    def _required_bits_testnet(self, network, header, daa_height, has_daa_minpow):
-        def prior_non_special_bits(genesis_bits):
+    async def _required_bits_testnet(self, network, header, daa_height, has_daa_minpow):
+        async def prior_non_special_bits(genesis_bits):
             for test_height in range(header.height - 1, -1, -1):
-                bits = self._header_at_height(header.chain_id, test_height).bits
+                bits = await self._header_at_height(header.chain_id, test_height).bits
                 if test_height % 2016 == 0 or bits != genesis_bits:
                     return bits
             # impossible to fall through here
 
-        prior = self._header_at_height(header.chain_id, header.height - 1)
+        prior = await self._header_at_height(header.chain_id, header.height - 1)
         is_slow = (header.timestamp - prior.timestamp) > 20 * 60
 
         if header.height <= daa_height:
             # Note: testnet did not use the EDA
             if header.height % 2016 == 0:
-                return self._required_bits_fortnightly(network, header)
+                return await self._required_bits_fortnightly(network, header)
             if is_slow:
                 return network.genesis_bits
-            return prior_non_special_bits(network.genesis_bits)
+            return await prior_non_special_bits(network.genesis_bits)
         else:
             if has_daa_minpow and is_slow:
                 return network.genesis_bits
-            return self._required_bits_DAA(network, header)
+            return await self._required_bits_DAA(network, header)
 
-    def required_bits_testnet(self, network, header):
-        return self._required_bits_testnet(network, header, 1188697, True)
+    async def required_bits_testnet(self, network, header):
+        return await self._required_bits_testnet(network, header, 1188697, True)
 
-    def required_bits_scaling_testnet(self, network, header):
+    async def required_bits_scaling_testnet(self, network, header):
         # The `fPowAllowMinDifficultyBlocks` setting is disabled on STN, so we no longer
         # check it and adjust min pow after the DAA height.
-        return self._required_bits_testnet(network, header, 2200, False)
+        return await self._required_bits_testnet(network, header, 2200, False)
 
-    def required_bits_regtest(self, network, _header):
+    async def required_bits_regtest(self, network, _header):
         # Regtest has no retargeting.
         return network.genesis_bits
 
