@@ -785,40 +785,41 @@ class Node:
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
+        await self.ensure_genesis_header()
         session_cls = session_cls or Session
         reader, writer = await open_connection(str(service.address.host), service.address.port)
         async with Connection(reader, writer) as connection:
-            await self.run_session(session_cls, service, connection, True, kwargs)
+            session = session_cls(self, service, connection, True, **kwargs)
+            await self.run_session(session)
 
-    def listen(self, *, session_cls=None, **kwargs):
+    def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
-        async def on_incoming_session(session_cls, reader, writer):
+        async def on_client(reader, writer):
+            await self.ensure_genesis_header()
             try:
                 async with Connection(reader, writer) as connection:
                     host, port = writer.transport.get_extra_info('peername')
                     remote = BitcoinService(address=NetAddress(host, port))
-                    await self.run_session(session_cls, remote, connection, False, kwargs)
+                    session = (session_cls or Session)(self, remote, connection, False)
+                    await self.run_session(session)
             except Exception as e:
                 logging.exception(f'error handling incoming connection: {e}')
 
         host = str(self.service.address.host)
         port = self.service.address.port
-        on_incoming_session = partial(on_incoming_session, session_cls or Session)
-        return Listener(asyncio.start_server(on_incoming_session, host, port))
+        return Listener(asyncio.start_server(on_client, host, port))
 
-    async def run_session(self, session_cls, service, connection, is_outgoing, kwargs):
+    async def run_session(self, session):
         '''Establish an outgoing connection to a service (a BitcoinService instance).  When
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
-        await self.ensure_genesis_header()
-        sessions = self.outgoing_sessions if is_outgoing else self.incoming_sessions
-        session = session_cls(self, service, connection, is_outgoing, **kwargs)
+        sessions = self.outgoing_sessions if session.is_outgoing else self.incoming_sessions
         sessions.add(session)
         try:
-            await session.maintain_connection(connection)
+            await session.maintain_connection(session.connection)
         finally:
             sessions.remove(session)
 
