@@ -928,39 +928,36 @@ class TestSession:
     @pytest.mark.asyncio
     async def test_bad_checksum(self, client_node, listening_node, caplog):
 
-        class OutSession(Session):
-            async def send_message(self, command, payload):
-                connection = self.connection_for_command(command)
-                header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
-                header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
-                # Mess up the checksum
-                header = bytearray(header)
-                header[-1] ^= 0x0f
-                await connection.outgoing_messages.put((header, payload))
-                await pause()
-                raise MemoryError
+        async def test(self, _group):
+            payload = b''
+            header = MessageHeader.std_bytes(self.node.network.magic, MessageHeader.PROTOCONF,
+                                             payload)
+            # Mess up the checksum
+            header = bytearray(header)
+            header[-1] ^= 0x0f
+            await self.connection.outgoing_messages.put((header, payload))
+            await pause()
+            raise MemoryError
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=OutSession)
+                    await client_node.connect(listening_node.service, on_handshake=test)
 
         assert in_caplog(caplog, 'protocol error: bad checksum for protoconf command')
 
     @pytest.mark.asyncio
     async def test_unhandled_command(self, client_node, listening_node, caplog):
 
-        class OutSession(Session):
-            async def perform_handshake(self, connection):
-                await super().perform_handshake(connection)
-                await self.send_message(_command('zombie'), b'')
-                await pause()
-                raise MemoryError
+        async def test(self, _group):
+            await self.send_message(_command('zombie'), b'')
+            await pause()
+            raise MemoryError
 
         with caplog.at_level(logging.DEBUG):
             async with listening_node.listen():
                 with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=OutSession)
+                    await client_node.connect(listening_node.service, on_handshake=test)
 
         assert in_caplog(caplog, 'ignoring unhandled zombie command')
 
@@ -985,7 +982,7 @@ class TestSession:
 
         class ListeningSession(Session):
             async def on_version(self, payload):
-                read_version_payload(self.remote_service, payload)
+                await super().on_version(payload)
                 raise ForceDisconnectError('test')
 
         async with listening_node.listen(session_cls=ListeningSession):
@@ -1027,7 +1024,7 @@ class TestSession:
         class OutSession(Session):
             async def maintain_connection(self, connection):
                 await self._send_unqueued(connection, MessageHeader.PROTOCONF,
-                                          self.our_protoconf.payload())
+                                          Protoconf.default().payload())
                 await pause()
 
         with caplog.at_level(logging.ERROR):
@@ -1122,53 +1119,38 @@ class TestSession:
     @pytest.mark.asyncio
     async def test_protoconf_understood(self, client_node, listening_node):
 
-        class OutSession(Session):
-            async def send_protoconf(self):
-                listener_session = list(listening_node.incoming_sessions)[0]
-                assert listener_session.their_protoconf is None
-                await super().send_protoconf()
-                await pause()
-                assert listener_session.their_protoconf == self.our_protoconf
-                raise MemoryError
+        async def test(self, _group):
+            listener_session = list(listening_node.incoming_sessions)[0]
+            assert listener_session.their_protoconf is None
+            assert self.protoconf is None
+            await self.send_protoconf()
+            assert self.protoconf is not None
+            await pause()
+            assert listener_session.their_protoconf == self.protoconf
+            raise MemoryError
 
         async with listening_node.listen():
             with pytest.raises(MemoryError):
-                await client_node.connect(listening_node.service, session_cls=OutSession)
+                await client_node.connect(listening_node.service, on_handshake=test)
 
     @pytest.mark.asyncio
-    async def test_duplicate_protoconf_received(self, client_node, listening_node, caplog):
+    @pytest.mark.parametrize('force', (True, False))
+    async def test_duplicate_protoconf_received(self, client_node, listening_node, caplog, force):
 
-        class OutSession(Session):
-            async def send_protoconf(self):
-                await super().send_protoconf()
+        async def test(self, _group):
+            await self.send_protoconf()
+            if force:
                 self.protoconf_sent = False
-                await super().send_protoconf()
-                await pause()
-                raise MemoryError
+            await self.send_protoconf()
+            await pause()
+            raise MemoryError
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=OutSession)
+                    await client_node.connect(listening_node.service, on_handshake=test)
 
-        assert in_caplog(caplog, 'protocol error: duplicate protoconf message received')
-
-    @pytest.mark.asyncio
-    async def test_duplicate_protoconf_not_sent(self, client_node, listening_node, caplog):
-
-        class OutSession(Session):
-            async def send_protoconf(self):
-                await super().send_protoconf()
-                await super().send_protoconf()
-                await pause()
-                raise MemoryError
-
-        with caplog.at_level(logging.ERROR):
-            async with listening_node.listen():
-                with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=OutSession)
-
-        assert not in_caplog(caplog, 'duplicate protoconf')
+        assert in_caplog(caplog, 'duplicate protoconf') is force
 
     #
     # EXTMSG message tests
@@ -1177,42 +1159,41 @@ class TestSession:
     @pytest.mark.asyncio
     async def test_send_protoconf_as_large_message(self, client_node, listening_node):
 
-        class OutSession(Session):
-            async def send_protoconf(self):
-                listener_session = list(listening_node.incoming_sessions)[0]
-                assert listener_session.their_protoconf is None
-                payload = self.our_protoconf.payload()
-                await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
-                                              achunks(payload, 4))
-                await pause()
-                assert listener_session.their_protoconf == self.our_protoconf
-                raise MemoryError
+        async def test(self, _group):
+            listener_session = list(listening_node.incoming_sessions)[0]
+            assert listener_session.their_protoconf is None
+            self.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
+            payload = self.our_protoconf.payload()
+            await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                          achunks(payload, 4))
+            await pause()
+            assert listener_session.their_protoconf == self.our_protoconf
+            raise MemoryError
 
         async with listening_node.listen():
             with pytest.raises(MemoryError):
-                await client_node.connect(listening_node.service, session_cls=OutSession)
+                await client_node.connect(listening_node.service, on_handshake=test)
 
     @pytest.mark.asyncio
     async def test_large_message_rejections(self, client_node, listening_node, caplog):
 
-        class OutSession(Session):
-            async def send_protoconf(self):
-                payload = self.our_protoconf.payload()
-                # We should not accept sending a large message
-                with pytest.raises(RuntimeError):
-                    await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
-                                                  achunks(payload, 4))
-                # Override the check
-                self.can_send_large_messages = True
+        async def test(self, _group):
+            payload = Protoconf.default().payload()
+            # We should not accept sending a large message
+            with pytest.raises(RuntimeError):
                 await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
                                               achunks(payload, 4))
-                await pause()
+            # Override the check
+            self.can_send_large_messages = True
+            await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                          achunks(payload, 4))
+            await pause()
 
         with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
-                    await client_node.connect(listening_node.service, session_cls=OutSession)
+                    await client_node.connect(listening_node.service, on_handshake=test)
 
         assert in_caplog(caplog, 'large message received but invalid')
 
@@ -1227,25 +1208,24 @@ class TestSession:
             async def on_zombie(self, payload):
                 self.zombie_payload2 = payload
 
-        class OutSession(Session):
-            async def send_protoconf(self):
-                listener_session = list(listening_node.incoming_sessions)[0]
-                listener_session.streaming_min_size = 200
-                await self.send_large_message(_command('zombie'), len(payload),
-                                              achunks(payload, 100))
-                await self.send_message(_command('zombie'), payload)
-                await self.send_large_message(_command('ghoul'), len(payload),
-                                              achunks(payload, 100))
-                await pause()
-                assert listener_session.zombie_payload == payload
-                assert listener_session.zombie_payload2 == payload
-                raise MemoryError
+        async def test(self, _group):
+            listener_session = list(listening_node.incoming_sessions)[0]
+            listener_session.streaming_min_size = 200
+            await self.send_large_message(_command('zombie'), len(payload),
+                                          achunks(payload, 100))
+            await self.send_message(_command('zombie'), payload)
+            await self.send_large_message(_command('ghoul'), len(payload),
+                                          achunks(payload, 100))
+            await pause()
+            assert listener_session.zombie_payload == payload
+            assert listener_session.zombie_payload2 == payload
+            raise MemoryError
 
         payload = urandom(2000)
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen(session_cls=ListeningSession):
                 with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=OutSession)
+                    await client_node.connect(listening_node.service, on_handshake=test)
 
         assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
 
@@ -1254,21 +1234,15 @@ class TestSession:
     #
 
     @pytest.mark.asyncio
-    async def test_getheaders(self, client_node, listening_node, caplog):
-        class OutSession(Session):
-            async def on_headers(self, payload):
-                nonlocal headers_payload
-                headers_payload = payload
+    async def test_getheaders_roundtrip(self, client_node, listening_node, caplog):
 
-            async def perform_handshake(self, connection):
-                await super().perform_handshake(connection)
-                await self.get_headers()
-                await pause()
-                raise MemoryError
+        async def test(self, _group):
+            assert not self.headers_received.is_set()
+            await self.get_headers()
+            await pause()
+            assert self.headers_received.is_set()
+            raise MemoryError
 
-        headers_payload = None
         async with listening_node.listen():
             with pytest.raises(MemoryError):
-                await client_node.connect(listening_node.service, session_cls=OutSession)
-
-        assert headers_payload is not None
+                await client_node.connect(listening_node.service, on_handshake=test)

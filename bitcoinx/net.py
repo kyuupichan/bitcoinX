@@ -780,16 +780,17 @@ class Node:
     def is_our_nonce(self, nonce):
         return any(nonce == session.nonce for session in self.outgoing_sessions)
 
-    async def connect(self, service, *, session_cls=None):
+    async def connect(self, service, *, session_cls=None, **kwargs):
         '''Establish an outgoing connection to a service (a BitcoinService instance).  When
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
+        session_cls = session_cls or Session
         reader, writer = await open_connection(str(service.address.host), service.address.port)
         async with Connection(reader, writer) as connection:
-            await self.run_session(service, connection, session_cls or Session, True)
+            await self.run_session(session_cls, service, connection, True, kwargs)
 
-    def listen(self, *, session_cls=None):
+    def listen(self, *, session_cls=None, **kwargs):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
@@ -798,7 +799,7 @@ class Node:
                 async with Connection(reader, writer) as connection:
                     host, port = writer.transport.get_extra_info('peername')
                     remote = BitcoinService(address=NetAddress(host, port))
-                    await self.run_session(remote, connection, session_cls, False)
+                    await self.run_session(session_cls, remote, connection, False, kwargs)
             except Exception as e:
                 logging.exception(f'error handling incoming connection: {e}')
 
@@ -807,14 +808,14 @@ class Node:
         on_incoming_session = partial(on_incoming_session, session_cls or Session)
         return Listener(asyncio.start_server(on_incoming_session, host, port))
 
-    async def run_session(self, service, connection, session_cls, is_outgoing):
+    async def run_session(self, session_cls, service, connection, is_outgoing, kwargs):
         '''Establish an outgoing connection to a service (a BitcoinService instance).  When
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
         await self.ensure_genesis_header()
         sessions = self.outgoing_sessions if is_outgoing else self.incoming_sessions
-        session = session_cls(self, service, connection, is_outgoing)
+        session = session_cls(self, service, connection, is_outgoing, **kwargs)
         sessions.add(session)
         try:
             await session.maintain_connection(connection)
@@ -855,15 +856,14 @@ class Session:
     done with separate Session objects.
     '''
 
-    def __init__(self, node, remote_service, connection, is_outgoing, *,
-                 protoconf=None, on_handshake_complete=None):
+    def __init__(self, node, remote_service, connection, is_outgoing, *, on_handshake=None):
         self.node = node
         self.remote_service = remote_service
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = is_outgoing
-        self.our_protoconf = protoconf or Protoconf.default()
-        self.on_handshake_complete = on_handshake_complete
+        self.protoconf = None
+        self._on_handshake = on_handshake or self.__class__.on_handshake
         self.streaming_min_size = 10_000_000
 
         # State
@@ -883,19 +883,6 @@ class Session:
         context = {'remote_address': f'{remote_service.address}'}
         self.logger = SessionLogger(logger, context)
         self.debug = logger.isEnabledFor(logging.DEBUG)
-
-    async def maintain_connection(self, connection):
-        '''Maintains a connection.'''
-        try:
-            async with TaskGroup() as group:
-                group.create_task(self.recv_messages_loop(connection))
-                group.create_task(self.perform_handshake(connection))
-                await self.verack_received.wait()
-                group.create_task(self.send_messages_loop(connection))
-                if self.on_handshake_complete:
-                    await self.on_handshake_complete(group)
-        except ExceptionGroup as e:
-            raise e.exceptions[0] from None
 
     async def send_messages_loop(self, connection):
         '''Handle sending the queue of messages.  This sends all messages except the initial
@@ -932,6 +919,22 @@ class Session:
             except Exception:
                 self.logger.exception(f'unexpected error handling {header} message')
                 raise
+
+    async def maintain_connection(self, connection):
+        '''Maintains a connection.'''
+        try:
+            async with TaskGroup() as group:
+                group.create_task(self.recv_messages_loop(connection))
+                group.create_task(self.perform_handshake(connection))
+                await self.verack_received.wait()
+                group.create_task(self.send_messages_loop(connection))
+                await self._on_handshake(self, group)
+        except ExceptionGroup as e:
+            raise e.exceptions[0] from None
+
+    async def on_handshake(self, group):
+        # For now we simply send a protoconf message
+        group.create_task(self.send_protoconf())
 
     async def _send_unqueued(self, connection, command, payload):
         '''Send a command without queueing.  For use with handshake negotiation.'''
@@ -1150,5 +1153,7 @@ class Session:
         if self.protoconf_sent:
             self.logger.warning('protoconf message already sent')
             return
+        if not self.protoconf:
+            self.protoconf = Protoconf.default()
         self.protoconf_sent = True
-        await self.send_message(MessageHeader.PROTOCONF, self.our_protoconf.payload())
+        await self.send_message(MessageHeader.PROTOCONF, self.protoconf.payload())
