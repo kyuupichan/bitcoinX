@@ -813,9 +813,8 @@ listen_host = IPv4Address('127.0.0.1')
 @pytest_asyncio.fixture
 async def listening_headers():
     async with asqlite3.connect(':memory:') as conn:
-        headers = Headers(conn)
-        await headers.create_tables_if_not_present('main')
-        await headers.insert_genesis_header(Bitcoin.genesis_header)
+        headers = Headers(conn, 'main', Bitcoin)
+        await headers.initialize()
         yield headers
 
 
@@ -831,9 +830,8 @@ def listening_node(listening_headers):
 @pytest_asyncio.fixture
 async def client_headers():
     async with asqlite3.connect(':memory:') as conn:
-        headers = Headers(conn)
-        await headers.create_tables_if_not_present('main')
-        await headers.insert_genesis_header(Bitcoin.genesis_header)
+        headers = Headers(conn, 'main', Bitcoin)
+        await headers.initialize()
         yield headers
 
 
@@ -918,7 +916,6 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 client_node.network = BitcoinTestnet
-                await client_node.headers.insert_genesis_header(BitcoinTestnet.genesis_header)
                 with pytest.raises(ConnectionResetError):
                     await client_node.connect(listening_node.service)
 

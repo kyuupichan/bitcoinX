@@ -17,8 +17,13 @@ from .utils import read_file
 def run_test_with_headers(test_func, network=Bitcoin):
     async def run():
         async with asqlite3.connect(':memory:') as conn:
-            headers = Headers(conn, 'main', network)
-            await headers.create_tables_if_not_present()
+            # Create two copies of the tables with different schemas, to ensure the code
+            # always queries with the appropriate schema
+            headers1 = Headers(conn, 'main', BitcoinTestnet)
+            await headers1.initialize()
+            await conn.execute("ATTACH ':memory:' as second")
+            headers = Headers(conn, 'second', network)
+            await headers.initialize()
             await test_func(headers)
 
     asyncio.run(run())
@@ -146,7 +151,8 @@ class TestHeaders:
             blob_literal = f"x'{getattr(header, colname).hex()}'"
             columns, values = self.columns_and_values(colname, blob_literal)
             with pytest.raises(asqlite3.IntegrityError) as e:
-                await headers.conn.execute(f'INSERT INTO Headers({columns}) VALUES ({values});')
+                await headers.conn.execute(headers.fixup_sql(
+                    f'INSERT INTO $S.Headers({columns}) VALUES ({values});'))
             assert f'UNIQUE constraint failed: Headers.{colname}' == str(e.value)
 
         run_test_with_headers(test)
@@ -495,7 +501,7 @@ class TestHeaders:
 
         run_test_with_headers(test)
 
-    @pytest.mark.parametrize('network', (Bitcoin, BitcoinTestnet))
+    @pytest.mark.parametrize('network', all_networks)
     def test_block_locator_empty_headers(self, network):
         async def test(headers):
             genesis_header = await headers.header_from_hash(network.genesis_hash)
