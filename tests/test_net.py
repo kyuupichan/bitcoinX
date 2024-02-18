@@ -19,11 +19,10 @@ from bitcoinx import (
 from bitcoinx.errors import ProtocolError, ForceDisconnectError
 from bitcoinx.misc import chunks
 from bitcoinx.net import (
-    ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader, _command,
+    ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader, BlockLocator,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart, Node, Session, version_payload, read_version_payload,
-    pack_getheaders_payload, unpack_getheaders_payload, pack_headers_payload,
-    unpack_headers_payload, block_locator
+    ServicePart, Node, Session, version_payload, read_version_payload, _command,
+    unpack_getheaders_payload, pack_headers_payload, unpack_headers_payload,
 )
 
 from .utils import run_test_with_headers, create_random_branch, insert_tree
@@ -654,42 +653,40 @@ class TestNetworkProtocol:
         (70_015, 0, True),
     ))
     def test_getheaders_payload(self, version, count, hash_stop):
-        locator = [urandom(32) for _ in range(count)]
         hash_stop = urandom(32) if hash_stop else None
-        payload = pack_getheaders_payload(version, locator, hash_stop)
+        locator = BlockLocator([urandom(32) for _ in range(count)], hash_stop)
+        payload = locator.to_payload(version)
         result = unpack_getheaders_payload(payload)
-        assert result == (version, locator, hash_stop or bytes(32))
+        assert result == (version, locator.block_hashes, hash_stop or bytes(32))
 
     def test_getheaders_payload_short(self):
-        payload = pack_getheaders_payload(700, [urandom(32)], urandom(31))
+        locator = BlockLocator([urandom(32)], urandom(31))
+        payload = locator.to_payload(700)
         with pytest.raises(ProtocolError) as e:
             unpack_getheaders_payload(payload)
         assert str(e.value) == 'truncated getheaders payload'
 
     def test_getheaders_payload_long(self, caplog):
         version = 700
-        locator = [urandom(32) for _ in range(3)]
-        hash_stop = urandom(32)
-        payload = pack_getheaders_payload(version, locator, hash_stop + b'0')
+        locator = BlockLocator([urandom(32) for _ in range(3)], urandom(32))
+        payload = locator.to_payload(version) + b'0'
         with caplog.at_level(logging.INFO):
             result = unpack_getheaders_payload(payload)
 
-        assert result == (version, locator, hash_stop)
+        assert result == (version, locator.block_hashes, locator.hash_stop)
         assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
 
     def test_pack_getheaders_payload(self):
         def pack_hash(h):
             return h
 
-        locator = [urandom(32) for _ in range(6)]
+        block_hashes = [urandom(32) for _ in range(6)]
         hash_stop = urandom(32)
         protocol = 100
-        answer = pack_le_int32(protocol) + pack_list(locator, pack_hash)
+        answer = pack_le_int32(protocol) + pack_list(block_hashes, pack_hash)
 
-        assert pack_getheaders_payload(protocol, locator) == answer + bytes(32)
-        assert pack_getheaders_payload(protocol, locator, None) == answer + bytes(32)
-        assert pack_getheaders_payload(protocol, locator, hash_stop) \
-            == answer + hash_stop
+        assert BlockLocator(block_hashes, None).to_payload(protocol) == answer + bytes(32)
+        assert BlockLocator(block_hashes, hash_stop).to_payload(protocol) == answer + hash_stop
 
     @pytest.mark.parametrize("count", (0, 10, 100, 2000))
     def test_headers_payload(self, count):
@@ -810,25 +807,27 @@ class TestNetworkProtocol:
 
 
 class TestBlockLocator:
+    # FIXME: add more tests
 
-    def test_block_locator(self):
+    def test_from_headers(self):
         async def test(headers):
             count = 100
             genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             branch = create_random_branch(genesis_header, count)
             await insert_tree(headers, [(None, branch)])
-            locator = await block_locator(headers)
-            assert len(locator) == 8
-            for loc_pos in range(7):
-                assert locator[loc_pos] == branch[-(1 << loc_pos)].hash
-            assert locator[-1] == genesis_header.hash
+            locator = await BlockLocator.from_block_hash(headers)
+            assert len(locator.block_hashes) == 8
+            assert locator.block_hashes[:-1] == [
+                branch[-(1 << loc_pos)].hash for loc_pos in range(7)]
+            assert locator.block_hashes[-1] == genesis_header.hash
 
         run_test_with_headers(test)
 
     @pytest.mark.parametrize('network', all_networks)
     def test_block_locator_empty_headers(self, network):
         async def test(headers):
-            assert await block_locator(headers) == [network.genesis_hash]
+            locator = await BlockLocator.from_block_hash(headers)
+            assert locator.block_hashes == [network.genesis_hash]
 
         run_test_with_headers(test, network)
 

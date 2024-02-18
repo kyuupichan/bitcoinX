@@ -15,7 +15,7 @@ from functools import partial
 from io import BytesIO
 from ipaddress import ip_address, IPv4Address, IPv6Address
 from struct import Struct, error as struct_error
-from typing import List
+from typing import List, Optional
 
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, MissingHeader, HeaderException,
@@ -621,17 +621,6 @@ def version_payload(service, remote_service, nonce):
     ))
 
 
-def pack_getheaders_payload(protocol_version, locator, hash_stop=None):
-    def parts():
-        yield pack_le_int32(protocol_version)
-        yield pack_varint(len(locator))
-        for block_hash in locator:
-            yield block_hash
-        yield hash_stop or bytes(32)
-
-    return b''.join(parts())
-
-
 def unpack_getheaders_payload(payload):
     def read_one(read):
         return read(32)
@@ -701,21 +690,41 @@ async def get_raw_headers(headers, block_locator, hash_stop, count):
     return [header.to_bytes() for header in header_objs]
 
 
-async def block_locator(headers, block_hash=None):
-    '''Returns a block locator for the longest chain containing the block hash.  A block
-    locator is a list of block hashes starting from the chain tip back to the genesis
-    block, that become increasingly sparse.
-    '''
-    def block_heights(height, stop=0, step=-1):
-        while height > stop:
-            yield height
-            height += step
-            step += step
-        yield stop
+@dataclass
+class BlockLocator:
+    '''A block locator is a list of block hashes starting from the chain tip back to the
+    genesis block, that become increasingly sparse.  It also includes an optional
+    hash_stop to indicate where to stop.
 
-    chain = await headers.longest_chain(block_hash)
-    return [(await headers.header_at_height(chain, height)).hash
-            for height in block_heights(chain.tip.height)]
+    As a payload it is used in the getblocks and getheaders messages.
+    '''
+    block_hashes: List[bytes]
+    hash_stop: Optional[bytes]
+
+    @classmethod
+    async def from_block_hash(cls, headers, block_hash=None, *, hash_stop=None):
+        '''Returns a block locator for the longest chain containing the block hash.  If None, the
+        genesis block hash is used.
+        '''
+        def block_heights(height, stop=0, step=-1):
+            while height > stop:
+                yield height
+                height += step
+                step += step
+            yield stop
+
+        chain = await headers.longest_chain(block_hash)
+        block_hashes = [(await headers.header_at_height(chain, height)).hash
+                        for height in block_heights(chain.tip.height)]
+        return cls(block_hashes, hash_stop)
+
+    def to_payload(self, protocol_version):
+        def parts():
+            yield pack_le_int32(protocol_version)
+            yield pack_list(self.block_hashes, lambda block_hash: block_hash)
+            yield self.hash_stop or bytes(32)
+
+        return b''.join(parts())
 
 
 class Connection:
@@ -1076,8 +1085,8 @@ class Session:
         Calling this with no argument forms a loop with on_headers() whose eventual effect
         is to synchronize the peer's headers.
         '''
-        locator = await block_locator(self.node.headers, self.their_tip.hash)
-        payload = pack_getheaders_payload(self.node.service.protocol_version, locator)
+        locator = await BlockLocator.from_block_hash(self.node.headers, self.their_tip.hash)
+        payload = locator.to_payload(self.node.service.protocol_version)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, payload)
