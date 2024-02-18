@@ -147,7 +147,7 @@ class Chain:
         return self.chain_id
 
 
-class Headers:
+class HeadersBase:
 
     CREATE_HEADERS_TABLE = '''
       CREATE TABLE {schema}.Headers (
@@ -172,7 +172,7 @@ class Headers:
           prev_hdr_id ISNULL,
           zeroblob(32),
           (SELECT hash from Headers where hdr_id=H.prev_hdr_id)
-        ), substr(merkle_root, 1, 32), timestamp, bits, nonce
+        ), merkle_root, timestamp, bits, nonce
         FROM Headers H;'''
     CREATE_CHAINS_TABLE = '''
       CREATE TABLE {schema}.Chains (
@@ -212,64 +212,41 @@ class Headers:
           -- Set new chain tip
           UPDATE Chains SET tip_hdr_id=new.hdr_id WHERE chain_id=new.chain_id;
         END;'''
+    INSERT_GENESIS = '''
+      INSERT INTO {schema}.Headers(prev_hdr_id, height, chain_id, chain_work, hash,
+                                   merkle_root, version, timestamp, bits, nonce)
+        VALUES (NULL, 0, 1, ?, ?, ?, ?, ?, ?, ?);'''
 
-    def __init__(self, conn):
-        self.conn = conn
-        self.required_bits = {
-            Bitcoin: self.required_bits_mainnet,
-            BitcoinTestnet: self.required_bits_testnet,
-            BitcoinScalingTestnet: self.required_bits_scaling_testnet,
-            BitcoinRegtest: self.required_bits_regtest,
-        }
-
-    async def create_tables_if_not_present(self, schema):
+    async def create_tables_if_not_present(self):
         '''Create the tables and views needed to maintain headers.'''
         try:
-            await self.conn.execute('SELECT 1 FROM Headers')
+            await self.conn.execute(f'SELECT 1 FROM {self.schema}.Headers')
             logging.info('database tables found')
             return
         except asqlite3.OperationalError:
             pass
 
+        gh = SimpleHeader.from_bytes(self.network.genesis_header)
+        assert gh.prev_hash == bytes(32)
+
+        # Create the tables and insert the genesis header
         async with self.conn:
-            await self.conn.execute(self.CREATE_HEADERS_TABLE.replace('{schema}', schema))
-            await self.conn.execute(self.CREATE_HEIGHT_INDEX.replace('{schema}', schema))
-            # This view cleans up prev_hash and merkle_root for pesky cases
-            await self.conn.execute(self.CREATE_HEADERS_VIEW.replace('{schema}', schema))
-            await self.conn.execute(self.CREATE_CHAINS_TABLE.replace('{schema}', schema))
-            # A view that adds base_height and tip_height.
-            await self.conn.execute(self.CREATE_CHAINS_VIEW.replace('{schema}', schema))
-            # A view to easily obtain ancestor chains
-            await self.conn.execute(self.CREATE_ANCESTORS_VIEW.replace('{schema}', schema))
-            await self.conn.execute(self.CREATE_HEADERS_TRIGGER.replace('{schema}', schema))
+            for sql in (self.CREATE_HEADERS_TABLE, self.CREATE_HEIGHT_INDEX,
+                        self.CREATE_HEADERS_VIEW, self.CREATE_CHAINS_TABLE,
+                        # A view that adds base_height and tip_height, and one to easily
+                        # obtain ancestor chains
+                        self.CREATE_CHAINS_VIEW, self.CREATE_ANCESTORS_VIEW,
+                        self.CREATE_HEADERS_TRIGGER):
+                sql = sql.replace('{schema}', self.schema)
+                await self.conn.execute(sql)
             logging.info('database tables and views created')
 
-    async def insert_genesis_header(self, raw_header):
-        gh = SimpleHeader.from_bytes(raw_header)
-        if gh.prev_hash != bytes(32):
-            raise ValueError('not a genesis header')
+            sql = self.INSERT_GENESIS.replace('{schema}', self.schema)
+            await self.conn.execute(sql, (int_to_le_bytes(gh.work()), gh.hash, gh.merkle_root,
+                                          gh.version, gh.timestamp, gh.bits, gh.nonce))
+            logging.info('{self.network} genesis header {gh.hex_str()} inserted')
 
-        merkle_root = gh.merkle_root
-        cursor = await self.conn.execute('SELECT count(hdr_id) from Headers WHERE merkle_root=?',
-                                         (gh.merkle_root, ))
-        count = (await cursor.fetchone())[0]
-        if count:
-            merkle_root += bytes(count)
-
-        async with self.conn:
-            # Determine a chain ID to give the new
-            cursor = await self.conn.execute('SELECT max(chain_id) + 1 FROM Chains')
-            chain_id = (await cursor.fetchone())[0] or 1
-            chain_work = int_to_le_bytes(bits_to_work(gh.bits))
-
-            await self.conn.execute('''
-              INSERT INTO Headers (prev_hdr_id, height, chain_id, chain_work, hash, merkle_root,
-                                   version, timestamp, bits, nonce)
-                VALUES (NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?);
-            ''', (chain_id, chain_work, gh.hash, merkle_root, gh.version, gh.timestamp,
-                  gh.bits, gh.nonce))
-
-    async def insert_headers(self, raw_headers, network):
+    async def insert_headers(self, raw_headers, check_work=True):
         '''Insert headers into the Headers table.
 
         raw_headers can either be a sequence of raw headers, or a concatenated sequence of
@@ -288,7 +265,7 @@ class Headers:
             chain_id)'''
 
         execute = self.conn.execute
-        required_bits = self.required_bits[network or Bitcoin]
+        required_bits = self.network.required_bits
         for header in headers(raw_headers):
             cursor = await execute('SELECT hdr_id, chain_id, height, chain_work FROM Headers '
                                    'WHERE hash=?', (header.prev_hash, ))
@@ -297,7 +274,7 @@ class Headers:
                 raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
             prev_hdr_id, chain_id, height, chain_work = row
 
-            if network:
+            if check_work:
                 header.height = height + 1
                 header.chain_id = chain_id
                 bits = await required_bits(network, header)
@@ -416,113 +393,13 @@ class Headers:
         return [(await self.header_at_height(chain, height)).hash
                 for height in block_heights(chain.tip.height)]
 
-    async def required_bits_mainnet(self, network, header):
-        # Unlike testnet, required_bits is not a function of the timestamp
-        if header.height < 478558:
-            return await self._required_bits_fortnightly(network, header)
-        elif header.height <= 504031:
-            return await self._required_bits_EDA(network, header)
-        else:
-            return await self._required_bits_DAA(network, header)
 
-    async def _required_bits_fortnightly(self, network, header):
-        '''Bitcoin's original DAA.'''
-        if header.height == 0:
-            return network.genesis_bits
+class Headers(HeadersBase):
 
-        prev = await self._header_at_height(header.chain_id, header.height - 1)
-        if header.height % 2016:
-            return prev.bits
-        prior = await self._header_at_height(header.chain_id, header.height - 2016)
-
-        # Off-by-one with prev.timestamp.  Constrain the actual time.
-        period = prev.timestamp - prior.timestamp
-        target_period = 2016 * 600
-        adj_period = min(max(period, target_period // 4), target_period * 4)
-
-        prior_target = bits_to_target(prev.bits)
-        new_target = (prior_target * adj_period) // target_period
-        return target_to_bits(min(new_target, network.max_target))
-
-    async def _required_bits_EDA(self, network, header):
-        '''The less said the better.'''
-        bits = await self._required_bits_fortnightly(network, header)
-        if header.height % 2016 == 0:
-            return bits
-
-        earlier = await self._header_at_height(header.chain_id, header.height - 7)
-        mtp_diff = (await self.median_time_past(header.prev_hash)
-                    - await self.median_time_past(earlier.hash))
-        if mtp_diff < 12 * 3600:
-            return bits
-
-        # Increase target by 25% (reducing difficulty by 20%).
-        new_target = bits_to_target(bits)
-        new_target += new_target >> 2
-        return target_to_bits(min(new_target, network.max_target))
-
-    async def _required_bits_DAA(self, network, header):
-        '''BCH's shoddy difficulty adjustment algorithm.  He was warned, he shrugged.'''
-        async def median_prior_header(chain_id, ref_height):
-            '''Select the median of the 3 prior headers, for a curious definition of median.'''
-            def maybe_swap(m, n):
-                if prev3[m].timestamp > prev3[n].timestamp:
-                    prev3[m], prev3[n] = prev3[n], prev3[m]
-
-            prev3 = [await self._header_at_height(chain_id, height)
-                     for height in range(ref_height - 3, ref_height)]
-            maybe_swap(0, 2)
-            maybe_swap(0, 1)
-            maybe_swap(1, 2)
-            return prev3[1]
-
-        start = await median_prior_header(header.chain_id, header.height - 144)
-        end = await median_prior_header(header.chain_id, header.height)
-
-        period_work = end.chain_work() - start.chain_work()
-        period_time = min(max(end.timestamp - start.timestamp, 43200), 172800)
-
-        Wn = (period_work * 600) // period_time
-        new_target = (1 << 256) // Wn - 1
-        return target_to_bits(min(new_target, network.max_target))
-
-    async def _required_bits_testnet(self, network, header, daa_height, has_daa_minpow):
-        async def prior_non_special_bits(genesis_bits):
-            for test_height in range(header.height - 1, -1, -1):
-                bits = (await self._header_at_height(header.chain_id, test_height)).bits
-                if test_height % 2016 == 0 or bits != genesis_bits:
-                    return bits
-            # impossible to fall through here
-
-        if header.height == 0:
-            return network.genesis_bits
-
-        prior = await self._header_at_height(header.chain_id, header.height - 1)
-        is_slow = (header.timestamp - prior.timestamp) > 20 * 60
-
-        if header.height <= daa_height:
-            # Note: testnet did not use the EDA
-            if header.height % 2016 == 0:
-                return await self._required_bits_fortnightly(network, header)
-            if is_slow:
-                return network.genesis_bits
-            return await prior_non_special_bits(network.genesis_bits)
-        else:
-            if has_daa_minpow and is_slow:
-                return network.genesis_bits
-            return await self._required_bits_DAA(network, header)
-
-    async def required_bits_testnet(self, network, header):
-        return await self._required_bits_testnet(network, header, 1188697, True)
-
-    async def required_bits_scaling_testnet(self, network, header):
-        # The `fPowAllowMinDifficultyBlocks` setting is disabled on STN, so we no longer
-        # check it and adjust min pow after the DAA height.
-        return await self._required_bits_testnet(network, header, 2200, False)
-
-    async def required_bits_regtest(self, network, _header):
-        # Regtest has no retargeting.
-        return network.genesis_bits
+    def __init__(self, conn, schema, network):
+        self.conn = conn
+        self.schema = schema
+        self.network = network
 
 
 ##########
@@ -534,7 +411,8 @@ class Headers:
 
 class Network:
 
-    def __init__(self, *, name, full_name, magic_hex, genesis_header_hex, default_port, seeds,
+    def __init__(self, *, name, full_name, magic_hex, genesis_header_hex, required_bits,
+                 default_port, seeds,
                  BIP65_height, BIP66_height, CSV_height, UAHF_height, DAA_height,
                  genesis_height, P2PKH_verbyte, P2SH_verbyte, WIF_byte,
                  xpub_verbytes_hex, xprv_verbytes_hex, cashaddr_prefix):
@@ -544,7 +422,10 @@ class Network:
         self.genesis_header = bytes.fromhex(genesis_header_hex)
         assert len(self.genesis_header) == 80
         self.genesis_bits = header_bits(self.genesis_header)
+        self.genesis_hash = header_hash(self.genesis_header)
         self.max_target = bits_to_target(self.genesis_bits)
+        # Signature: async def required_bits(headers, header):
+        self.required_bits = required_bits
         self.default_port = default_port
         self.seeds = seeds
         self.BIP65_height = BIP65_height,
@@ -588,6 +469,125 @@ class Network:
         '''Return a P2SH address string.'''
         return base58_encode_check(pack_byte(self.P2SH_verbyte) + hash160)
 
+    def __str__(self):
+        return self.name
+
+
+async def required_bits_mainnet(headers, header):
+    # Unlike testnet, required_bits is not a function of the timestamp
+    if header.height < 478558:
+        return await _required_bits_fortnightly(headers, header)
+    elif header.height <= 504031:
+        return await _required_bits_EDA(headers, header)
+    else:
+        return await _required_bits_DAA(headers, header)
+
+
+async def _required_bits_fortnightly(headers, header):
+    '''Bitcoin's original DAA.'''
+    if header.height == 0:
+        return headers.network.genesis_bits
+
+    prev = await headers._header_at_height(header.chain_id, header.height - 1)
+    if header.height % 2016:
+        return prev.bits
+    prior = await headers._header_at_height(header.chain_id, header.height - 2016)
+
+    # Off-by-one with prev.timestamp.  Constrain the actual time.
+    period = prev.timestamp - prior.timestamp
+    target_period = 2016 * 600
+    adj_period = min(max(period, target_period // 4), target_period * 4)
+
+    prior_target = bits_to_target(prev.bits)
+    new_target = (prior_target * adj_period) // target_period
+    return target_to_bits(min(new_target, headers.network.max_target))
+
+
+async def _required_bits_EDA(headers, header):
+    '''The less said the better.'''
+    bits = await _required_bits_fortnightly(headers, header)
+    if header.height % 2016 == 0:
+        return bits
+
+    earlier = await headers._header_at_height(header.chain_id, header.height - 7)
+    mtp_diff = (await headers.median_time_past(header.prev_hash)
+                - await headers.median_time_past(earlier.hash))
+    if mtp_diff < 12 * 3600:
+        return bits
+
+    # Increase target by 25% (reducing difficulty by 20%).
+    new_target = bits_to_target(bits)
+    new_target += new_target >> 2
+    return target_to_bits(min(new_target, headers.network.max_target))
+
+
+async def _required_bits_DAA(headers, header):
+    '''BCH's shoddy difficulty adjustment algorithm.  He was warned, he shrugged.'''
+    async def median_prior_header(chain_id, ref_height):
+        '''Select the median of the 3 prior headers, for a curious definition of median.'''
+        def maybe_swap(m, n):
+            if prev3[m].timestamp > prev3[n].timestamp:
+                prev3[m], prev3[n] = prev3[n], prev3[m]
+
+        prev3 = [await headers._header_at_height(chain_id, height)
+                 for height in range(ref_height - 3, ref_height)]
+        maybe_swap(0, 2)
+        maybe_swap(0, 1)
+        maybe_swap(1, 2)
+        return prev3[1]
+
+    start = await median_prior_header(header.chain_id, header.height - 144)
+    end = await median_prior_header(header.chain_id, header.height)
+
+    period_work = end.chain_work() - start.chain_work()
+    period_time = min(max(end.timestamp - start.timestamp, 43200), 172800)
+
+    Wn = (period_work * 600) // period_time
+    new_target = (1 << 256) // Wn - 1
+    return target_to_bits(min(new_target, headers.network.max_target))
+
+
+async def _required_bits_testnet(headers, header, daa_height, has_daa_minpow):
+    async def prior_non_special_bits(genesis_bits):
+        for test_height in range(header.height - 1, -1, -1):
+            bits = (await headers._header_at_height(header.chain_id, test_height)).bits
+            if test_height % 2016 == 0 or bits != genesis_bits:
+                return bits
+        # impossible to fall through here
+
+    if header.height == 0:
+        return headers.network.genesis_bits
+
+    prior = await headers._header_at_height(header.chain_id, header.height - 1)
+    is_slow = (header.timestamp - prior.timestamp) > 20 * 60
+
+    if header.height <= daa_height:
+        # Note: testnet did not use the EDA
+        if header.height % 2016 == 0:
+            return await _required_bits_fortnightly(headers, header)
+        if is_slow:
+            return headers.network.genesis_bits
+        return await prior_non_special_bits(headers.network.genesis_bits)
+    else:
+        if has_daa_minpow and is_slow:
+            return headers.network.genesis_bits
+        return await _required_bits_DAA(headers, header)
+
+
+async def required_bits_testnet(headers, header):
+    return await _required_bits_testnet(headers, header, 1188697, True)
+
+
+async def required_bits_STN(headers, header):
+    # The `fPowAllowMinDifficultyBlocks` setting is disabled on STN, so we no longer
+    # check it and adjust min pow after the DAA height.
+    return await _required_bits_testnet(headers, header, 2200, False)
+
+
+async def required_bits_regtest(headers, _header):
+    # Regtest has no retargeting.
+    return headers.network.genesis_bits
+
 
 Bitcoin = Network(
     name='mainnet',
@@ -595,6 +595,7 @@ Bitcoin = Network(
     magic_hex='e3e1f3e8',
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c',
+    required_bits=required_bits_mainnet,
     default_port=8333,
     seeds=[
         'seed.bitcoinsv.io',
@@ -622,6 +623,7 @@ BitcoinScalingTestnet = Network(
     magic_hex='fbcec4f9',
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
+    required_bits=required_bits_STN,
     default_port=9333,
     seeds=[
         'stn-seed.bitcoinsv.io',
@@ -648,6 +650,7 @@ BitcoinTestnet = Network(
     magic_hex='f4e5f3f4',
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18',
+    required_bits=required_bits_testnet,
     default_port=18333,
     seeds=[
         'testnet-seed.bitcoinsv.io',
@@ -675,6 +678,7 @@ BitcoinRegtest = Network(
     magic_hex='dab5bffa',
     genesis_header_hex='01000000000000000000000000000000000000000000000000000000000000000000000'
     '03ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000',
+    required_bits=required_bits_regtest,
     default_port=18444,
     seeds=[],
     BIP65_height=1_351,

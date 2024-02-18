@@ -166,7 +166,7 @@ def read_gzipped_headers(headers_file):
     return raw_headers
 
 
-async def override_headers(headers, raw_headers, network):
+async def override_headers(headers, raw_headers):
     Headers = {}
 
     cum_work = 0
@@ -191,13 +191,13 @@ async def override_headers(headers, raw_headers, network):
     headers.header_at_height = header_at_height
 
 
-async def check_bits(headers, raw_headers, network, first_height=None):
+async def check_bits(headers, raw_headers, first_height=None):
     chain = None
     first_height = first_height or min(raw_headers)
-    required_bits = headers.required_bits[network]
+    required_bits = headers.network.required_bits
     for height in range(first_height, max(raw_headers)):
         header = await headers.header_at_height(chain, height)
-        req_bits = await required_bits(network, header)
+        req_bits = await required_bits(headers, header)
         assert req_bits == header.bits
 
 
@@ -207,12 +207,12 @@ def test_mainnet_2016_headers():
         network = Bitcoin
         chain = None
         raw_headers = read_sparse_headers('mainnet-headers-2016')
-        await override_headers(headers, raw_headers, network)
+        await override_headers(headers, raw_headers)
 
-        required_bits = headers.required_bits[network]
+        required_bits = headers.network.required_bits
         for height in range(0, max(raw_headers) + 1, 2016):
             header = await headers.header_at_height(chain, height)
-            assert await required_bits(network, header) == header.bits
+            assert await required_bits(headers, header) == header.bits
 
         assert header.difficulty() == 860_221_984_436.2223
 
@@ -222,21 +222,20 @@ def test_mainnet_2016_headers():
         prior_header = await headers.header_at_height(chain, height - 2016)
         # Add 8 weeks and a 14 seconds; the minimum to trigger it
         prev_header.timestamp = prior_header.timestamp + 4 * 2016 * 600 + 14
-        assert await required_bits(network, header) == bounded_bits
+        assert await required_bits(headers, header) == bounded_bits
 
-    run_test_with_headers(test)
+    run_test_with_headers(test, Bitcoin)
 
 
 def test_mainnet_EDA_and_DAA():
     # Mainnet bits and timestamps from height 478400 to 564528 inclusive
     async def test(headers):
-        network = Bitcoin
         raw_headers = read_compressed_headers('mainnet-headers-compressed', 300)
-        await override_headers(headers, raw_headers, network)
+        await override_headers(headers, raw_headers)
         EDA_height = 478558
-        await check_bits(headers, raw_headers, network, EDA_height - 3)
+        await check_bits(headers, raw_headers, EDA_height - 3)
 
-    run_test_with_headers(test)
+    run_test_with_headers(test, Bitcoin)
 
 
 @pytest.mark.parametrize("filename, first_height", (
@@ -246,37 +245,35 @@ def test_mainnet_EDA_and_DAA():
 ))
 def test_testnet(filename, first_height):
     async def test(headers):
-        network = BitcoinTestnet
         raw_headers = read_compressed_headers(filename, 3600)
-        await override_headers(headers, raw_headers, network)
-        await check_bits(headers, raw_headers, network, first_height)
+        await override_headers(headers, raw_headers)
+        await check_bits(headers, raw_headers, first_height)
 
-    run_test_with_headers(test)
+    run_test_with_headers(test, BitcoinTestnet)
 
 
 def test_scalingtestnet():
     async def test(headers):
-        network = BitcoinScalingTestnet
         raw_headers = read_gzipped_headers("stnheaders.gz")
-        await override_headers(headers, raw_headers, network)
-        await check_bits(headers, raw_headers, network)
+        await override_headers(headers, raw_headers)
+        await check_bits(headers, raw_headers)
 
-    run_test_with_headers(test)
+    run_test_with_headers(test, BitcoinScalingTestnet)
 
 
 def test_regtest():
     async def test(headers):
-        assert (await headers.required_bits_regtest(BitcoinRegtest, None)
-                == BitcoinRegtest.genesis_bits)
+        assert (await headers.network.required_bits(headers, None)
+                == headers.network.genesis_bits)
 
-    run_test_with_headers(test)
+    run_test_with_headers(test, BitcoinRegtest)
 
 
-def run_test_with_headers(test_func):
+def run_test_with_headers(test_func, network):
     async def run():
         async with asqlite3.connect(':memory:') as conn:
-            headers = Headers(conn)
-            await headers.create_tables_if_not_present('main')
+            headers = Headers(conn, 'main', network)
+            await headers.create_tables_if_not_present()
             await test_func(headers)
 
     asyncio.run(run())
