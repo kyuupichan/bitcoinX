@@ -246,7 +246,7 @@ class HeadersBase:
                                           gh.version, gh.timestamp, gh.bits, gh.nonce))
             logging.info('{self.network} genesis header {gh.hex_str()} inserted')
 
-    async def insert_headers(self, raw_headers, check_work=True):
+    async def insert_headers(self, raw_headers, *, check_work=True):
         '''Insert headers into the Headers table.
 
         raw_headers can either be a sequence of raw headers, or a concatenated sequence of
@@ -277,7 +277,7 @@ class HeadersBase:
             if check_work:
                 header.height = height + 1
                 header.chain_id = chain_id
-                bits = await required_bits(network, header)
+                bits = await required_bits(self, header)
                 if header.bits != bits:
                     raise IncorrectBits(header, bits)
                 if header.hash_value() > header.target():
