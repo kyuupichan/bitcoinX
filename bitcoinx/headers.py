@@ -320,10 +320,6 @@ class Headers:
             return Header(*row)
         return None
 
-    async def _chains(self, tip_hdr_id_query):
-        tips = await self._query_headers(f'hdr_id IN ({tip_hdr_id_query})', (), True)
-        return [Chain(tip.chain_id, tip) for tip in tips]
-
     async def header_from_hash(self, block_hash):
         '''Look up the block hash and return the block header.'''
         return await self._query_headers('hash=?', (block_hash, ), False)
@@ -332,21 +328,24 @@ class Headers:
         '''Look up the merkle root and return the block header.'''
         return await self._query_headers('merkle_root=?', (merkle_root, ), False)
 
+    async def _chains(self, tip_hdr_id_query, params=()):
+        tips = await self._query_headers(f'hdr_id IN ({tip_hdr_id_query})', params, True)
+        return [Chain(tip.chain_id, tip) for tip in tips]
+
     async def chains(self):
         '''Return all chains.'''
         return await self._chains('SELECT tip_hdr_id FROM $S.Chains')
 
-    async def chains_containing(self, header):
-        '''Return all chains containing the given header.'''
+    async def chains_containing(self, block_hash):
         return await self._chains(f'''
-          SELECT tip_hdr_id FROM $S.Chains C, $S.AncestorsView AV
-          WHERE AV.anc_chain_id = {header.chain_id}
-          AND AV.branch_height >= {header.height}
-          AND C.chain_id = AV.chain_id''')
+           SELECT tip_hdr_id
+             FROM $S.AncestorsView AV, $S.Headers H, $S.Chains C
+               WHERE H.hash=? AND H.chain_id=AV.anc_chain_id AND AV.chain_id=C.chain_id
+                 AND AV.branch_height >= H.height''', (block_hash, ))
 
     async def longest_chain(self, header):
         '''Return the longest chain containing the given header.'''
-        chains = await self.chains_containing(header)
+        chains = await self.chains_containing(header.hash)
         if not chains:
             raise MissingHeader('no chains contain the header')
         longest, max_work = None, -1
