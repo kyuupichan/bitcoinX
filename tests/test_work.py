@@ -188,7 +188,6 @@ async def override_headers(headers, raw_headers):
 
     headers.median_time_past = median_time_past
     headers._header_at_height = header_at_height
-    headers.header_at_height = header_at_height
 
 
 async def check_bits(headers, raw_headers, first_height=None):
@@ -196,7 +195,7 @@ async def check_bits(headers, raw_headers, first_height=None):
     first_height = first_height or min(raw_headers)
     required_bits = headers.network.required_bits
     for height in range(first_height, max(raw_headers)):
-        header = await headers.header_at_height(chain, height)
+        header = await headers._header_at_height(chain, height)
         req_bits = await required_bits(headers, header)
         assert req_bits == header.bits
 
@@ -211,15 +210,15 @@ def test_mainnet_2016_headers():
 
         required_bits = headers.network.required_bits
         for height in range(0, max(raw_headers) + 1, 2016):
-            header = await headers.header_at_height(chain, height)
+            header = await headers._header_at_height(chain, height)
             assert await required_bits(headers, header) == header.bits
 
         assert header.difficulty() == 860_221_984_436.2223
 
         bounded_bits = 403011440
         # Test // 4 is lower bound for the last one
-        prev_header = await headers.header_at_height(chain, height - 1)
-        prior_header = await headers.header_at_height(chain, height - 2016)
+        prev_header = await headers._header_at_height(chain, height - 1)
+        prior_header = await headers._header_at_height(chain, height - 2016)
         # Add 8 weeks and a 14 seconds; the minimum to trigger it
         prev_header.timestamp = prior_header.timestamp + 4 * 2016 * 600 + 14
         assert await required_bits(headers, header) == bounded_bits
