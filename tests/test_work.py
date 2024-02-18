@@ -13,13 +13,11 @@ import pytest
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet, BitcoinRegtest,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
-    deserialized_header, header_timestamp, Header, unpack_header, header_hash, header_work,
+    deserialized_header, Header, unpack_header, header_hash, header_work,
     bits_to_target, target_to_bits, grind_header, bits_to_work, int_to_le_bytes,
 )
 
-from .utils import read_file
-
-data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
+from .utils import read_file, data_dir_path
 
 
 @pytest.mark.parametrize("bits,answer", (
@@ -158,7 +156,7 @@ def read_compressed_headers(headers_file, ts_offset):
 
 def read_gzipped_headers(headers_file):
     raw_headers = {}
-    with gzip.open(os.path.join(data_dir, headers_file), 'rb') as f:
+    with gzip.open(data_dir_path(headers_file), 'rb') as f:
         first_height = unpack_le_uint32(f.read(4))[0]
         header_count = unpack_le_uint32(f.read(4))[0]
 

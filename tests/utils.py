@@ -68,8 +68,12 @@ def random_txinput_context():
     return TxInputContext(tx, input_index, utxo)
 
 
+def data_dir_path(filename):
+    return os.path.join(data_dir, filename)
+
+
 def read_file(filename, count=None):
-    with open(os.path.join(data_dir, filename), 'rb') as f:
+    with open(data_dir_path(filename), 'rb') as f:
         return f.read(count)
 
 
@@ -82,13 +86,13 @@ def read_tx(filename):
 
 
 def read_signature_hashes(filename):
-    with open(os.path.join(data_dir, filename)) as f:
+    with open(data_dir_path(filename)) as f:
         contents = f.read().strip()
     return [bytes.fromhex(line) for line in contents.splitlines()]
 
 
 def read_json_tx(filename):
-    with open(os.path.join(data_dir, filename)) as f:
+    with open(data_dir_path(filename)) as f:
         d = json.loads(f.read())
     return (Tx.from_hex(d['tx_hex']), d['input_values'],
             [bytes.fromhex(pk_hex) for pk_hex in d['input_pk_scripts']])

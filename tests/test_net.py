@@ -882,7 +882,7 @@ class TestSession:
 
                 conn_session, connection = conn_pair
                 assert isinstance(conn_session, OutSession)
-                assert conn_session.node is node
+                assert conn_session.node is client_node
                 assert conn_session.remote_service is listening_node.service
                 assert conn_session.connection is connection
                 assert conn_session.is_outgoing
@@ -974,7 +974,6 @@ class TestSession:
             with pytest.raises(ConnectionResetError):
                 await client_node.connect(listening_node.service)
 
-
     @pytest.mark.asyncio
     async def test_duplicate_version_message(self, client_node, listening_node, caplog):
 
@@ -983,7 +982,6 @@ class TestSession:
                 await self.send_version_message(connection)
                 await self.send_version_message(connection)
                 await pause()
-
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
@@ -1044,7 +1042,6 @@ class TestSession:
                 await self._send_unqueued(connection, MessageHeader.VERSION,
                                           await self.version_payload() + bytes(2))
                 await pause()
-
 
         with caplog.at_level(logging.INFO):
             async with listening_node.listen():
@@ -1240,8 +1237,6 @@ class TestSession:
 
     @pytest.mark.asyncio
     async def test_getheaders(self, client_node, listening_node, caplog):
-
-        headers_payload = None
         class OutSession(Session):
             async def on_headers(self, payload):
                 nonlocal headers_payload
@@ -1253,6 +1248,7 @@ class TestSession:
                 await pause()
                 raise MemoryError
 
+        headers_payload = None
         async with listening_node.listen():
             with pytest.raises(MemoryError):
                 await client_node.connect(listening_node.service, session_cls=OutSession)

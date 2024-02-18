@@ -18,7 +18,7 @@ from struct import Struct, error as struct_error
 from typing import List
 
 from .errors import ProtocolError, ForceDisconnectError, PackingError, MissingHeader
-from .hashes import double_sha256, double_sha256 as header_hash, hash_to_hex_str
+from .hashes import double_sha256, double_sha256 as header_hash
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
@@ -1067,7 +1067,7 @@ class Session:
         block_locator = await self.node.block_locator(self.their_tip.hash)
         payload = pack_getheaders_payload(self.node.service.protocol_version, block_locator)
         if self.debug:
-            self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
+            self.logger.debug(f'requesting headers; locator has {len(block_locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, payload)
 
     # Callbacks when certain messages are received.
