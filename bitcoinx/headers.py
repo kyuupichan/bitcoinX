@@ -332,20 +332,18 @@ class Headers:
         tips = await self._query_headers(f'hdr_id IN ({tip_hdr_id_query})', params, True)
         return [Chain(tip.chain_id, tip) for tip in tips]
 
-    async def chains(self):
-        '''Return all chains.'''
-        return await self._chains('SELECT tip_hdr_id FROM $S.Chains')
-
-    async def chains_containing(self, block_hash):
+    async def chains(self, block_hash=None):
+        '''Return all chains containing the given block.  All chains if block_hash is None.'''
+        block_hash = block_hash or self.network.genesis_hash
         return await self._chains(f'''
            SELECT tip_hdr_id
              FROM $S.AncestorsView AV, $S.Headers H, $S.Chains C
                WHERE H.hash=? AND H.chain_id=AV.anc_chain_id AND AV.chain_id=C.chain_id
                  AND AV.branch_height >= H.height''', (block_hash, ))
 
-    async def longest_chain(self, header):
+    async def longest_chain(self, block_hash=None):
         '''Return the longest chain containing the given header.'''
-        chains = await self.chains_containing(header.hash)
+        chains = await self.chains(block_hash)
         if not chains:
             raise MissingHeader('no chains contain the header')
         longest, max_work = None, -1

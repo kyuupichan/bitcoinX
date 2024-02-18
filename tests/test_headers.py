@@ -215,7 +215,7 @@ class TestHeaders:
 
     def test_insert_headers_bad(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             branch = create_random_branch(genesis_header, 4)
             raw_headers = [bytearray(header.to_bytes()) for header in branch]
             # muck up prev_hash
@@ -227,12 +227,12 @@ class TestHeaders:
 
     def test_insert_existing_headers(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             N = 5
             branch = create_random_branch(genesis_header, N)
             await headers.insert_headers([header.to_bytes() for header in branch[:N - 1]],
                                          check_work=False)
-            chain = await headers.longest_chain(genesis_header)
+            chain = await headers.longest_chain()
             assert chain.tip.height == 4
             await headers.insert_headers([header.to_bytes() for header in branch],
                                          check_work=False)
@@ -274,7 +274,7 @@ class TestHeaders:
 
     def test_headers_height_1(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             header1 = create_random_header(genesis_header)
             await headers.insert_headers(header1.to_bytes(), check_work=False)
             header1 = await headers.header_from_hash(header1.hash)
@@ -289,7 +289,7 @@ class TestHeaders:
 
     @staticmethod
     async def insert_random_tree(headers, *args):
-        genesis_header = await headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+        genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
         tree = create_random_tree(genesis_header, *args)
         await insert_tree(headers, tree)
         return tree, genesis_header
@@ -338,7 +338,7 @@ class TestHeaders:
         async def test(headers):
             tree, genesis_header = await self.insert_random_tree(headers)
 
-            chains = await headers.chains_containing(headers.genesis_header.hash)
+            chains = await headers.chains()
             full_chains = self.full_chains_of_tree(tree, genesis_header)
             assert len(chains) == len(tree)
 
@@ -361,7 +361,7 @@ class TestHeaders:
         async def test(headers):
             tree, genesis_header = await self.insert_random_tree(headers)
 
-            chains = await headers.chains_containing(headers.genesis_header.hash)
+            chains = await headers.chains()
             full_chains = self.full_chains_of_tree(tree, genesis_header)
             assert len(chains) == len(full_chains)
 
@@ -393,15 +393,15 @@ class TestHeaders:
                 assert header.chain_work() == prev_work + bits_to_work(header.bits)
 
             # Check longest_chain()
-            chains = await headers.chains_containing(headers.genesis_header.hash)
-            longest = await headers.longest_chain(genesis_header)
+            chains = await headers.chains()
+            longest = await headers.longest_chain()
             assert longest in chains
             assert all(chain.chain_work() <= longest.chain_work() for chain in chains)
 
         run_test_with_headers(test)
 
     async def check_tree(self, headers, genesis_header, tree):
-        chains = await headers.chains_containing(genesis_header.hash)
+        chains = await headers.chains()
 
         all_headers = [header for _, branch in tree for header in branch]
         for header in all_headers:
@@ -411,16 +411,16 @@ class TestHeaders:
                 if (chain.tip.height >= header.height and
                         await headers.header_at_height(chain, header.height) == header):
                     chains_with_header.add(chain)
-            assert set(await headers.chains_containing(header.hash)) == set(chains_with_header)
+            assert set(await headers.chains(header.hash)) == set(chains_with_header)
 
-    def test_chains_containing(self):
+    def test_chains(self):
         async def test(headers):
             tree, genesis_header = await self.insert_random_tree(headers)
             await self.check_tree(headers, genesis_header, tree)
 
         run_test_with_headers(test)
 
-    def test_chains_containing_manual(self):
+    def test_chains_manual(self):
         async def test(headers):
             genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             # Create a tree like so:
@@ -439,28 +439,26 @@ class TestHeaders:
             # This ensures chain_id is set
             H1, H2, H3, H4, H5, H6 = [await headers.header_from_hash(h.hash) for h in H]
 
-            chains = {chain.tip.hash: chain for chain in await headers.chains()
-                      if chain.tip.height}
+            chains = {chain.tip.hash: chain for chain in await headers.chains()}
             chain_0 = chains[H2.hash]
             chain_1 = chains[H4.hash]
             chain_2 = chains[H5.hash]
             chain_3 = chains[H6.hash]
 
-            assert set(await headers.chains_containing(genesis_header.hash)) == {
-                chain_0, chain_1, chain_2, chain_3}
-            assert set(await headers.chains_containing(H1.hash)) == {chain_0, chain_3}
-            assert set(await headers.chains_containing(H2.hash)) == {chain_0}
-            assert set(await headers.chains_containing(H3.hash)) == {chain_1, chain_2}
-            assert set(await headers.chains_containing(H4.hash)) == {chain_1}
-            assert set(await headers.chains_containing(H5.hash)) == {chain_2}
-            assert set(await headers.chains_containing(H6.hash)) == {chain_3}
+            assert set(await headers.chains()) == {chain_0, chain_1, chain_2, chain_3}
+            assert set(await headers.chains(H1.hash)) == {chain_0, chain_3}
+            assert set(await headers.chains(H2.hash)) == {chain_0}
+            assert set(await headers.chains(H3.hash)) == {chain_1, chain_2}
+            assert set(await headers.chains(H4.hash)) == {chain_1}
+            assert set(await headers.chains(H5.hash)) == {chain_2}
+            assert set(await headers.chains(H6.hash)) == {chain_3}
 
         run_test_with_headers(test)
 
     def test_median_time_past(self):
         async def test(headers):
             count = 100
-            genesis_header = await headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             branch = create_random_branch(genesis_header, count)
             await insert_tree(headers, [(None, branch)])
 
@@ -489,10 +487,10 @@ class TestHeaders:
     def test_block_locator(self):
         async def test(headers):
             count = 100
-            genesis_header = await headers.header_from_hash(header_hash(Bitcoin.genesis_header))
+            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             branch = create_random_branch(genesis_header, count)
             await insert_tree(headers, [(None, branch)])
-            chain = await headers.longest_chain(genesis_header)
+            chain = await headers.longest_chain()
             locator = await headers.block_locator(chain)
             assert len(locator) == 8
             for loc_pos in range(7):
@@ -505,7 +503,7 @@ class TestHeaders:
     def test_block_locator_empty_headers(self, network):
         async def test(headers):
             genesis_header = await headers.header_from_hash(network.genesis_hash)
-            chain = await headers.longest_chain(genesis_header)
+            chain = await headers.longest_chain()
             assert await headers.block_locator(chain) == [network.genesis_hash]
 
         run_test_with_headers(test, network)

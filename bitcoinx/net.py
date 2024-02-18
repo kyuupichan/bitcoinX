@@ -671,15 +671,7 @@ def unpack_headers_payload(payload):
 
 
 async def block_locator(headers, block_hash=None):
-    return await headers.block_locator(await longest_chain(headers, block_hash))
-
-
-async def longest_chain(headers, block_hash=None):
-    if block_hash is None:
-        header = headers.genesis_header
-    else:
-        header = await headers.header_from_hash(block_hash)
-    return await headers.longest_chain(header)
+    return await headers.block_locator(await headers.longest_chain(block_hash))
 
 
 async def get_headers(headers, block_locator, hash_stop, count):
@@ -689,7 +681,7 @@ async def get_headers(headers, block_locator, hash_stop, count):
             return []
         return [header]
 
-    chain = await longest_chain(headers)
+    chain = await headers.longest_chain()
     for block_hash in block_locator:
         header = await headers.header_from_hash(block_hash)
         if not header:
@@ -767,7 +759,8 @@ class Node:
         self.incoming_sessions = set()
 
     async def height(self):
-        return (await longest_chain(self.headers)).tip.height
+        chain = await self.headers.longest_chain()
+        return chain.tip.height
 
     def random_nonce(self):
         while True:
