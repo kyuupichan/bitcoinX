@@ -390,22 +390,6 @@ class Headers:
 
         return sorted(timestamps)[len(timestamps) // 2]
 
-    async def block_locator(self, block_hash=None):
-        '''Returns a block locator for the longest chain containing the block hash.  A block
-        locator is a list of block hashes starting from the chain tip back to the genesis
-        block, that become increasingly sparse.
-        '''
-        def block_heights(height, stop=0, step=-1):
-            while height > stop:
-                yield height
-                height += step
-                step += step
-            yield stop
-
-        chain = await self.longest_chain(block_hash)
-        return [(await self.header_at_height(chain, height)).hash
-                for height in block_heights(chain.tip.height)]
-
 
 ##########
 #

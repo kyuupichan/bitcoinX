@@ -1,11 +1,14 @@
+import asyncio
 import json
 import os
-from random import randrange, choice, random
+import random
 
+import asqlite3
 
 from bitcoinx import (
     Tx, TxInput, TxOutput, Script, TxInputContext, SEQUENCE_FINAL,
-    OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR
+    OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR,
+    Bitcoin, BitcoinTestnet, Headers, pack_header, SimpleHeader
 )
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
@@ -28,21 +31,21 @@ non_zeroes = [b'\1', b'\x81', b'\1\0', b'\0\1', b'\0\x81']
 
 def random_value():
     '''Random value of a TxOutput.'''
-    return randrange(0, 100_000_000)
+    return random.randrange(0, 100_000_000)
 
 
 def random_script():
-    ops = [choice(random_ops) for _ in range(randrange(0, 10))]
+    ops = [random.choice(random_ops) for _ in range(random.randrange(0, 10))]
     return Script().push_many(ops)
 
 
 def random_bool():
-    return random() >= 0.5
+    return random.random() >= 0.5
 
 
 def random_input():
-    sequence = SEQUENCE_FINAL if random_bool() else randrange(0, SEQUENCE_FINAL)
-    return TxInput(os.urandom(32), randrange(0, 4), random_script(), sequence)
+    sequence = SEQUENCE_FINAL if random_bool() else random.randrange(0, SEQUENCE_FINAL)
+    return TxInput(os.urandom(32), random.randrange(0, 4), random_script(), sequence)
 
 
 def random_output():
@@ -50,10 +53,10 @@ def random_output():
 
 
 def random_tx(is_single):
-    version = randrange(- (1 << 31), 1 << 31)
-    locktime = 0 if random_bool() else randrange(0, 1 << 32)
-    n_inputs = randrange(1, 5)
-    n_outputs = n_inputs + randrange(-1, 1) if is_single else randrange(1, 5)
+    version = random.randrange(- (1 << 31), 1 << 31)
+    locktime = 0 if random_bool() else random.randrange(0, 1 << 32)
+    n_inputs = random.randrange(1, 5)
+    n_outputs = n_inputs + random.randrange(-1, 1) if is_single else random.randrange(1, 5)
     inputs = [random_input() for _ in range(n_inputs)]
     outputs = [random_output() for _ in range(n_outputs)]
 
@@ -62,7 +65,7 @@ def random_tx(is_single):
 
 def random_txinput_context():
     tx = random_tx(False)
-    input_index = randrange(0, len(tx.inputs))
+    input_index = random.randrange(0, len(tx.inputs))
     utxo = random_output()
 
     return TxInputContext(tx, input_index, utxo)
@@ -119,3 +122,57 @@ class Replace_os_urandom:
 
     def __exit__(self, _type, _value, _traceback):
         os.urandom = self.os_urandom
+
+
+def run_test_with_headers(test_func, network=Bitcoin):
+    async def run():
+        async with asqlite3.connect(':memory:') as conn:
+            # Create two copies of the tables with different schemas, to ensure the code
+            # always queries with the appropriate schema
+            headers1 = Headers(conn, 'main', BitcoinTestnet)
+            await headers1.initialize()
+            await conn.execute("ATTACH ':memory:' as second")
+            headers = Headers(conn, 'second', network)
+            await headers.initialize()
+            await test_func(headers)
+
+    asyncio.run(run())
+
+
+def create_random_header(prev_header):
+    version = random.randrange(0, 10)
+    merkle_root = os.urandom(32)
+    timestamp = prev_header.timestamp + random.randrange(-300, 900)
+    bits = prev_header.bits
+    nonce = random.randrange(0, 1 << 32)
+    raw_header = pack_header(version, prev_header.hash, merkle_root, timestamp, bits, nonce)
+    return SimpleHeader.from_bytes(raw_header)
+
+
+def create_random_branch(prev_header, length):
+    branch = []
+    for _ in range(length):
+        header = create_random_header(prev_header)
+        branch.append(header)
+        prev_header = header
+    return branch
+
+
+def create_random_tree(base_header, branch_count=10, max_branch_length=10):
+    headers = [base_header]
+    tree = []
+    for _ in range(branch_count):
+        branch_header = random.choice(headers)
+        branch_length = random.randrange(1, max_branch_length + 1)
+        branch = create_random_branch(branch_header, branch_length)
+        tree.append((branch_header, branch))
+        # To form a branch, a branch must be based on other than a tip
+        headers.extend(branch[:-1])
+
+    return tree
+
+
+async def insert_tree(headers, tree):
+    for _, branch in tree:
+        await headers.insert_headers(b''.join(header.to_bytes() for header in branch),
+                                     check_work=False)

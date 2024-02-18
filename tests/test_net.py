@@ -14,7 +14,7 @@ import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
-    Headers,
+    Headers, all_networks,
 )
 from bitcoinx.errors import ProtocolError, ForceDisconnectError
 from bitcoinx.misc import chunks
@@ -23,8 +23,10 @@ from bitcoinx.net import (
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Session, version_payload, read_version_payload,
     pack_getheaders_payload, unpack_getheaders_payload, pack_headers_payload,
-    unpack_headers_payload,
+    unpack_headers_payload, block_locator
 )
+
+from .utils import run_test_with_headers, create_random_branch, insert_tree
 
 
 @pytest.mark.parametrize("hostname,answer", (
@@ -805,6 +807,30 @@ class TestNetworkProtocol:
         assert service2.relay is True
         assert service == service2
         assert result == (X_service.address, X_service.services, nonce)
+
+
+class TestBlockLocator:
+
+    def test_block_locator(self):
+        async def test(headers):
+            count = 100
+            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
+            branch = create_random_branch(genesis_header, count)
+            await insert_tree(headers, [(None, branch)])
+            locator = await block_locator(headers)
+            assert len(locator) == 8
+            for loc_pos in range(7):
+                assert locator[loc_pos] == branch[-(1 << loc_pos)].hash
+            assert locator[-1] == genesis_header.hash
+
+        run_test_with_headers(test)
+
+    @pytest.mark.parametrize('network', all_networks)
+    def test_block_locator_empty_headers(self, network):
+        async def test(headers):
+            assert await block_locator(headers) == [network.genesis_hash]
+
+        run_test_with_headers(test, network)
 
 
 listen_host = IPv4Address('127.0.0.1')

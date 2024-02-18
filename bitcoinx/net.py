@@ -701,6 +701,23 @@ async def get_raw_headers(headers, block_locator, hash_stop, count):
     return [header.to_bytes() for header in header_objs]
 
 
+async def block_locator(headers, block_hash=None):
+    '''Returns a block locator for the longest chain containing the block hash.  A block
+    locator is a list of block hashes starting from the chain tip back to the genesis
+    block, that become increasingly sparse.
+    '''
+    def block_heights(height, stop=0, step=-1):
+        while height > stop:
+            yield height
+            height += step
+            step += step
+        yield stop
+
+    chain = await headers.longest_chain(block_hash)
+    return [(await headers.header_at_height(chain, height)).hash
+            for height in block_heights(chain.tip.height)]
+
+
 class Connection:
     '''A single network connection.  Each connection has its own outgoing message queue
     because a Session decides which connection an outgoing message is sent on.
@@ -1059,7 +1076,7 @@ class Session:
         Calling this with no argument forms a loop with on_headers() whose eventual effect
         is to synchronize the peer's headers.
         '''
-        locator = await self.node.headers.block_locator(self.their_tip.hash)
+        locator = await block_locator(self.node.headers, self.their_tip.hash)
         payload = pack_getheaders_payload(self.node.service.protocol_version, locator)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')

@@ -1,32 +1,17 @@
-import asyncio
 import dataclasses
-import os
-import random
 import asqlite3
 
 import pytest
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, header_hash, pack_header, MissingHeader, InsufficientPoW,
-    bits_to_work, Headers, SimpleHeader, all_networks
+    Bitcoin, BitcoinTestnet, header_hash, MissingHeader, InsufficientPoW,
+    bits_to_work, SimpleHeader, all_networks
 )
 from bitcoinx.misc import chunks
 
-from .utils import read_file
-
-
-def run_test_with_headers(test_func, network=Bitcoin):
-    async def run():
-        async with asqlite3.connect(':memory:') as conn:
-            # Create two copies of the tables with different schemas, to ensure the code
-            # always queries with the appropriate schema
-            headers1 = Headers(conn, 'main', BitcoinTestnet)
-            await headers1.initialize()
-            await conn.execute("ATTACH ':memory:' as second")
-            headers = Headers(conn, 'second', network)
-            await headers.initialize()
-            await test_func(headers)
-
-    asyncio.run(run())
+from .utils import (
+    read_file, run_test_with_headers, create_random_branch, insert_tree, create_random_tree,
+    create_random_header,
+)
 
 
 class TestSimpleHeader:
@@ -50,45 +35,6 @@ class TestSimpleHeader:
 def same_headers(simple, detailed):
     return all(getattr(simple, field.name) == getattr(detailed, field.name)
                for field in dataclasses.fields(SimpleHeader))
-
-
-def create_random_header(prev_header):
-    version = random.randrange(0, 10)
-    merkle_root = os.urandom(32)
-    timestamp = prev_header.timestamp + random.randrange(-300, 900)
-    bits = prev_header.bits
-    nonce = random.randrange(0, 1 << 32)
-    raw_header = pack_header(version, prev_header.hash, merkle_root, timestamp, bits, nonce)
-    return SimpleHeader.from_bytes(raw_header)
-
-
-def create_random_branch(prev_header, length):
-    branch = []
-    for _ in range(length):
-        header = create_random_header(prev_header)
-        branch.append(header)
-        prev_header = header
-    return branch
-
-
-def create_random_tree(base_header, branch_count=10, max_branch_length=10):
-    headers = [base_header]
-    tree = []
-    for _ in range(branch_count):
-        branch_header = random.choice(headers)
-        branch_length = random.randrange(1, max_branch_length + 1)
-        branch = create_random_branch(branch_header, branch_length)
-        tree.append((branch_header, branch))
-        # To form a branch, a branch must be based on other than a tip
-        headers.extend(branch[:-1])
-
-    return tree
-
-
-async def insert_tree(headers, tree):
-    for _, branch in tree:
-        await headers.insert_headers(b''.join(header.to_bytes() for header in branch),
-                                     check_work=False)
 
 
 COLNAMES = ('prev_hdr_id', 'height', 'chain_id', 'chain_work', 'hash', 'merkle_root', 'version',
@@ -483,27 +429,6 @@ class TestHeaders:
                 await headers.median_time_past(bytes(32))
 
         run_test_with_headers(test)
-
-    def test_block_locator(self):
-        async def test(headers):
-            count = 100
-            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
-            branch = create_random_branch(genesis_header, count)
-            await insert_tree(headers, [(None, branch)])
-            locator = await headers.block_locator()
-            assert len(locator) == 8
-            for loc_pos in range(7):
-                assert locator[loc_pos] == branch[-(1 << loc_pos)].hash
-            assert locator[-1] == genesis_header.hash
-
-        run_test_with_headers(test)
-
-    @pytest.mark.parametrize('network', all_networks)
-    def test_block_locator_empty_headers(self, network):
-        async def test(headers):
-            assert await headers.block_locator() == [network.genesis_hash]
-
-        run_test_with_headers(test, network)
 
     def test_target_checked(self):
         async def test(headers):
