@@ -721,21 +721,15 @@ class Node:
         self.headers = headers
         self.outgoing_sessions = set()
         self.incoming_sessions = set()
-        self.genesis_header = None
-
-    async def ensure_genesis_header(self):
-        if not self.genesis_header:
-            self.genesis_header = await self.headers.header_from_hash(
-                header_hash(self.network.genesis_header))
-            if not self.genesis_header:
-                raise RuntimeError(f'cannot find genesis header for {self.network}')
 
     async def height(self):
         return (await self.longest_chain()).tip.height
 
     async def longest_chain(self, block_hash=None):
-        block_hash = block_hash or self.genesis_header.hash
-        header = await self.headers.header_from_hash(block_hash)
+        if block_hash is None:
+            header = self.headers.genesis_header
+        else:
+            header = await self.headers.header_from_hash(block_hash)
         return await self.headers.longest_chain(header)
 
     async def block_locator(self, block_hash=None):
@@ -760,7 +754,7 @@ class Node:
             if header.hash == chain_header.hash:
                 break
         else:
-            header = self.node.genesis_header
+            header = self.headers.genesis_header
 
         first_height = header.height + 1
         stop_height = min(chain.tip.height + 1, first_height + count)
@@ -785,7 +779,6 @@ class Node:
         connected, call session_cls (a callable) and await its member funciont
         maintain_connection().
         '''
-        await self.ensure_genesis_header()
         session_cls = session_cls or Session
         reader, writer = await open_connection(str(service.address.host), service.address.port)
         async with Connection(reader, writer) as connection:
@@ -797,7 +790,6 @@ class Node:
         callable) and then await its member function maintain_connection().
         '''
         async def on_client(reader, writer):
-            await self.ensure_genesis_header()
             try:
                 async with Connection(reader, writer) as connection:
                     host, port = writer.transport.get_extra_info('peername')
@@ -877,7 +869,7 @@ class Session:
         self.their_protoconf = None
         self.nonce = self.node.random_nonce()
         self.can_send_large_messages = False
-        self.their_tip = node.genesis_header
+        self.their_tip = node.headers.genesis_header
 
         # Logging
         logger = logging.getLogger('Session')
