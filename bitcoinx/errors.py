@@ -9,7 +9,7 @@
 
 __all__ = (
     'Base58Error', 'DecryptionError',
-    'ChainException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
+    'HeaderException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
     'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError', 'CleanStackError',
     'ScriptTooLarge', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
@@ -34,15 +34,15 @@ class Base58Error(ValueError):
     '''Exception used for Base58 errors.'''
 
 
-class ChainException(Exception):
-    '''Base class of exceptions raised in chain.py.'''
+class HeaderException(Exception):
+    '''Base class of exceptions raised in headers.py.'''
 
 
-class MissingHeader(ChainException):
+class MissingHeader(HeaderException):
     '''Raised by Headers.connect() when the previous header is missing.'''
 
 
-class IncorrectBits(ChainException):
+class IncorrectBits(HeaderException):
     '''Raised when a header has bits other than those required by the protocol.'''
 
     def __init__(self, header, required_bits):
@@ -54,7 +54,7 @@ class IncorrectBits(ChainException):
         return f'header {self.header} requires bits 0x{self.required_bits}'
 
 
-class InsufficientPoW(ChainException):
+class InsufficientPoW(HeaderException):
     '''Raised when a header has less PoW than required by the protocol.'''
 
     def __init__(self, header):

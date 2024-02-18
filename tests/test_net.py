@@ -19,11 +19,11 @@ from bitcoinx import (
 from bitcoinx.errors import ProtocolError, ForceDisconnectError
 from bitcoinx.misc import chunks
 from bitcoinx.net import (
-    ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader,
+    ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader, _command,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Session, version_payload, read_version_payload,
-    pack_getheaders_payload, unpack_getheaders_payload,
-    _command
+    pack_getheaders_payload, unpack_getheaders_payload, pack_headers_payload,
+    unpack_headers_payload,
 )
 
 
@@ -688,6 +688,24 @@ class TestNetworkProtocol:
         assert pack_getheaders_payload(protocol, locator, None) == answer + bytes(32)
         assert pack_getheaders_payload(protocol, locator, hash_stop) \
             == answer + hash_stop
+
+    @pytest.mark.parametrize("count", (0, 10, 100, 2000))
+    def test_headers_payload(self, count):
+        headers = [urandom(80) for _ in range(count)]
+        payload = pack_headers_payload(headers)
+        assert headers == unpack_headers_payload(payload)
+
+    def test_headers_payload_short(self):
+        headers = [urandom(80) for _ in range(5)]
+        payload = pack_headers_payload(headers)
+        with pytest.raises(ProtocolError):
+            unpack_headers_payload(payload[:-1])
+
+    def test_headers_payload_long(self, caplog):
+        headers = [urandom(80) for _ in range(5)]
+        payload = pack_headers_payload(headers)
+        with caplog.at_level(logging.INFO):
+            unpack_headers_payload(payload + b'0')
 
     def test_version_payload_bad_nonce(self):
         with pytest.raises(ValueError) as e:

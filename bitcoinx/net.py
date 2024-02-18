@@ -23,7 +23,7 @@ from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
     read_varbytes, read_varint, read_le_int32, read_le_uint32, read_le_uint64, read_le_int64,
-    read_list
+    pack_list, read_list
 )
 
 
@@ -646,13 +646,11 @@ def unpack_getheaders_payload(payload):
 
 
 def pack_headers_payload(raw_headers):
-    def parts():
-        zero = pack_varint(0)
-        for raw_header in raw_headers:
-            yield raw_header
-            yield zero
+    zero = pack_varint(0)
+    def pack_one(raw_header):
+        return raw_header + zero
 
-    return b''.join(parts())
+    return pack_list(raw_headers, pack_one)
 
 
 def unpack_headers_payload(payload):
@@ -663,7 +661,13 @@ def unpack_headers_payload(payload):
         return raw_header
 
     read = BytesIO(payload).read
-    return read_list(read, read_one)
+    try:
+        result = read_list(read, read_one)
+    except PackingError:
+        raise ProtocolError('truncated headers payload')
+    if read(1) != b'':
+        logging.info('extra bytes at end of headers payload')
+    return result
 
 
 class Connection:
@@ -852,26 +856,22 @@ class Session:
     '''
 
     def __init__(self, node, remote_service, connection, is_outgoing, *,
-                 protoconf=None,
-                 perform_handshake=True,
-                 send_protoconf=True,
-                 sync_headers=False):
+                 protoconf=None, on_handshake_complete=None):
         self.node = node
         self.remote_service = remote_service
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = is_outgoing
         self.our_protoconf = protoconf or Protoconf.default()
-        self._perform_handshake = perform_handshake
-        self._send_protoconf = send_protoconf
-        self.sync_headers = sync_headers
+        self.on_handshake_complete = on_handshake_complete
         self.streaming_min_size = 10_000_000
 
         # State
         self.version_sent = False
         self.version_received = Event()
         self.verack_received = Event()
-        self.headers_synced = Event()
+        self.headers_received = Event()
+        self.headers_synced = False
         self.protoconf_sent = False
         self.their_protoconf = None
         self.nonce = self.node.random_nonce()
@@ -889,14 +889,11 @@ class Session:
         try:
             async with TaskGroup() as group:
                 group.create_task(self.recv_messages_loop(connection))
-                if self._perform_handshake:
-                    group.create_task(self.perform_handshake(connection))
-                    await self.verack_received.wait()
+                group.create_task(self.perform_handshake(connection))
+                await self.verack_received.wait()
                 group.create_task(self.send_messages_loop(connection))
-                if self._send_protoconf:
-                    group.create_task(self.send_protoconf())
-                if self.sync_headers:
-                    group.create_task(self.get_headers())
+                if self.on_handshake_complete:
+                    await self.on_handshake_complete(group)
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
 
@@ -1057,18 +1054,29 @@ class Session:
     async def get_block(self, block_hash):
         '''Call to request the block with the given hash.'''
 
+    async def sync_headers(self, timeout):
+        self.headers_synced = False
+        while not self.headers_synced:
+            await self.get_headers()
+            try:
+                async with asyncio.timeout(timeout):
+                    await self.headers_received.wait()
+            except asyncio.TimeoutError:
+                logging.error(f'timeout syncing headers after {timeout}s')
+                break
+
     async def get_headers(self):
         '''Send a request to get headers.
 
         Calling this with no argument forms a loop with on_headers() whose eventual effect
         is to synchronize the peer's headers.
         '''
-        self.headers_synced.clear()
         block_locator = await self.node.block_locator(self.their_tip.hash)
         payload = pack_getheaders_payload(self.node.service.protocol_version, block_locator)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(block_locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, payload)
+        self.headers_received.clear()
 
     # Callbacks when certain messages are received.
 
@@ -1081,19 +1089,20 @@ class Session:
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
         raw_headers = unpack_headers_payload(payload)
-        if len(raw_headers) > 2000:
-            self.logger.warning(f'{len(raw_headers):,d} headers in headers message')
+        count = len(raw_headers)
+        if count > 2000:
+            self.logger.warning(f'protocol violation: {count:,d} headers received')
 
-        if not raw_headers:
-            self.logger.info(f'headers synchronized to height {self.their_tip.height}')
-            self.headers_synced.set()
-            return
-
-        # FIXME: make this logic robust to misbehaving peers
-        await self.node.headers.insert_headers(raw_headers)
-        # Update their tip and request more headers
-        self.their_tip = await self.node.headers.header_from_hash(header_hash(raw_headers[-1]))
-        await self.get_headers()
+        try:
+            if raw_headers:
+                await self.node.headers.insert_headers(raw_headers)
+            if count < 2000:
+                self.headers_synced = True
+                self.logger.info(f'headers synchronized to height {self.their_tip.height}')
+        except HeaderException:
+            self.headers_synced = True   # on error, abandon the attempt
+        finally:
+            self.headers_received.set()
 
     async def on_getheaders(self, payload):
         _version, block_locator, hash_stop = unpack_getheaders_payload(payload)
