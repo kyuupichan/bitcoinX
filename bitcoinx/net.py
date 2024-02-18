@@ -670,6 +670,50 @@ def unpack_headers_payload(payload):
     return result
 
 
+async def block_locator(headers, block_hash=None):
+    return await headers.block_locator(await longest_chain(headers, block_hash))
+
+
+async def longest_chain(headers, block_hash=None):
+    if block_hash is None:
+        header = headers.genesis_header
+    else:
+        header = await headers.header_from_hash(block_hash)
+    return await headers.longest_chain(header)
+
+
+async def get_headers(headers, block_locator, hash_stop, count):
+    if not block_locator:
+        header = await headers.header_from_hash(hash_stop)
+        if not header:
+            return []
+        return [header]
+
+    chain = await longest_chain(headers)
+    for block_hash in block_locator:
+        header = await headers.header_from_hash(block_hash)
+        if not header:
+            continue
+        try:
+            chain_header = await headers.header_at_height(chain, header.height)
+        except MissingHeader:
+            continue
+        if header.hash == chain_header.hash:
+            break
+    else:
+        header = headers.genesis_header
+
+    first_height = header.height + 1
+    stop_height = min(chain.tip.height + 1, first_height + count)
+    return [await headers.header_at_height(chain, height)
+            for height in range(first_height, stop_height)]
+
+
+async def get_raw_headers(headers, block_locator, hash_stop, count):
+    header_objs = await get_headers(headers, block_locator, hash_stop, count)
+    return [header.to_bytes() for header in header_objs]
+
+
 class Connection:
     '''A single network connection.  Each connection has its own outgoing message queue
     because a Session decides which connection an outgoing message is sent on.
@@ -723,47 +767,7 @@ class Node:
         self.incoming_sessions = set()
 
     async def height(self):
-        return (await self.longest_chain()).tip.height
-
-    async def longest_chain(self, block_hash=None):
-        if block_hash is None:
-            header = self.headers.genesis_header
-        else:
-            header = await self.headers.header_from_hash(block_hash)
-        return await self.headers.longest_chain(header)
-
-    async def block_locator(self, block_hash=None):
-        return await self.headers.block_locator(await self.longest_chain(block_hash))
-
-    async def get_headers(self, block_locator, hash_stop, count):
-        if not block_locator:
-            header = await self.headers.header_from_hash(hash_stop)
-            if not header:
-                return []
-            return [header]
-
-        chain = await self.longest_chain()
-        for block_hash in block_locator:
-            header = await self.headers.header_from_hash(block_hash)
-            if not header:
-                continue
-            try:
-                chain_header = await self.headers.header_at_height(chain, header.height)
-            except MissingHeader:
-                continue
-            if header.hash == chain_header.hash:
-                break
-        else:
-            header = self.headers.genesis_header
-
-        first_height = header.height + 1
-        stop_height = min(chain.tip.height + 1, first_height + count)
-        return [await self.headers.header_at_height(chain, height)
-                for height in range(first_height, stop_height)]
-
-    async def get_raw_headers(self, block_locator, hash_stop, count):
-        headers = await self.get_headers(block_locator, hash_stop, count)
-        return [header.to_bytes() for header in headers]
+        return (await longest_chain(self.headers)).tip.height
 
     def random_nonce(self):
         while True:
@@ -1067,10 +1071,10 @@ class Session:
         Calling this with no argument forms a loop with on_headers() whose eventual effect
         is to synchronize the peer's headers.
         '''
-        block_locator = await self.node.block_locator(self.their_tip.hash)
-        payload = pack_getheaders_payload(self.node.service.protocol_version, block_locator)
+        locator = await block_locator(self.node.headers, self.their_tip.hash)
+        payload = pack_getheaders_payload(self.node.service.protocol_version, locator)
         if self.debug:
-            self.logger.debug(f'requesting headers; locator has {len(block_locator)} entries')
+            self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, payload)
         self.headers_received.clear()
 
@@ -1102,7 +1106,7 @@ class Session:
 
     async def on_getheaders(self, payload):
         _version, block_locator, hash_stop = unpack_getheaders_payload(payload)
-        raw_headers = await self.node.get_raw_headers(block_locator, hash_stop, 2000)
+        raw_headers = await get_raw_headers(self.node.headers, block_locator, hash_stop, 2000)
         await self.send_message(MessageHeader.HEADERS, pack_headers_payload(raw_headers))
 
     async def on_inv(self, items):
