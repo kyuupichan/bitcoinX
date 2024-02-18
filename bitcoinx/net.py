@@ -670,10 +670,6 @@ def unpack_headers_payload(payload):
     return result
 
 
-async def block_locator(headers, block_hash=None):
-    return await headers.block_locator(await headers.longest_chain(block_hash))
-
-
 async def get_headers(headers, block_locator, hash_stop, count):
     if not block_locator:
         header = await headers.header_from_hash(hash_stop)
@@ -1064,7 +1060,7 @@ class Session:
         Calling this with no argument forms a loop with on_headers() whose eventual effect
         is to synchronize the peer's headers.
         '''
-        locator = await block_locator(self.node.headers, self.their_tip.hash)
+        locator = await self.node.headers.block_locator(self.their_tip.hash)
         payload = pack_getheaders_payload(self.node.service.protocol_version, locator)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')

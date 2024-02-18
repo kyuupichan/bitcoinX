@@ -490,8 +490,7 @@ class TestHeaders:
             genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             branch = create_random_branch(genesis_header, count)
             await insert_tree(headers, [(None, branch)])
-            chain = await headers.longest_chain()
-            locator = await headers.block_locator(chain)
+            locator = await headers.block_locator()
             assert len(locator) == 8
             for loc_pos in range(7):
                 assert locator[loc_pos] == branch[-(1 << loc_pos)].hash
@@ -503,8 +502,7 @@ class TestHeaders:
     def test_block_locator_empty_headers(self, network):
         async def test(headers):
             genesis_header = await headers.header_from_hash(network.genesis_hash)
-            chain = await headers.longest_chain()
-            assert await headers.block_locator(chain) == [network.genesis_hash]
+            assert await headers.block_locator() == [network.genesis_hash]
 
         run_test_with_headers(test, network)
 
