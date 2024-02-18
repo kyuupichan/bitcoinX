@@ -412,9 +412,8 @@ class Headers(HeadersBase):
 class Network:
 
     def __init__(self, *, name, full_name, magic_hex, genesis_header_hex, required_bits,
-                 default_port, seeds,
-                 BIP65_height, BIP66_height, CSV_height, UAHF_height, DAA_height,
-                 genesis_height, P2PKH_verbyte, P2SH_verbyte, WIF_byte,
+                 default_port, seeds,  BIP65_height, BIP66_height, CSV_height, UAHF_height,
+                 DAA_height, genesis_height, P2PKH_verbyte, P2SH_verbyte, WIF_byte,
                  xpub_verbytes_hex, xprv_verbytes_hex, cashaddr_prefix):
         self.name = name
         self.full_name = full_name
@@ -433,6 +432,7 @@ class Network:
         self.CSV_height = CSV_height
         self.UAHF_height = UAHF_height
         self.DAA_height = DAA_height
+        # Genesis upgrade activation
         self.genesis_height = genesis_height
         self.P2PKH_verbyte = P2PKH_verbyte
         self.P2SH_verbyte = P2SH_verbyte
@@ -547,7 +547,7 @@ async def _required_bits_DAA(headers, header):
     return target_to_bits(min(new_target, headers.network.max_target))
 
 
-async def _required_bits_testnet(headers, header, daa_height, has_daa_minpow):
+async def _required_bits_testnet(headers, header):
     async def prior_non_special_bits(genesis_bits):
         for test_height in range(header.height - 1, -1, -1):
             bits = (await headers._header_at_height(header.chain_id, test_height)).bits
@@ -561,7 +561,7 @@ async def _required_bits_testnet(headers, header, daa_height, has_daa_minpow):
     prior = await headers._header_at_height(header.chain_id, header.height - 1)
     is_slow = (header.timestamp - prior.timestamp) > 20 * 60
 
-    if header.height <= daa_height:
+    if header.height <= headers.network.DAA_height:
         # Note: testnet did not use the EDA
         if header.height % 2016 == 0:
             return await _required_bits_fortnightly(headers, header)
@@ -569,19 +569,20 @@ async def _required_bits_testnet(headers, header, daa_height, has_daa_minpow):
             return headers.network.genesis_bits
         return await prior_non_special_bits(headers.network.genesis_bits)
     else:
-        if has_daa_minpow and is_slow:
+        has_DAA_minpow = headers.network is BitcoinTestnet
+        if is_slow and has_DAA_minpow:
             return headers.network.genesis_bits
         return await _required_bits_DAA(headers, header)
 
 
 async def required_bits_testnet(headers, header):
-    return await _required_bits_testnet(headers, header, 1188697, True)
+    return await _required_bits_testnet(headers, header)
 
 
 async def required_bits_STN(headers, header):
     # The `fPowAllowMinDifficultyBlocks` setting is disabled on STN, so we no longer
     # check it and adjust min pow after the DAA height.
-    return await _required_bits_testnet(headers, header, 2200, False)
+    return await _required_bits_testnet(headers, header)
 
 
 async def required_bits_regtest(headers, _header):
