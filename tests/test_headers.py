@@ -129,7 +129,7 @@ class TestHeaders:
         async def test(headers):
             cursor = await headers.conn.cursor()
             cursor.row_factory = asqlite3.Row
-            await cursor.execute(f'SELECT * FROM Chains')
+            await cursor.execute('SELECT * FROM Chains')
             row = await cursor.fetchone()
             assert row['parent_chain_id'] is None
             assert row['base_hdr_id'] == row['tip_hdr_id']
@@ -501,7 +501,6 @@ class TestHeaders:
     @pytest.mark.parametrize('network', all_networks)
     def test_block_locator_empty_headers(self, network):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(network.genesis_hash)
             assert await headers.block_locator() == [network.genesis_hash]
 
         run_test_with_headers(test, network)

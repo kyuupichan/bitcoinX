@@ -335,7 +335,7 @@ class Headers:
     async def chains(self, block_hash=None):
         '''Return all chains containing the given block.  All chains if block_hash is None.'''
         block_hash = block_hash or self.network.genesis_hash
-        return await self._chains(f'''
+        return await self._chains('''
            SELECT tip_hdr_id
              FROM $S.AncestorsView AV, $S.Headers H, $S.Chains C
                WHERE H.hash=? AND H.chain_id=AV.anc_chain_id AND AV.chain_id=C.chain_id

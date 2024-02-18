@@ -203,7 +203,6 @@ async def check_bits(headers, raw_headers, first_height=None):
 def test_mainnet_2016_headers():
     # Mainnet headers 0, 2015, 2016, 4031, 4032, ... 4249808
     async def test(headers):
-        network = Bitcoin
         chain = None
         raw_headers = read_sparse_headers('mainnet-headers-2016')
         await override_headers(headers, raw_headers)

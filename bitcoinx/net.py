@@ -17,8 +17,10 @@ from ipaddress import ip_address, IPv4Address, IPv6Address
 from struct import Struct, error as struct_error
 from typing import List
 
-from .errors import ProtocolError, ForceDisconnectError, PackingError, MissingHeader
-from .hashes import double_sha256, double_sha256 as header_hash
+from .errors import (
+    ProtocolError, ForceDisconnectError, PackingError, MissingHeader, HeaderException,
+)
+from .hashes import double_sha256
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
@@ -647,10 +649,7 @@ def unpack_getheaders_payload(payload):
 
 def pack_headers_payload(raw_headers):
     zero = pack_varint(0)
-    def pack_one(raw_header):
-        return raw_header + zero
-
-    return pack_list(raw_headers, pack_one)
+    return pack_list(raw_headers, lambda raw_header: raw_header + zero)
 
 
 def unpack_headers_payload(payload):
