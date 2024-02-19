@@ -14,18 +14,19 @@ from enum import IntEnum, IntFlag
 from functools import partial
 from io import BytesIO
 from ipaddress import ip_address, IPv4Address, IPv6Address
-from struct import Struct, error as struct_error
+from struct import Struct
 from typing import List, Optional
 
 from .errors import (
-    ProtocolError, ForceDisconnectError, PackingError, MissingHeader, HeaderException,
+    ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
 )
 from .hashes import double_sha256
+from .headers import header_prev_hash, header_hash, SimpleHeader
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
     read_varbytes, read_varint, read_le_int32, read_le_uint32, read_le_uint64, read_le_int64,
-    pack_list, read_list
+    pack_list, read_list,
 )
 
 
@@ -581,7 +582,7 @@ def read_version_payload(service, payload):
     # Association ID is optional.  We set it to None if not provided.
     try:
         service.assoc_id = read_varbytes(read)
-    except struct_error:
+    except PackingError:
         service.assoc_id = None
 
     if read(1) != b'':
@@ -701,6 +702,9 @@ class BlockLocator:
     block_hashes: List[bytes]
     hash_stop: Optional[bytes]
 
+    def __len__(self):
+        return len(self.block_hashes)
+
     @classmethod
     async def from_block_hash(cls, headers, block_hash=None, *, hash_stop=None):
         '''Returns a block locator for the longest chain containing the block hash.  If None, the
@@ -725,6 +729,24 @@ class BlockLocator:
             yield self.hash_stop or bytes(32)
 
         return b''.join(parts())
+
+    def validate_headers(self, raw_headers):
+        if not self.block_hashes:
+            raise ProtocolError('received unsolicited headers')
+        # Check that the first header branches from an entry in the locator, and that the
+        # rest form a chain.
+        prev_hash = None
+        for n, raw_header in enumerate(raw_headers):
+            if n:
+                if header_prev_hash(raw_header) != prev_hash:
+                    raise ProtocolError('received headers do not form a chain')
+            else:
+                if header_prev_hash(raw_header) not in self.block_hashes:
+                    raise ProtocolError('received headers are detached from the block locator')
+            prev_hash = header_hash(raw_header)
+
+
+BlockLocator.NULL = BlockLocator([], None)
 
 
 class Connection:
@@ -866,6 +888,7 @@ class Session:
     If a client wishes to maintain several associations with the same address, it must be
     done with separate Session objects.
     '''
+    MAX_HEADERS = 2000
 
     def __init__(self, node, remote_service, connection, is_outgoing, *, on_handshake=None):
         self.node = node
@@ -888,6 +911,7 @@ class Session:
         self.nonce = self.node.random_nonce()
         self.can_send_large_messages = False
         self.their_tip = node.headers.genesis_header
+        self.getheaders_locator = BlockLocator.NULL
 
         # Logging
         logger = logging.getLogger('Session')
@@ -1090,6 +1114,7 @@ class Session:
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, payload)
+        self.getheaders_locator = locator
         self.headers_received.clear()
 
     # Callbacks when certain messages are received.
@@ -1102,19 +1127,25 @@ class Session:
 
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
-        raw_headers = unpack_headers_payload(payload)
-        count = len(raw_headers)
-        if count > 2000:
-            self.logger.warning(f'protocol violation: {count:,d} headers received')
-
+        locator = self.getheaders_locator
+        self.getheaders_locator = BlockLocator.NULL
+        # So we abandon a sync in case of any kind of error
+        self.headers_synced = True
         try:
+            raw_headers = unpack_headers_payload(payload)
+            locator.validate_headers(raw_headers)
+
+            count = len(raw_headers)
+            if count > self.MAX_HEADERS:
+                self.logger.warning(f'protocol violation: {count:,d} headers received')
+
             if raw_headers:
                 await self.node.headers.insert_headers(raw_headers)
-            if count < 2000:
-                self.headers_synced = True
+                self.their_tip = SimpleHeader.from_bytes(raw_headers[-1])
+            if count < self.MAX_HEADERS:
                 self.logger.info(f'headers synchronized to height {self.their_tip.height}')
-        except HeaderException:
-            self.headers_synced = True   # on error, abandon the attempt
+            else:
+                self.headers_synced = False
         finally:
             self.headers_received.set()
 
