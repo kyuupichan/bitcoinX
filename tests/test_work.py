@@ -171,10 +171,9 @@ async def override_headers(headers, raw_headers):
 
     cum_work = 0
     for height in sorted(raw_headers):
-        raw = raw_headers[height]
+        raw = bytes(raw_headers[height])
         cum_work += header_work(raw)
-        Headers[height] = Header(*unpack_header(raw), header_hash(raw), height, 1,
-                                 int_to_le_bytes(cum_work))
+        Headers[height] = Header(raw, height, 1, int_to_le_bytes(cum_work))
 
     Headers_by_hash = {header.hash: header for header in Headers.values()}
 
@@ -219,7 +218,11 @@ def test_mainnet_2016_headers():
         prev_header = await headers._header_at_height(chain, height - 1)
         prior_header = await headers._header_at_height(chain, height - 2016)
         # Add 8 weeks and a 14 seconds; the minimum to trigger it
-        prev_header.timestamp = prior_header.timestamp + 4 * 2016 * 600 + 14
+        prev_header.raw = b''.join((
+            prev_header.raw[:68],
+            pack_le_uint32(prior_header.timestamp + 4 * 2016 * 600 + 14),
+            prev_header.raw[72:]
+        ))
         assert await required_bits(headers, header) == bounded_bits
 
     run_test_with_headers(test, Bitcoin)

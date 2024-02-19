@@ -15,8 +15,8 @@ import asqlite3
 from .base58 import base58_encode_check
 from .errors import InsufficientPoW, IncorrectBits, MissingHeader
 from .hashes import hash_to_hex_str, hash_to_value, double_sha256 as header_hash
-from .misc import chunks, le_bytes_to_int, int_to_le_bytes
-from .packing import pack_byte, pack_header, unpack_header, unpack_le_uint32
+from .misc import chunks, le_bytes_to_int, int_to_le_bytes, cachedproperty
+from .packing import pack_byte, pack_header, unpack_le_uint32, unpack_le_int32
 from .work import bits_to_target, target_to_bits, bits_to_work
 
 
@@ -43,8 +43,8 @@ def bits_to_difficulty(bits):
 
 
 def deserialized_header(raw):
-    '''Returns a deserialized header object.'''
-    return SimpleHeader(*unpack_header(raw), header_hash(raw))
+    '''Returns a SimpleHeader.'''
+    return SimpleHeader(raw)
 
 
 def header_bits(raw_header):
@@ -71,25 +71,50 @@ def log2_work(work):
 
 @dataclass
 class SimpleHeader:
-    '''Standard header information, along with its hash.'''
-    version: int
-    prev_hash: bytes
-    merkle_root: bytes
-    timestamp: int
-    bits: int
-    nonce: int
-    hash: bytes
+    '''A raw header, along with its hash.'''
+    raw: bytes
 
     def __hash__(self):
         return le_bytes_to_int(self.hash[:4])
 
+    @property
+    def version(self):
+        result, = unpack_le_int32(self.raw[:4])
+        return result
+
+    @property
+    def prev_hash(self):
+        return self.raw[4:36]
+
+    @property
+    def merkle_root(self):
+        return self.raw[36:68]
+
+    @property
+    def timestamp(self):
+        result, = unpack_le_uint32(self.raw[68:72])
+        return result
+
+    @property
+    def bits(self):
+        result, = unpack_le_uint32(self.raw[72:76])
+        return result
+
+    @property
+    def nonce(self):
+        result, = unpack_le_uint32(self.raw[76:80])
+        return result
+
+    @cachedproperty
+    def hash(self):
+        return header_hash(self.raw)
+
     def to_bytes(self):
-        return pack_header(self.version, self.prev_hash, self.merkle_root,
-                           self.timestamp, self.bits, self.nonce)
+        return self.raw
 
     @classmethod
     def from_bytes(cls, raw):
-        return cls(*unpack_header(raw), header_hash(raw))
+        return cls(raw)
 
     def work(self):
         return bits_to_work(self.bits)
@@ -309,15 +334,18 @@ class Headers:
                            header.prev_hash))
 
     async def _query_headers(self, where_clause, params, is_multi):
-        sql = f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, hash, height,
+        sql = f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, height,
                   chain_id, chain_work FROM $S.HeadersView WHERE {where_clause};'''
         cursor = await self.conn.execute(self.fixup_sql(sql), params)
 
+        def row_to_header(row):
+            return Header(pack_header(*row[:6]), *row[6:])
+
         if is_multi:
-            return [Header(*row) async for row in cursor]
+            return [row_to_header(row) async for row in cursor]
 
         async for row in cursor:
-            return Header(*row)
+            return row_to_header(row)
         return None
 
     async def header_from_hash(self, block_hash):
