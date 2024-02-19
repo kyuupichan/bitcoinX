@@ -16,7 +16,8 @@ from base64 import b64decode
 from binascii import Error as binascii_Error
 from enum import IntEnum
 
-from electrumsv_secp256k1 import ffi, lib
+from coincurve._libsecp256k1 import ffi, lib
+
 from .consts import CURVE_ORDER, HALF_CURVE_ORDER
 from .errors import InvalidSignature
 from .misc import CONTEXT, be_bytes_to_int, int_to_be_bytes

@@ -12,13 +12,13 @@ __all__ = (
     'int_to_be_bytes', 'int_to_le_bytes', 'CONTEXT',
 )
 
+import os
 from functools import partial
-from os import path
-from electrumsv_secp256k1 import create_context
 
+from coincurve import GLOBAL_CONTEXT
 
-CONTEXT = create_context()
-package_dir = path.dirname(path.realpath(__file__))
+CONTEXT = GLOBAL_CONTEXT.ctx
+package_dir = os.path.dirname(os.path.realpath(__file__))
 
 # Converts big-endian bytes to an integer
 be_bytes_to_int = partial(int.from_bytes, byteorder='big')
@@ -47,7 +47,7 @@ def chunks(items, size):
 
 def data_file_path(*parts):
     '''Return the path to a file in the data/ directory.'''
-    return path.join(package_dir, "data", *parts)
+    return os.path.join(package_dir, "data", *parts)
 
 
 #

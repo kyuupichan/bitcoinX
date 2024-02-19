@@ -3,7 +3,7 @@ parameters:
 
 steps:
 - script: |
-    python -m pip install electrumsv-secp256k1 pycryptodomex py-asqlite3
+    python -m pip install coincurve==18.0.0 pycryptodomex py-asqlite3
     python -m pip install flake8
     python -m pip install coveralls coverage
     python -m pip install pytest pytest-asyncio
