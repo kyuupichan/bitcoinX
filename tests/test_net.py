@@ -14,14 +14,14 @@ import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
-    Headers, all_networks,
-)
-from bitcoinx.errors import ProtocolError, ForceDisconnectError
-from bitcoinx.misc import chunks
-from bitcoinx.net import (
-    ServicePacking, NetAddress, BitcoinService, Protoconf, MessageHeader, BlockLocator,
+    Headers, all_networks, ProtocolError, ForceDisconnectError,
+    NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart, Node, Session, version_payload, read_version_payload, _command,
+    ServicePart, Node, Session,
+)
+from bitcoinx.misc import chunks
+from bitcoinx.net_protocol import (
+    ServicePacking, BlockLocator, version_payload, read_version_payload, _command,
     pack_headers_payload, unpack_headers_payload,
 )
 

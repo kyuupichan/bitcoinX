@@ -19,7 +19,8 @@ __all__ = (
     'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
     'NumEqualVerifyFailed', 'InvalidSignatureCount', 'PushOnlyError', 'LockTimeError',
-    'StackMemoryUsageError', 'MerkleError', 'PackingError',
+    'StackMemoryUsageError', 'MerkleError', 'PackingError', 'ProtocolError', 'BadChecksumError',
+    'ForceDisconnectError',
 )
 
 from struct import error as PackingError
