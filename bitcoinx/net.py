@@ -21,7 +21,7 @@ from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
 )
 from .hashes import double_sha256
-from .headers import header_prev_hash, header_hash, SimpleHeader
+from .headers import SimpleHeader
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, pack_port, unpack_port,
@@ -632,7 +632,7 @@ def unpack_headers_payload(payload):
         raw_header = read(80)
         # A stupid tx count which seems to always be zero...
         read_varint(read)
-        return raw_header
+        return SimpleHeader(raw_header)
 
     read = BytesIO(payload).read
     try:
@@ -742,25 +742,26 @@ class BlockLocator:
         raw_headers = await self.fetch_raw_headers(headers, limit)
         return pack_headers_payload(raw_headers)
 
-    def validate_headers(self, raw_headers):
+    def validate_headers(self, headers):
+        # headers is a list of SimpleHeader objects
         if not self.block_hashes:
             if self.version == 0:
                 raise ProtocolError('received unsolicited headers')
-            if len(raw_headers) != 1 or header_hash(raw_headers[0]) != self.hash_stop:
+            if len(headers) != 1 or headers[0].hash != self.hash_stop:
                 raise ProtocolError('did not receive the single header requested')
             return
 
         # Check that the first header branches from an entry in the locator, and that the
         # rest form a chain.
         prev_hash = None
-        for n, raw_header in enumerate(raw_headers):
+        for n, header in enumerate(headers):
             if n:
-                if header_prev_hash(raw_header) != prev_hash:
+                if header.prev_hash != prev_hash:
                     raise ProtocolError('received headers do not form a chain')
             else:
-                if header_prev_hash(raw_header) not in self.block_hashes:
+                if header.prev_hash not in self.block_hashes:
                     raise ProtocolError('received headers are detached from the block locator')
-            prev_hash = header_hash(raw_header)
+            prev_hash = header.hash
 
 
 BlockLocator.NULL = BlockLocator(0, [], None)
@@ -1149,16 +1150,16 @@ class Session:
         # So we abandon a sync in case of any kind of error
         self.headers_synced = True
         try:
-            raw_headers = unpack_headers_payload(payload)
-            locator.validate_headers(raw_headers)
+            simple_headers = unpack_headers_payload(payload)
+            locator.validate_headers(simple_headers)
 
-            count = len(raw_headers)
+            count = len(simple_headers)
             if count > self.MAX_HEADERS:
                 self.logger.warning(f'protocol violation: {count:,d} headers received')
 
-            if raw_headers:
-                await self.node.headers.insert_headers(raw_headers)
-                self.their_tip = SimpleHeader.from_bytes(raw_headers[-1])
+            if simple_headers:
+                await self.node.headers.insert_headers(simple_headers)
+                self.their_tip = simple_headers[-1]
             if count < self.MAX_HEADERS:
                 self.logger.info(f'headers synchronized to height {self.their_tip.height}')
             else:

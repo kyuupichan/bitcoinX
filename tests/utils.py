@@ -174,5 +174,4 @@ def create_random_tree(base_header, branch_count=10, max_branch_length=10):
 
 async def insert_tree(headers, tree):
     for _, branch in tree:
-        await headers.insert_headers(b''.join(header.to_bytes() for header in branch),
-                                     check_work=False)
+        await headers.insert_headers(branch, check_work=False)

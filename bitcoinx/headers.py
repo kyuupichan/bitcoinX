@@ -21,9 +21,7 @@ from .work import bits_to_target, target_to_bits, bits_to_work
 
 
 __all__ = (
-    'Chain', 'Header', 'Headers', 'SimpleHeader',
-    'bits_to_difficulty', 'deserialized_header', 'header_bits', 'header_hash',
-    'header_prev_hash', 'header_timestamp', 'header_work', 'log2_work',
+    'Chain', 'Header', 'Headers', 'SimpleHeader', 'bits_to_difficulty', 'header_hash', 'log2_work',
     # Networks
     'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'BitcoinRegtest',
     'Network', 'all_networks', 'networks_by_name',
@@ -33,36 +31,9 @@ __all__ = (
 def blob_literal(raw):
     return f"x'{raw.hex()}'"
 
-#
-# Raw header operations
-#
-
 
 def bits_to_difficulty(bits):
     return Bitcoin.max_target / bits_to_target(bits)
-
-
-def deserialized_header(raw):
-    '''Returns a SimpleHeader.'''
-    return SimpleHeader(raw)
-
-
-def header_bits(raw_header):
-    bits, = unpack_le_uint32(raw_header[72:76])
-    return bits
-
-
-def header_prev_hash(raw_header):
-    return raw_header[4:36]
-
-
-def header_timestamp(raw_header):
-    timestamp, = unpack_le_uint32(raw_header[68:72])
-    return timestamp
-
-
-def header_work(raw_header):
-    return bits_to_work(header_bits(raw_header))
 
 
 def log2_work(work):
@@ -283,17 +254,12 @@ class Headers:
 
         self.genesis_header = await self.header_from_hash(self.network.genesis_hash)
 
-    async def insert_headers(self, raw_headers, *, check_work=True):
+    async def insert_headers(self, simple_headers, *, check_work=True):
         '''Insert headers into the Headers table.
 
-        raw_headers can either be a sequence of raw headers, or a concatenated sequence of
-        raw headers.  Proof of work is checked unless network is None.'''
-        def headers(raw_headers):
-            if isinstance(raw_headers, (bytes, bytearray)):
-                raw_headers = chunks(raw_headers, 80)
-            for raw_header in raw_headers:
-                yield SimpleHeader.from_bytes(raw_header)
-
+        simple_headers is a sequence of SimpleHeader objects.  Proof of work is checked
+        if check_work is True.
+        '''
         prev_header_sql = self.fixup_sql(
             'SELECT hdr_id, chain_id, height, chain_work FROM $S.Headers WHERE hash=?')
         # Use a new chain ID if another header with the same prev_hdr_id exists
@@ -311,7 +277,7 @@ class Headers:
 
         execute = self.conn.execute
         required_bits = self.network.required_bits
-        for header in headers(raw_headers):
+        for header in simple_headers:
             cursor = await execute(prev_header_sql, (header.prev_hash, ))
             row = await cursor.fetchone()
             if not row:
@@ -436,9 +402,10 @@ class Network:
         self.full_name = full_name
         self.magic = bytes.fromhex(magic_hex)
         self.genesis_header = bytes.fromhex(genesis_header_hex)
+        self.genesis_SimpleHeader = SimpleHeader(self.genesis_header)
         assert len(self.genesis_header) == 80
-        self.genesis_bits = header_bits(self.genesis_header)
-        self.genesis_hash = header_hash(self.genesis_header)
+        self.genesis_bits = self.genesis_SimpleHeader.bits
+        self.genesis_hash = self.genesis_SimpleHeader.hash
         self.max_target = bits_to_target(self.genesis_bits)
         # Signature: async def required_bits(headers, header):
         self.required_bits = required_bits

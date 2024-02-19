@@ -13,7 +13,7 @@ import pytest
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet, BitcoinRegtest,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
-    deserialized_header, Header, unpack_header, header_hash, header_work,
+    Header, header_hash, SimpleHeader,
     bits_to_target, target_to_bits, grind_header, bits_to_work, int_to_le_bytes,
 )
 
@@ -171,9 +171,9 @@ async def override_headers(headers, raw_headers):
 
     cum_work = 0
     for height in sorted(raw_headers):
-        raw = bytes(raw_headers[height])
-        cum_work += header_work(raw)
-        Headers[height] = Header(raw, height, 1, int_to_le_bytes(cum_work))
+        header = SimpleHeader(bytes(raw_headers[height]))
+        cum_work += header.work()
+        Headers[height] = Header(header.raw, height, 1, int_to_le_bytes(cum_work))
 
     Headers_by_hash = {header.hash: header for header in Headers.values()}
 
@@ -290,7 +290,7 @@ def test_grind_header():
     timestamp = int(time.time())
 
     raw = grind_header(version, prev_hash, tx_merkle_root, timestamp, bits)
-    header = deserialized_header(raw)
+    header = SimpleHeader(raw)
 
     assert header.version == version
     assert header.prev_hash == prev_hash

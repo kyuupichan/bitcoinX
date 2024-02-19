@@ -689,7 +689,7 @@ class TestNetworkProtocol:
     def test_headers_payload(self, count):
         headers = [urandom(80) for _ in range(count)]
         payload = pack_headers_payload(headers)
-        assert headers == unpack_headers_payload(payload)
+        assert headers == [header.raw for header in unpack_headers_payload(payload)]
 
     def test_headers_payload_short(self):
         headers = [urandom(80) for _ in range(5)]

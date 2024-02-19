@@ -133,7 +133,8 @@ class TestHeaders:
     @staticmethod
     async def insert_first_headers(headers, count):
         raw_headers = read_file('mainnet-headers-2016.raw', count * 80)[80:]
-        await headers.insert_headers(raw_headers)
+        simple_headers = [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
+        await headers.insert_headers(simple_headers)
         return raw_headers
 
     def test_insert_headers(self):
@@ -163,11 +164,12 @@ class TestHeaders:
         async def test(headers):
             genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             branch = create_random_branch(genesis_header, 4)
-            raw_headers = [bytearray(header.to_bytes()) for header in branch]
             # muck up prev_hash
-            raw_headers[2][7] ^= 1
+            raw = bytearray(branch[2].raw)
+            raw[7] ^= 1
+            branch[2].raw = bytes(raw)
             with pytest.raises(MissingHeader):
-                await headers.insert_headers(raw_headers, check_work=False)
+                await headers.insert_headers(branch, check_work=False)
 
         run_test_with_headers(test)
 
@@ -176,12 +178,10 @@ class TestHeaders:
             genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             N = 5
             branch = create_random_branch(genesis_header, N)
-            await headers.insert_headers([header.to_bytes() for header in branch[:N - 1]],
-                                         check_work=False)
+            await headers.insert_headers(branch[:N - 1], check_work=False)
             chain = await headers.longest_chain()
             assert chain.tip.height == 4
-            await headers.insert_headers([header.to_bytes() for header in branch],
-                                         check_work=False)
+            await headers.insert_headers(branch, check_work=False)
             assert chain.tip.height == 4
 
         run_test_with_headers(test)
@@ -222,12 +222,12 @@ class TestHeaders:
         async def test(headers):
             genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             header1 = create_random_header(genesis_header)
-            await headers.insert_headers(header1.to_bytes(), check_work=False)
+            await headers.insert_headers([header1], check_work=False)
             header1 = await headers.header_from_hash(header1.hash)
             assert header1.chain_id == genesis_header.chain_id
 
             header2 = create_random_header(genesis_header)
-            await headers.insert_headers(header2.to_bytes(), check_work=False)
+            await headers.insert_headers([header2], check_work=False)
             header2 = await headers.header_from_hash(header2.hash)
             assert header2.chain_id != genesis_header.chain_id
 
@@ -380,7 +380,7 @@ class TestHeaders:
             H6, = create_random_branch(H1, 1)
 
             H = (H1, H2, H3, H4, H5, H6)
-            await headers.insert_headers(b''.join(h.to_bytes() for h in H), check_work=False)
+            await headers.insert_headers(H, check_work=False)
 
             # This ensures chain_id is set
             H1, H2, H3, H4, H5, H6 = [await headers.header_from_hash(h.hash) for h in H]
@@ -434,7 +434,7 @@ class TestHeaders:
         async def test(headers):
             header = create_random_header(SimpleHeader.from_bytes(network.genesis_header))
             with pytest.raises(InsufficientPoW):
-                await headers.insert_headers(header.to_bytes())
+                await headers.insert_headers([header])
 
         network = Bitcoin
         run_test_with_headers(test, network)
