@@ -17,7 +17,7 @@ from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
     Headers, all_networks, ProtocolError, ForceDisconnectError,
     NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
-    ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
+    Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Session,
 )
 from bitcoinx.misc import chunks
@@ -847,7 +847,7 @@ def listening_node(listening_headers):
     yield node
     if sys.version_info >= (3, 12):
         assert not node.incoming_sessions
-        assert not node.outgoing_sessions
+    assert not node.outgoing_sessions
 
 
 @pytest_asyncio.fixture
