@@ -14,7 +14,7 @@ import os
 from base64 import b64decode, b64encode
 from binascii import Error as binascii_Error
 
-from electrumsv_secp256k1 import ffi, lib
+from coincurve._libsecp256k1 import ffi, lib
 
 from .address import P2PKH_Address, P2PK_Output
 from .aes import aes_decrypt_authenticated, aes_encrypt_authenticated
