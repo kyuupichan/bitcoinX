@@ -6,7 +6,7 @@ steps:
     python -m pip install electrumsv-secp256k1 pycryptodomex py-asqlite3
     python -m pip install flake8
     python -m pip install coveralls coverage
-    python -m pip install pytest
+    python -m pip install pytest pytest-asyncio
   displayName: Prepare general environment
   condition: |
     and(
