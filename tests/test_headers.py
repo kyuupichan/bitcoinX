@@ -17,16 +17,10 @@ from .utils import (
 class TestSimpleHeader:
 
     def test_eq(self):
-        assert SimpleHeader(Bitcoin.genesis_header) != SimpleHeader(BitcoinTestnet.genesis_header)
+        assert Bitcoin.genesis_header != BitcoinTestnet.genesis_header
 
     def test_hash(self):
-        assert len({SimpleHeader(Bitcoin.genesis_header),
-                    SimpleHeader(BitcoinTestnet.genesis_header)
-        }) == 2
-
-    @pytest.mark.parametrize('network', all_networks)
-    def test_to_bytes(self, network):
-        assert SimpleHeader(network.genesis_header).raw == network.genesis_header
+        assert len({Bitcoin.genesis_header, BitcoinTestnet.genesis_header}) == 2
 
 
 def same_headers(simple, detailed):
@@ -51,7 +45,7 @@ class TestHeaders:
     @pytest.mark.parametrize('network', all_networks)
     def test_genesis_header(self, network):
         async def test(headers):
-            header = SimpleHeader(network.genesis_header)
+            header = network.genesis_header
             header2 = await headers.header_from_hash(header.hash)
             assert same_headers(header, header2)
 
@@ -61,7 +55,7 @@ class TestHeaders:
     def test_genesis_merkle_root(self, network):
         async def test(headers):
             # Only test for Bitcoin, as Testnet genesis merkle root is identical
-            header = SimpleHeader(network.genesis_header)
+            header = network.genesis_header
             header2 = await headers.header_from_merkle_root(header.merkle_root)
             assert same_headers(header, header2)
 
@@ -79,18 +73,17 @@ class TestHeaders:
             assert row['base_hdr_id'] == 1
             assert await cursor.fetchone() is None
 
-            genesis = await headers.header_from_hash(network.genesis_hash)
             chains = await headers.chains()
             assert len(chains) == 1
             chain = chains[0]
-            assert chain.tip == genesis == await headers.header_at_height(chain, 0)
+            assert chain.tip == headers.genesis_header == await headers.header_at_height(chain, 0)
 
         run_test_with_headers(test, network)
 
     @pytest.mark.parametrize('colname', ('hash', 'merkle_root'))
     def test_unique_columns(self, colname):
         async def test(headers):
-            header = SimpleHeader(Bitcoin.genesis_header)
+            header = Bitcoin.genesis_header
             blob_literal = f"x'{getattr(header, colname).hex()}'"
             columns, values = self.columns_and_values(colname, blob_literal)
             with pytest.raises(asqlite3.IntegrityError) as e:
@@ -159,8 +152,7 @@ class TestHeaders:
 
     def test_insert_headers_bad(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
-            branch = create_random_branch(genesis_header, 4)
+            branch = create_random_branch(headers.genesis_header, 4)
             # muck up prev_hash
             raw = bytearray(branch[2].raw)
             raw[7] ^= 1
@@ -172,9 +164,8 @@ class TestHeaders:
 
     def test_insert_existing_headers(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             N = 5
-            branch = create_random_branch(genesis_header, N)
+            branch = create_random_branch(headers.genesis_header, N)
             await headers.insert_headers(branch[:N - 1], check_work=False)
             chain = await headers.longest_chain()
             assert chain.tip.height == 4
@@ -217,22 +208,21 @@ class TestHeaders:
 
     def test_headers_height_1(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
-            header1 = create_random_header(genesis_header)
+            header1 = create_random_header(headers.genesis_header)
             await headers.insert_headers([header1], check_work=False)
             header1 = await headers.header_from_hash(header1.hash)
-            assert header1.chain_id == genesis_header.chain_id
+            assert header1.chain_id == headers.genesis_header.chain_id
 
-            header2 = create_random_header(genesis_header)
+            header2 = create_random_header(headers.genesis_header)
             await headers.insert_headers([header2], check_work=False)
             header2 = await headers.header_from_hash(header2.hash)
-            assert header2.chain_id != genesis_header.chain_id
+            assert header2.chain_id != headers.genesis_header.chain_id
 
         run_test_with_headers(test)
 
     @staticmethod
     async def insert_random_tree(headers, *args):
-        genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
+        genesis_header = headers.genesis_header
         tree = create_random_tree(genesis_header, *args)
         await insert_tree(headers, tree)
         return tree, genesis_header
@@ -365,14 +355,13 @@ class TestHeaders:
 
     def test_chains_manual(self):
         async def test(headers):
-            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
             # Create a tree like so:
             #              / H5    chain_2
             #         / H3 - H4    chain_1
             # genesis - H1 - H2    chain_0
             #              \ H6    chain_3
-            H1, H2 = create_random_branch(genesis_header, 2)
-            H3, H4 = create_random_branch(genesis_header, 2)
+            H1, H2 = create_random_branch(headers.genesis_header, 2)
+            H3, H4 = create_random_branch(headers.genesis_header, 2)
             H5, = create_random_branch(H3, 1)
             H6, = create_random_branch(H1, 1)
 
@@ -401,11 +390,10 @@ class TestHeaders:
     def test_median_time_past(self):
         async def test(headers):
             count = 100
-            genesis_header = await headers.header_from_hash(Bitcoin.genesis_hash)
-            branch = create_random_branch(genesis_header, count)
+            branch = create_random_branch(headers.genesis_header, count)
             await insert_tree(headers, [(None, branch)])
 
-            cheaders = [genesis_header]
+            cheaders = [headers.genesis_header]
             cheaders.extend(branch)
             timestamps = [header.timestamp for header in cheaders]
 
@@ -429,7 +417,7 @@ class TestHeaders:
 
     def test_target_checked(self):
         async def test(headers):
-            header = create_random_header(SimpleHeader(network.genesis_header))
+            header = create_random_header(network.genesis_header)
             with pytest.raises(InsufficientPoW):
                 await headers.insert_headers([header])
 

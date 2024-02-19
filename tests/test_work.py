@@ -265,7 +265,7 @@ def test_scalingtestnet():
 def test_regtest():
     async def test(headers):
         assert (await headers.network.required_bits(headers, None)
-                == headers.network.genesis_bits)
+                == headers.genesis_header.bits)
 
     run_test_with_headers(test, BitcoinRegtest)
 

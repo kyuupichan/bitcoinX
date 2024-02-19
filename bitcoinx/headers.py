@@ -220,14 +220,13 @@ class Headers:
         block.  On return
         '''
         try:
-            self.genesis_header = await self.header_from_hash(self.network.genesis_hash)
+            self.genesis_header = await self.header_from_hash(self.network.genesis_header.hash)
             logging.info('database tables found')
             return
         except asqlite3.OperationalError:
             pass
 
-        gh = SimpleHeader(self.network.genesis_header)
-        assert gh.prev_hash == bytes(32)
+        gh = self.network.genesis_header
 
         # Create the tables and insert the genesis header
         async with self.conn:
@@ -245,7 +244,7 @@ class Headers:
                                      gh.version, gh.timestamp, gh.bits, gh.nonce))
             logging.info('{self.network} genesis header {gh.hex_str()} inserted')
 
-        self.genesis_header = await self.header_from_hash(self.network.genesis_hash)
+        self.genesis_header = await self.header_from_hash(gh.hash)
 
     async def insert_headers(self, simple_headers, *, check_work=True):
         '''Insert headers into the Headers table.
@@ -321,7 +320,7 @@ class Headers:
 
     async def chains(self, block_hash=None):
         '''Return all chains containing the given block.  All chains if block_hash is None.'''
-        block_hash = block_hash or self.network.genesis_hash
+        block_hash = block_hash or self.genesis_header.hash
         return await self._chains('''
            SELECT tip_hdr_id
              FROM $S.AncestorsView AV, $S.Headers H, $S.Chains C
@@ -394,12 +393,11 @@ class Network:
         self.name = name
         self.full_name = full_name
         self.magic = bytes.fromhex(magic_hex)
-        self.genesis_header = bytes.fromhex(genesis_header_hex)
-        self.genesis_SimpleHeader = SimpleHeader(self.genesis_header)
-        assert len(self.genesis_header) == 80
-        self.genesis_bits = self.genesis_SimpleHeader.bits
-        self.genesis_hash = self.genesis_SimpleHeader.hash
-        self.max_target = bits_to_target(self.genesis_bits)
+        self.genesis_header = SimpleHeader(bytes.fromhex(genesis_header_hex))
+        assert self.genesis_header.prev_hash == bytes(32)
+        assert len(self.genesis_header.raw) == 80
+        self.max_target = bits_to_target(self.genesis_header.bits)
+
         # Signature: async def required_bits(headers, header):
         self.required_bits = required_bits
         self.default_port = default_port
@@ -463,7 +461,7 @@ async def required_bits_mainnet(headers, header):
 async def _required_bits_fortnightly(headers, header):
     '''Bitcoin's original DAA.'''
     if header.height == 0:
-        return headers.network.genesis_bits
+        return headers.genesis_header.bits
 
     prev = await headers._header_at_height(header.chain_id, header.height - 1)
     if header.height % 2016:
@@ -533,7 +531,7 @@ async def _required_bits_testnet(headers, header):
         # impossible to fall through here
 
     if header.height == 0:
-        return headers.network.genesis_bits
+        return headers.genesis_header.bits
 
     prior = await headers._header_at_height(header.chain_id, header.height - 1)
     is_slow = (header.timestamp - prior.timestamp) > 20 * 60
@@ -543,12 +541,12 @@ async def _required_bits_testnet(headers, header):
         if header.height % 2016 == 0:
             return await _required_bits_fortnightly(headers, header)
         if is_slow:
-            return headers.network.genesis_bits
-        return await prior_non_special_bits(headers.network.genesis_bits)
+            return headers.genesis_header.bits
+        return await prior_non_special_bits(headers.genesis_header.bits)
     else:
         has_DAA_minpow = headers.network is BitcoinTestnet
         if is_slow and has_DAA_minpow:
-            return headers.network.genesis_bits
+            return headers.genesis_header.bits
         return await _required_bits_DAA(headers, header)
 
 
@@ -564,7 +562,7 @@ async def required_bits_STN(headers, header):
 
 async def required_bits_regtest(headers, _header):
     # Regtest has no retargeting.
-    return headers.network.genesis_bits
+    return headers.genesis_header.bits
 
 
 Bitcoin = Network(
