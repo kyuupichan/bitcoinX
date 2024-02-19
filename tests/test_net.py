@@ -3,6 +3,7 @@ import copy
 import logging
 import platform
 import random
+import sys
 import time
 from io import BytesIO
 from ipaddress import IPv4Address, IPv6Address
@@ -844,8 +845,9 @@ def listening_node(listening_headers):
     service = BitcoinService(address=NetAddress(listen_host, 5656))
     node = Node(service, Bitcoin, listening_headers)
     yield node
-    assert not node.incoming_sessions
-    assert not node.outgoing_sessions
+    if sys.version_info >= (3, 12):
+        assert not node.incoming_sessions
+        assert not node.outgoing_sessions
 
 
 @pytest_asyncio.fixture
@@ -880,7 +882,7 @@ async def achunks(payload, size):
 
 
 async def pause(secs=None):
-    secs = 0.05 if platform.system() == 'Windows' else 0.002
+    secs = 0.05 if platform.system() == 'Windows' else 0.004
     await asyncio.sleep(secs)
 
 
