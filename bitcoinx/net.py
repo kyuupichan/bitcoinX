@@ -15,7 +15,7 @@ from functools import partial
 from io import BytesIO
 from ipaddress import ip_address, IPv4Address, IPv6Address
 from struct import Struct
-from typing import List, Optional
+from typing import List
 
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
@@ -622,21 +622,6 @@ def version_payload(service, remote_service, nonce):
     ))
 
 
-def unpack_getheaders_payload(payload):
-    def read_one(read):
-        return read(32)
-
-    read = BytesIO(payload).read
-    version = read_le_uint32(read)
-    locator = read_list(read, read_one)
-    hash_stop = read(32)
-    if len(hash_stop) != 32:
-        raise ProtocolError('truncated getheaders payload')
-    if read(1) != b'':
-        logging.info('extra bytes at end of getheaders payload')
-    return version, locator, hash_stop
-
-
 def pack_headers_payload(raw_headers):
     zero = pack_varint(0)
     return pack_list(raw_headers, lambda raw_header: raw_header + zero)
@@ -659,39 +644,6 @@ def unpack_headers_payload(payload):
     return result
 
 
-async def get_headers(headers, block_locator, hash_stop, count):
-    if not block_locator:
-        header = await headers.header_from_hash(hash_stop)
-        if not header:
-            return []
-        return [header]
-
-    chain = await headers.longest_chain()
-    for block_hash in block_locator:
-        header = await headers.header_from_hash(block_hash)
-        if not header:
-            continue
-        try:
-            chain_header = await headers.header_at_height(chain, header.height)
-        except MissingHeader:
-            continue
-        if header.hash == chain_header.hash:
-            break
-    else:
-        header = headers.genesis_header
-
-    first_height = header.height + 1
-    stop_height = min(chain.tip.height + 1, first_height + count)
-    return [await headers.header_at_height(chain, height)
-            for height in range(first_height, stop_height)]
-
-
-async def get_raw_headers(headers, block_locator, hash_stop, count):
-    header_objs = await get_headers(headers, block_locator, hash_stop, count)
-    return [header.to_bytes() for header in header_objs]
-
-
-@dataclass
 class BlockLocator:
     '''A block locator is a list of block hashes starting from the chain tip back to the
     genesis block, that become increasingly sparse.  It also includes an optional
@@ -699,14 +651,20 @@ class BlockLocator:
 
     As a payload it is used in the getblocks and getheaders messages.
     '''
-    block_hashes: List[bytes]
-    hash_stop: Optional[bytes]
+    def __init__(self, version, block_hashes, hash_stop=None):
+        self.version = version
+        self.block_hashes = block_hashes
+        self.hash_stop = hash_stop or bytes(32)
 
     def __len__(self):
         return len(self.block_hashes)
 
+    def __eq__(self, other):
+        return (isinstance(other, BlockLocator) and self.version == other.version
+                and self.block_hashes == other.block_hashes and self.hash_stop == other.hash_stop)
+
     @classmethod
-    async def from_block_hash(cls, headers, block_hash=None, *, hash_stop=None):
+    async def from_block_hash(cls, version, headers, block_hash=None, *, hash_stop=None):
         '''Returns a block locator for the longest chain containing the block hash.  If None, the
         genesis block hash is used.
         '''
@@ -720,19 +678,78 @@ class BlockLocator:
         chain = await headers.longest_chain(block_hash)
         block_hashes = [(await headers.header_at_height(chain, height)).hash
                         for height in block_heights(chain.tip.height)]
-        return cls(block_hashes, hash_stop)
+        return cls(version, block_hashes, hash_stop)
 
-    def to_payload(self, protocol_version):
+    def to_payload(self):
         def parts():
-            yield pack_le_int32(protocol_version)
+            yield pack_le_int32(self.version)
             yield pack_list(self.block_hashes, lambda block_hash: block_hash)
-            yield self.hash_stop or bytes(32)
+            yield self.hash_stop
 
         return b''.join(parts())
 
+    @classmethod
+    def from_payload(cls, payload):
+        def read_one(read):
+            return read(32)
+
+        read = BytesIO(payload).read
+        version = read_le_uint32(read)
+        locator = read_list(read, read_one)
+        hash_stop = read(32)
+        if len(hash_stop) != 32:
+            raise ProtocolError('truncated getheaders payload')
+        if read(1) != b'':
+            logging.info('extra bytes at end of getheaders payload')
+
+        return cls(version, locator, hash_stop)
+
+    async def fetch_raw_headers(self, headers, limit):
+        result = []
+        if self.block_hashes:
+            first_height = 1
+            chain = await headers.longest_chain()
+            for block_hash in self.block_hashes:
+                header = await headers.header_from_hash(block_hash)
+                if not header:
+                    continue
+
+                try:
+                    chain_header = await headers.header_at_height(chain, header.height)
+                except MissingHeader:
+                    continue
+
+                if header.hash == chain_header.hash:
+                    first_height = header.height + 1
+                    break
+
+            stop_height = min(chain.tip.height + 1, first_height + limit)
+            result = []
+            for height in range(first_height, stop_height):
+                header = await headers.header_at_height(chain, height)
+                result.append(header.raw)
+                if header.hash == self.hash_stop:
+                    break
+        else:
+            header = await headers.header_from_hash(self.hash_stop)
+            if header:
+                result.append(header.raw)
+
+        return result
+
+    async def headers_payload(self, headers, limit):
+        '''Return the payload for a "headers" message in reply to "getheaders".'''
+        raw_headers = await self.fetch_raw_headers(headers, limit)
+        return pack_headers_payload(raw_headers)
+
     def validate_headers(self, raw_headers):
         if not self.block_hashes:
-            raise ProtocolError('received unsolicited headers')
+            if self.version == 0:
+                raise ProtocolError('received unsolicited headers')
+            if len(raw_headers) != 1 or header_hash(raw_headers[0]) != self.hash_stop:
+                raise ProtocolError('did not receive the single header requested')
+            return
+
         # Check that the first header branches from an entry in the locator, and that the
         # rest form a chain.
         prev_hash = None
@@ -746,7 +763,7 @@ class BlockLocator:
             prev_hash = header_hash(raw_header)
 
 
-BlockLocator.NULL = BlockLocator([], None)
+BlockLocator.NULL = BlockLocator(0, [], None)
 
 
 class Connection:
@@ -1109,11 +1126,11 @@ class Session:
         Calling this with no argument forms a loop with on_headers() whose eventual effect
         is to synchronize the peer's headers.
         '''
-        locator = await BlockLocator.from_block_hash(self.node.headers, self.their_tip.hash)
-        payload = locator.to_payload(self.node.service.protocol_version)
+        locator = await BlockLocator.from_block_hash(self.node.service.protocol_version,
+                                                     self.node.headers, self.their_tip.hash)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
-        await self.send_message(MessageHeader.GETHEADERS, payload)
+        await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         self.getheaders_locator = locator
         self.headers_received.clear()
 
@@ -1150,9 +1167,9 @@ class Session:
             self.headers_received.set()
 
     async def on_getheaders(self, payload):
-        _version, block_locator, hash_stop = unpack_getheaders_payload(payload)
-        raw_headers = await get_raw_headers(self.node.headers, block_locator, hash_stop, 2000)
-        await self.send_message(MessageHeader.HEADERS, pack_headers_payload(raw_headers))
+        locator = BlockLocator.from_payload(payload)
+        headers_payload = await locator.headers_payload(self.node.headers, self.MAX_HEADERS)
+        await self.send_message(MessageHeader.HEADERS, headers_payload)
 
     async def on_inv(self, items):
         '''Called when an inv message is received advertising availability of various objects.'''
