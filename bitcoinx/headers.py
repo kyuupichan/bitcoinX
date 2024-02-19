@@ -15,7 +15,7 @@ import asqlite3
 from .base58 import base58_encode_check
 from .errors import InsufficientPoW, IncorrectBits, MissingHeader
 from .hashes import hash_to_hex_str, hash_to_value, double_sha256 as header_hash
-from .misc import chunks, le_bytes_to_int, int_to_le_bytes, cachedproperty
+from .misc import le_bytes_to_int, int_to_le_bytes, cachedproperty
 from .packing import pack_byte, pack_header, unpack_le_uint32, unpack_le_int32
 from .work import bits_to_target, target_to_bits, bits_to_work
 
@@ -42,7 +42,7 @@ def log2_work(work):
 
 @dataclass
 class SimpleHeader:
-    '''A raw header, along with its hash.'''
+    '''A trivial wrapper of a raw header.'''
     raw: bytes
 
     def __hash__(self):
@@ -79,13 +79,6 @@ class SimpleHeader:
     @cachedproperty
     def hash(self):
         return header_hash(self.raw)
-
-    def to_bytes(self):
-        return self.raw
-
-    @classmethod
-    def from_bytes(cls, raw):
-        return cls(raw)
 
     def work(self):
         return bits_to_work(self.bits)
@@ -233,7 +226,7 @@ class Headers:
         except asqlite3.OperationalError:
             pass
 
-        gh = SimpleHeader.from_bytes(self.network.genesis_header)
+        gh = SimpleHeader(self.network.genesis_header)
         assert gh.prev_hash == bytes(32)
 
         # Create the tables and insert the genesis header

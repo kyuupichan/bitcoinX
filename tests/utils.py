@@ -146,7 +146,7 @@ def create_random_header(prev_header):
     bits = prev_header.bits
     nonce = random.randrange(0, 1 << 32)
     raw_header = pack_header(version, prev_header.hash, merkle_root, timestamp, bits, nonce)
-    return SimpleHeader.from_bytes(raw_header)
+    return SimpleHeader(raw_header)
 
 
 def create_random_branch(prev_header, length):

@@ -53,7 +53,7 @@ def test_Bitcoin(raw_header, hdr_hash, version, prev_hash, merkle_root,
 
     assert header.hash == hdr_hash
     assert header.work() == bits_to_work(bits)
-    assert header.to_bytes() == raw_header
+    assert header.raw == raw_header
     assert header.target() == bits_to_target(bits)
     assert header.hash_value() == hash_to_value(hdr_hash)
     assert header.hex_str() == hash_to_hex_str(hdr_hash)

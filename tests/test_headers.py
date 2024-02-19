@@ -17,19 +17,16 @@ from .utils import (
 class TestSimpleHeader:
 
     def test_eq(self):
-        assert (SimpleHeader.from_bytes(Bitcoin.genesis_header) !=
-                SimpleHeader.from_bytes(BitcoinTestnet.genesis_header))
+        assert SimpleHeader(Bitcoin.genesis_header) != SimpleHeader(BitcoinTestnet.genesis_header)
 
     def test_hash(self):
-        assert len({
-            SimpleHeader.from_bytes(Bitcoin.genesis_header),
-            SimpleHeader.from_bytes(BitcoinTestnet.genesis_header)
+        assert len({SimpleHeader(Bitcoin.genesis_header),
+                    SimpleHeader(BitcoinTestnet.genesis_header)
         }) == 2
 
     @pytest.mark.parametrize('network', all_networks)
     def test_to_bytes(self, network):
-        raw = SimpleHeader.from_bytes(network.genesis_header).to_bytes()
-        assert raw == network.genesis_header
+        assert SimpleHeader(network.genesis_header).raw == network.genesis_header
 
 
 def same_headers(simple, detailed):
@@ -54,7 +51,7 @@ class TestHeaders:
     @pytest.mark.parametrize('network', all_networks)
     def test_genesis_header(self, network):
         async def test(headers):
-            header = SimpleHeader.from_bytes(network.genesis_header)
+            header = SimpleHeader(network.genesis_header)
             header2 = await headers.header_from_hash(header.hash)
             assert same_headers(header, header2)
 
@@ -64,7 +61,7 @@ class TestHeaders:
     def test_genesis_merkle_root(self, network):
         async def test(headers):
             # Only test for Bitcoin, as Testnet genesis merkle root is identical
-            header = SimpleHeader.from_bytes(network.genesis_header)
+            header = SimpleHeader(network.genesis_header)
             header2 = await headers.header_from_merkle_root(header.merkle_root)
             assert same_headers(header, header2)
 
@@ -93,7 +90,7 @@ class TestHeaders:
     @pytest.mark.parametrize('colname', ('hash', 'merkle_root'))
     def test_unique_columns(self, colname):
         async def test(headers):
-            header = SimpleHeader.from_bytes(Bitcoin.genesis_header)
+            header = SimpleHeader(Bitcoin.genesis_header)
             blob_literal = f"x'{getattr(header, colname).hex()}'"
             columns, values = self.columns_and_values(colname, blob_literal)
             with pytest.raises(asqlite3.IntegrityError) as e:
@@ -147,7 +144,7 @@ class TestHeaders:
             result = await cursor.fetchall()
             for row, (height, raw_header) in zip(result,
                                                  enumerate(chunks(raw_headers, 80), start=1)):
-                header = SimpleHeader.from_bytes(raw_header)
+                header = SimpleHeader(raw_header)
                 for attrib in self.COMMON_KEYS:
                     assert row[attrib] == getattr(header, attrib)
                 assert row['height'] == height
@@ -190,7 +187,7 @@ class TestHeaders:
         async def test(headers):
             raw_headers = await self.insert_first_headers(headers, 10)
             for raw_header in chunks(raw_headers, 80):
-                header = SimpleHeader.from_bytes(raw_header)
+                header = SimpleHeader(raw_header)
                 header2 = await headers.header_from_hash(header.hash)
                 assert same_headers(header, header2)
 
@@ -206,7 +203,7 @@ class TestHeaders:
         async def test(headers):
             raw_headers = await self.insert_first_headers(headers, 10)
             for raw_header in chunks(raw_headers, 80):
-                header = SimpleHeader.from_bytes(raw_header)
+                header = SimpleHeader(raw_header)
                 header2 = await headers.header_from_merkle_root(header.merkle_root)
                 assert same_headers(header, header2)
 
@@ -432,7 +429,7 @@ class TestHeaders:
 
     def test_target_checked(self):
         async def test(headers):
-            header = create_random_header(SimpleHeader.from_bytes(network.genesis_header))
+            header = create_random_header(SimpleHeader(network.genesis_header))
             with pytest.raises(InsufficientPoW):
                 await headers.insert_headers([header])
 
