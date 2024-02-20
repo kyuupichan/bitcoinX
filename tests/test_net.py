@@ -1253,20 +1253,35 @@ class TestSession:
 
     @pytest.mark.asyncio
     async def test_getheaders_extend_chain(self, client_node, listening_node, caplog):
+        # This tests all cases around correctly-functioning client and listener requesting
+        # headers where a locator is not empty.
+
+        hash_stop = None
 
         class ClientSession(Session):
             async def on_handshake(self, _group):
-                await self.get_headers()
+                if hash_stop is None:
+                    await self.get_headers()
+                else:
+                    locator = await self.block_locator()
+                    locator.hash_stop = hash_stop
+                    await self.get_headers(locator)
+
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
                 raise MemoryError
 
-        simples = first_mainnet_headers(10)
-        await listening_node.headers.insert_headers(simples)
+        simples = first_mainnet_headers(20)
+        await listening_node.headers.insert_headers(simples[:10])
 
-        client_branch = simples[:5]
-        client_branch.extend(create_random_branch(client_branch[-1], 2))
+        # The idea here is to have two branches A and B.  The listener is on branch A to
+        # height 9 as the longest, but it knows the first header of branch B, which forks
+        # with last common block at height 2.  The client is on branch B which has been
+        # developed further, but it is still shorter than A.
+        client_branch = simples[:3]
+        client_branch.extend(create_random_branch(client_branch[-1], 4))
         await client_node.headers.insert_headers(client_branch, check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:2], check_work=False)
         client_chain = await client_node.headers.longest_chain()
         assert client_chain.tip.hash == client_branch[-1].hash
 
@@ -1275,8 +1290,27 @@ class TestSession:
                 with pytest.raises(MemoryError):
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
 
-        client_chain = await client_node.headers.longest_chain()
-        listening_chain = await listening_node.headers.longest_chain()
-        assert client_chain.tip == listening_chain.tip
+                client_chain = await client_node.headers.longest_chain()
+                listening_chain = await listening_node.headers.longest_chain()
+                assert client_chain.tip == listening_chain.tip
 
-        assert in_caplog(caplog, 'headers synchronized to height 9')
+                assert in_caplog(caplog, 'headers synchronized to height 9')
+                caplog.clear()
+
+                # Now extend the listener chain, but test that hash_stop is honoured when
+                # the client provides it (how exactly the client knows the hash is another
+                # question....)
+                await listening_node.headers.insert_headers(simples[10:])
+                listening_chain = await listening_node.headers.longest_chain()
+                assert client_chain.tip != listening_chain.tip
+
+                to_height = 15
+                hash_stop = simples[to_height].hash
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+                assert in_caplog(caplog, f'headers synchronized to height {to_height}')
+                client_chain = await client_node.headers.longest_chain()
+                assert client_chain.tip.height == to_height
+                assert (await listening_node.headers.header_at_height(listening_chain, to_height)
+                        == client_chain.tip)

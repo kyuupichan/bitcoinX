@@ -886,13 +886,16 @@ class Session:
                 logging.error(f'timeout syncing headers after {timeout}s')
                 break
 
+    async def block_locator(self):
+        return await BlockLocator.from_block_hash(self.node.service.protocol_version,
+                                                  self.node.headers, self.their_tip.hash)
+
     async def get_headers(self, locator=None):
         '''Send a request to get headers for the given locator.  If not provided,
-        uses a locator suitble for the known remote tip.
+        uses self.locator().
         '''
         if locator is None:
-            locator = await BlockLocator.from_block_hash(self.node.service.protocol_version,
-                                                         self.node.headers, self.their_tip.hash)
+            locator = await self.block_locator()
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
