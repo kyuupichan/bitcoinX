@@ -3,14 +3,13 @@ import asqlite3
 
 import pytest
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, MissingHeader, InsufficientPoW,
+    Bitcoin, BitcoinTestnet, MissingHeader, InsufficientPoW, IncorrectBits,
     bits_to_work, SimpleHeader, all_networks
 )
-from bitcoinx.misc import chunks
 
 from .utils import (
-    read_file, run_test_with_headers, create_random_branch, insert_tree, create_random_tree,
-    create_random_header,
+    run_test_with_headers, create_random_branch, insert_tree, create_random_tree,
+    create_random_header, first_mainnet_headers
 )
 
 
@@ -122,8 +121,7 @@ class TestHeaders:
 
     @staticmethod
     async def insert_first_headers(headers, count):
-        raw_headers = read_file('mainnet-headers-2016.raw', count * 80)
-        simple_headers = [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
+        simple_headers = first_mainnet_headers(count)
         await headers.insert_headers(simple_headers)
         return simple_headers
 
@@ -412,9 +410,27 @@ class TestHeaders:
 
     def test_target_checked(self):
         async def test(headers):
-            header = create_random_header(network.genesis_header)
-            with pytest.raises(InsufficientPoW):
+            simples = first_mainnet_headers(2)
+            header = SimpleHeader(b'0' + simples[1].raw[1:])
+            with pytest.raises(InsufficientPoW) as e:
                 await headers.insert_headers([header])
+            assert str(e.value) == (
+                'header f300000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d61900000000'
+                '00982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff'
+                '001d01e36299 hash value exceeds its target')
+
+        network = Bitcoin
+        run_test_with_headers(test, network)
+
+    def test_bits_checked(self):
+        async def test(headers):
+            simples = first_mainnet_headers(2)
+            raw = bytearray(simples[1].raw)
+            raw[72] ^= 0xf
+            header = SimpleHeader(raw)
+            with pytest.raises(IncorrectBits) as e:
+                await headers.insert_headers([header])
+            assert str(e.value) == 'header requires bits 486604799 but has 486604784'
 
         network = Bitcoin
         run_test_with_headers(test, network)

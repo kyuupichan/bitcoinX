@@ -17,7 +17,7 @@ from bitcoinx import (
     Headers, all_networks, ProtocolError, ForceDisconnectError,
     NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart, Node, Session, SimpleHeader
+    ServicePart, Node, Session,
 )
 from bitcoinx.misc import chunks
 from bitcoinx.net_protocol import (
@@ -26,7 +26,7 @@ from bitcoinx.net_protocol import (
 )
 from bitcoinx.asyncio_compat import timeout
 
-from .utils import run_test_with_headers, create_random_branch, insert_tree, read_file
+from .utils import run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers
 
 
 @pytest.mark.parametrize("hostname,answer", (
@@ -1221,11 +1221,6 @@ class TestSession:
     # getheaders / headers message tests
     #
 
-    @staticmethod
-    async def read_headers(count):
-        raw_headers = read_file('mainnet-headers-2016.raw', count * 80)
-        return [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
-
     @pytest.mark.asyncio
     async def test_hash_stop_only(self, client_node, listening_node, caplog):
 
@@ -1254,7 +1249,7 @@ class TestSession:
                 assert simple_headers == self.expected_headers
                 self.headers_received.set()
 
-        simples = await TestSession.read_headers(10)
+        simples = first_mainnet_headers(10)
         await listening_node.headers.insert_headers(simples[:5])
 
         with caplog.at_level(logging.INFO):

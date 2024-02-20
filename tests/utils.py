@@ -10,6 +10,7 @@ from bitcoinx import (
     OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR,
     Bitcoin, BitcoinTestnet, Headers, pack_header, SimpleHeader
 )
+from bitcoinx.misc import chunks
 
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 
@@ -99,6 +100,12 @@ def read_json_tx(filename):
         d = json.loads(f.read())
     return (Tx.from_hex(d['tx_hex']), d['input_values'],
             [bytes.fromhex(pk_hex) for pk_hex in d['input_pk_scripts']])
+
+
+def first_mainnet_headers(count):
+    raw_headers = read_file('mainnet-headers-2016.raw', count * 80)
+    simple_headers = [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
+    return simple_headers
 
 
 class Replace_os_urandom:

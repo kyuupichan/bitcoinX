@@ -52,7 +52,7 @@ class IncorrectBits(HeaderException):
         self.required_bits = required_bits
 
     def __str__(self):
-        return f'header {self.header} requires bits 0x{self.required_bits}'
+        return f'header requires bits {self.required_bits} but has {self.header.bits}'
 
 
 class InsufficientPoW(HeaderException):
@@ -63,8 +63,7 @@ class InsufficientPoW(HeaderException):
         self.header = header
 
     def __str__(self):
-        return (f'header f{self.header} hash value f{self.header.hash_value()} exceeds '
-                f'its target {self.header.target()}')
+        return (f'header f{self.header.raw.hex()} hash value exceeds its target')
 
 
 class MerkleError(Exception):
