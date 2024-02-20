@@ -1252,15 +1252,31 @@ class TestSession:
         assert in_caplog(caplog, 'ignoring getheaders for unknown block 000000009b7262315db')
 
     @pytest.mark.asyncio
-    async def test_getheaders_roundtrip(self, client_node, listening_node, caplog):
+    async def test_getheaders_extend_chain(self, client_node, listening_node, caplog):
 
-        async def test(self, _group):
-            assert not self.headers_received.is_set()
-            await self.get_headers()
-            await pause()
-            assert self.headers_received.is_set()
-            raise MemoryError
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                raise MemoryError
 
-        async with listening_node.listen():
-            with pytest.raises(MemoryError):
-                await client_node.connect(listening_node.service, on_handshake=test)
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples)
+
+        client_branch = simples[:5]
+        client_branch.extend(create_random_branch(client_branch[-1], 2))
+        await client_node.headers.insert_headers(client_branch, check_work=False)
+        client_chain = await client_node.headers.longest_chain()
+        assert client_chain.tip.hash == client_branch[-1].hash
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        client_chain = await client_node.headers.longest_chain()
+        listening_chain = await listening_node.headers.longest_chain()
+        assert client_chain.tip == listening_chain.tip
+
+        assert in_caplog(caplog, f'headers synchronized to height 9')

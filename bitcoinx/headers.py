@@ -104,6 +104,9 @@ class Header(SimpleHeader):
     chain_id: int
     le_work: bytes
 
+    def __eq__(self, other):
+        return isinstance(other, (Header, SimpleHeader)) and self.hash == other.hash
+
     def __hash__(self):
         return le_bytes_to_int(self.hash[1:5])
 

@@ -39,6 +39,9 @@ class TestHeader:
         simple = Bitcoin.genesis_header
         return Header(simple.raw, 0, 1, int_to_le_bytes(simple.work()))
 
+    def test_eq(self):
+        assert Bitcoin.genesis_header == self.genesis()
+
     def test_hashable(self):
         assert len({self.genesis(), self.genesis()}) == 1
 
