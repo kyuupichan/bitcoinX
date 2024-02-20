@@ -11,6 +11,7 @@ __all__ = (
 )
 
 import datetime
+import sys
 from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
@@ -536,5 +537,9 @@ def locktime_description(locktime):
         return 'valid in any block'
     if locktime < 500_000_000:
         return f'valid in blocks with height greater than {locktime:,d}'
-    utc = datetime.datetime.fromtimestamp(locktime, datetime.UTC)
-    return f'valid in blocks with MTP greater than {utc.isoformat(" ")}'
+    if sys.version_info >= (3, 11):
+        utc = datetime.datetime.fromtimestamp(locktime, datetime.UTC)
+        return f'valid in blocks with MTP greater than {utc.isoformat(" ")}'
+    else:
+        utc = datetime.datetime.utcfromtimestamp(locktime)
+        return f'valid in blocks with MTP greater than {utc.isoformat(" ")}+00:00'
