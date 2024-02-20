@@ -1235,7 +1235,6 @@ class TestSession:
                 # Should timeout as nothing should be sent
                 async with timeout(0.1):
                     await self.headers_received.wait()
-                raise MemoryError
 
             async def on_headers(self, payload):
                 simple_headers = unpack_headers_payload(payload)

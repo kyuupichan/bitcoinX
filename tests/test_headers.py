@@ -340,6 +340,26 @@ class TestHeaders:
 
         run_test_with_headers(test)
 
+    def test_header_at_height_bad(self):
+        async def test(headers):
+            chain = await headers.longest_chain()
+            with pytest.raises(MissingHeader):
+                await headers.header_at_height(chain, -1)
+            with pytest.raises(MissingHeader) as e:
+                await headers.header_at_height(chain, 2)
+            assert str(e.value) == 'no header at height 2; chain tip height is 0'
+
+        run_test_with_headers(test)
+
+    def test_longest_chain_bad_header(self):
+        async def test(headers):
+            with pytest.raises(MissingHeader) as e:
+                await headers.longest_chain(bytes(32))
+            assert str(e.value) == 'no chains contain the header'
+
+        network = Bitcoin
+        run_test_with_headers(test, network)
+
     def test_chain_work(self):
         async def test(headers):
             tree, genesis_header = await self.insert_random_tree(headers)
@@ -471,3 +491,10 @@ class TestHeaders:
 
         network = Bitcoin
         run_test_with_headers(test, network)
+
+
+class TestNetwork:
+
+    @pytest.mark.parametrize('network', all_networks)
+    def test_str(self, network):
+        assert str(network) == network.name
