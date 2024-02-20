@@ -10,7 +10,10 @@ from bitcoinx.packing import (
     unpack_le_int32, unpack_le_int32_from, unpack_le_int64, unpack_le_int64_from,
     unpack_le_uint16, unpack_le_uint16_from, unpack_le_uint32, unpack_le_uint32_from,
     unpack_le_uint64, unpack_le_uint64_from, read_le_int64, read_le_uint16,
-    read_le_uint32, read_le_uint64
+    read_le_uint32, read_le_uint64, read_varint,
+    unpack_be_uint16, unpack_be_uint16_from, read_be_uint16,
+    unpack_be_uint32, unpack_be_uint32_from, read_be_uint32,
+    unpack_be_uint64, unpack_be_uint64_from, read_be_uint64
 )
 
 
@@ -45,6 +48,9 @@ unpack_map = {
     pack_le_uint16: (unpack_le_uint16, unpack_le_uint16_from, read_le_uint16),
     pack_le_uint32: (unpack_le_uint32, unpack_le_uint32_from, read_le_uint32),
     pack_le_uint64: (unpack_le_uint64, unpack_le_uint64_from, read_le_uint64),
+    pack_be_uint16: (unpack_be_uint16, unpack_be_uint16_from, read_be_uint16),
+    pack_be_uint32: (unpack_be_uint32, unpack_be_uint32_from, read_be_uint32),
+    pack_be_uint64: (unpack_be_uint64, unpack_be_uint64_from, read_be_uint64),
 }
 
 
@@ -149,6 +155,12 @@ def test_read_varbytes_short(varbyte_len):
     io = BytesIO(data[:-1])
     with pytest.raises(PackingError):
         read_varbytes(io.read)
+
+
+@pytest.mark.parametrize("value", [case[1] for case in pack_cases if case[0] is pack_varint])
+def test_read_varint(value):
+    read = BytesIO(pack_varint(value)).read
+    assert read_varint(read) == value
 
 
 @pytest.mark.parametrize("header,answer", (
