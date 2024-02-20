@@ -22,7 +22,7 @@ from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
 )
-from .hashes import double_sha256
+from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
 from .net import NetAddress
 from .packing import (
@@ -886,14 +886,13 @@ class Session:
                 logging.error(f'timeout syncing headers after {timeout}s')
                 break
 
-    async def get_headers(self):
-        '''Send a request to get headers.
-
-        Calling this with no argument forms a loop with on_headers() whose eventual effect
-        is to synchronize the peer's headers.
+    async def get_headers(self, locator=None):
+        '''Send a request to get headers for the given locator.  If not provided,
+        uses a locator suitble for the known remote tip.
         '''
-        locator = await BlockLocator.from_block_hash(self.node.service.protocol_version,
-                                                     self.node.headers, self.their_tip.hash)
+        if locator is None:
+            locator = await BlockLocator.from_block_hash(self.node.service.protocol_version,
+                                                         self.node.headers, self.their_tip.hash)
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
@@ -935,7 +934,12 @@ class Session:
     async def on_getheaders(self, payload):
         locator = BlockLocator.from_payload(payload)
         headers_payload = await locator.headers_payload(self.node.headers, self.MAX_HEADERS)
-        await self.send_message(MessageHeader.HEADERS, headers_payload)
+        # Ignore if there are no block hashes and the hash_stop block is missing
+        if locator.block_hashes or len(headers_payload) > 1:
+            await self.send_message(MessageHeader.HEADERS, headers_payload)
+        else:
+            self.logger.info('ignoring getheaders for unknown block '
+                             f'{hash_to_hex_str(locator.hash_stop)}')
 
     async def on_inv(self, items):
         '''Called when an inv message is received advertising availability of various objects.'''

@@ -18,7 +18,7 @@ from bitcoinx import (
     Headers, all_networks, ProtocolError, ForceDisconnectError,
     NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart, Node, Session,
+    ServicePart, Node, Session, SimpleHeader
 )
 from bitcoinx.misc import chunks
 from bitcoinx.net_protocol import (
@@ -27,7 +27,7 @@ from bitcoinx.net_protocol import (
 )
 from bitcoinx.asyncio_compat import timeout
 
-from .utils import run_test_with_headers, create_random_branch, insert_tree
+from .utils import run_test_with_headers, create_random_branch, insert_tree, read_file
 
 
 @pytest.mark.parametrize("hostname,answer", (
@@ -883,7 +883,7 @@ async def achunks(payload, size):
 
 
 async def pause(secs=None):
-    secs = 0.05 if platform.system() == 'Windows' else 0.004
+    secs = 0.05 if platform.system() == 'Windows' else 0.01
     await asyncio.sleep(secs)
 
 
@@ -1251,8 +1251,51 @@ class TestSession:
         assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
 
     #
-    # EXTMSG message tests
+    # getheaders / headers message tests
     #
+
+    @staticmethod
+    async def read_headers(count):
+        raw_headers = read_file('mainnet-headers-2016.raw', count * 80)
+        return [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
+
+    @pytest.mark.asyncio
+    async def test_hash_stop_only(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+
+            async def on_handshake(self, _group):
+                # One known to the listener
+                self.expected_headers = [simples[2]]
+                locator = BlockLocator(1, [], simples[2].hash)
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+
+                # One not known to the listener, it which case it should ignore the request
+                self.expected_headers = []
+                locator = BlockLocator(1, [], simples[5].hash)
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                # Should timeout as nothing should be sent
+                async with timeout(0.1):
+                    await self.headers_received.wait()
+                raise MemoryError
+
+            async def on_headers(self, payload):
+                simple_headers = unpack_headers_payload(payload)
+                assert simple_headers == self.expected_headers
+                self.headers_received.set()
+
+        simples = await TestSession.read_headers(10)
+        await listening_node.headers.insert_headers(simples[:5])
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                with pytest.raises(TimeoutError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'ignoring getheaders for unknown block 000000009b7262315db')
 
     @pytest.mark.asyncio
     async def test_getheaders_roundtrip(self, client_node, listening_node, caplog):
