@@ -8,7 +8,6 @@
 
 from dataclasses import dataclass
 import logging
-import math
 
 import asqlite3
 
@@ -21,7 +20,7 @@ from .work import bits_to_target, target_to_bits, bits_to_work
 
 
 __all__ = (
-    'Chain', 'Header', 'Headers', 'SimpleHeader', 'bits_to_difficulty', 'header_hash', 'log2_work',
+    'Chain', 'Header', 'Headers', 'SimpleHeader', 'bits_to_difficulty', 'header_hash',
     # Networks
     'Bitcoin', 'BitcoinTestnet', 'BitcoinScalingTestnet', 'BitcoinRegtest',
     'Network', 'all_networks', 'networks_by_name',
@@ -34,10 +33,6 @@ def blob_literal(raw):
 
 def bits_to_difficulty(bits):
     return Bitcoin.max_target / bits_to_target(bits)
-
-
-def log2_work(work):
-    return math.log(work, 2)
 
 
 @dataclass
