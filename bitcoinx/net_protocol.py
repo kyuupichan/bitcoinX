@@ -18,7 +18,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import List
 
-from .asyncio_compat import TaskGroup, timeout, ExceptionGroup
+from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
 )
@@ -875,12 +875,12 @@ class Session:
     async def get_block(self, block_hash):
         '''Call to request the block with the given hash.'''
 
-    async def sync_headers(self, timeout):
+    async def sync_headers(self, timeout_secs):
         self.headers_synced = False
         while not self.headers_synced:
             await self.get_headers()
             try:
-                async with timeout(timeout):
+                async with timeout(timeout_secs):
                     await self.headers_received.wait()
             except asyncio.TimeoutError:
                 logging.error(f'timeout syncing headers after {timeout}s')

@@ -2,14 +2,12 @@
 # Taken from Lib/asyncio/taskgroups.py, Lib/asyncio/timeouts.py.
 # Adapted with permission from the EdgeDB project; license: PSFL.
 
-import asyncio
 import sys
 
-
-if sys.version_info >= (3,11):
+if sys.version_info >= (3, 11):
 
     from asyncio import TaskGroup, timeout, timeout_at, Timeout
-    ExceptionGroup = ExceptionGroup
+    ExceptionGroup = ExceptionGroup   # noqa: F821
 
 else:
     import enum
@@ -231,14 +229,12 @@ else:
                 self._parent_cancel_requested = True
                 self._parent_task.cancel()
 
-
     class _State(enum.Enum):
         CREATED = "created"
         ENTERED = "active"
         EXPIRING = "expiring"
         EXPIRED = "expired"
         EXITED = "finished"
-
 
     @final
     class Timeout:
@@ -354,7 +350,6 @@ else:
                     break
                 exc_val = exc_val.__context__
 
-
     def timeout(delay: Optional[float]) -> Timeout:
         """Timeout async context manager.
 
@@ -373,7 +368,6 @@ else:
         """
         loop = get_running_loop()
         return Timeout(loop.time() + delay if delay is not None else None)
-
 
     def timeout_at(when: Optional[float]) -> Timeout:
         """Schedule the timeout at absolute time.
