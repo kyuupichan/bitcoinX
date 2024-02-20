@@ -537,9 +537,5 @@ def locktime_description(locktime):
         return 'valid in any block'
     if locktime < 500_000_000:
         return f'valid in blocks with height greater than {locktime:,d}'
-    if sys.version_info >= (3, 11):
-        utc = datetime.datetime.fromtimestamp(locktime, datetime.UTC)
-        return f'valid in blocks with MTP greater than {utc.isoformat(" ")}'
-    else:
-        utc = datetime.datetime.utcfromtimestamp(locktime)
-        return f'valid in blocks with MTP greater than {utc.isoformat(" ")}+00:00'
+    utc = datetime.datetime.fromtimestamp(locktime, datetime.timezone.utc)
+    return f'valid in blocks with MTP greater than {utc.isoformat(" ")}'
