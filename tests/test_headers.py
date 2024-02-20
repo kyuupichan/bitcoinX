@@ -125,19 +125,18 @@ class TestHeaders:
         raw_headers = read_file('mainnet-headers-2016.raw', count * 80)
         simple_headers = [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
         await headers.insert_headers(simple_headers)
-        return raw_headers
+        return simple_headers
 
     def test_insert_headers(self):
         async def test(headers):
             assert not headers.conn.in_transaction
-            raw_headers = await self.insert_first_headers(headers, 10)
+            simple_headers = await self.insert_first_headers(headers, 10)
             cursor = await headers.conn.cursor()
             cursor.row_factory = asqlite3.Row
-            await cursor.execute('SELECT * from Headers WHERE height ORDER BY height')
+            await cursor.execute(f'SELECT * from {headers.schema}.Headers ORDER BY height')
             result = await cursor.fetchall()
-            for row, (height, raw_header) in zip(result,
-                                                 enumerate(chunks(raw_headers, 80), start=1)):
-                header = SimpleHeader(raw_header)
+            assert len(result) == len(simple_headers)
+            for row, (height, header) in zip(result, enumerate(simple_headers)):
                 for attrib in self.COMMON_KEYS:
                     assert row[attrib] == getattr(header, attrib)
                 assert row['height'] == height
@@ -145,7 +144,7 @@ class TestHeaders:
             chains = await headers.chains()
             assert len(chains) == 1
             chain = chains[0]
-            assert chain.tip.hash == header_hash(raw_headers[-80:])
+            assert chain.tip.hash == simple_headers[-1].hash
 
         network = Bitcoin
         run_test_with_headers(test, network)
@@ -176,9 +175,7 @@ class TestHeaders:
 
     def test_header_from_hash(self):
         async def test(headers):
-            raw_headers = await self.insert_first_headers(headers, 10)
-            for raw_header in chunks(raw_headers, 80):
-                header = SimpleHeader(raw_header)
+            for header in await self.insert_first_headers(headers, 10):
                 header2 = await headers.header_from_hash(header.hash)
                 assert same_headers(header, header2)
 
@@ -192,9 +189,7 @@ class TestHeaders:
 
     def test_header_from_merkle_root(self):
         async def test(headers):
-            raw_headers = await self.insert_first_headers(headers, 10)
-            for raw_header in chunks(raw_headers, 80):
-                header = SimpleHeader(raw_header)
+            for header in await self.insert_first_headers(headers, 10):
                 header2 = await headers.header_from_merkle_root(header.merkle_root)
                 assert same_headers(header, header2)
 

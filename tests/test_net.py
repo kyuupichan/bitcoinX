@@ -526,25 +526,6 @@ class Dribble:
         self.cursor += size
         return result
 
-    @staticmethod
-    def lengths(total):
-        lengths = []
-        cursor = 0
-        while cursor < total:
-            length = min(random.randrange(1, total // 2), total - cursor)
-            lengths.append(length)
-            cursor += length
-        return lengths
-
-    @staticmethod
-    def parts(raw):
-        parts = []
-        start = 0
-        for length in Dribble.lengths(len(raw)):
-            parts.append(raw[start: start+length])
-            start += length
-        return parts
-
 
 std_header_tests = [
     (b'1234', b'0123456789ab', b'', b'12340123456789ab\0\0\0\0]\xf6\xe0\xe2'),
@@ -634,17 +615,6 @@ class TestMessageHeader:
 
 net_addresses = ['1.2.3.4', '4.3.2.1', '001:0db8:85a3:0000:0000:8a2e:0370:7334',
                  '2001:db8:85a3:8d3:1319:8a2e:370:7348']
-
-
-def random_net_address():
-    port = random.randrange(1024, 50000)
-    address = random.choice(net_addresses)
-    return NetAddress(address, port)
-
-
-def random_service():
-    address = random_net_address()
-    return BitcoinService(address=address)
 
 
 class TestNetworkProtocol:
@@ -916,24 +886,23 @@ class TestSession:
                 listen_pair = (self, connection)
                 event.set()
 
-        async def test():
-            async with listening_node.listen(session_cls=ListeningSession):
-                await client_node.connect(listening_node.service, session_cls=OutSession)
+        async with listening_node.listen(session_cls=ListeningSession):
+            await client_node.connect(listening_node.service, session_cls=OutSession)
 
-                conn_session, connection = conn_pair
-                assert isinstance(conn_session, OutSession)
-                assert conn_session.node is client_node
-                assert conn_session.remote_service is listening_node.service
-                assert conn_session.connection is connection
-                assert conn_session.is_outgoing
-                assert conn_session.our_protoconf == Protoconf.default()
+            conn_session, connection = conn_pair
+            assert isinstance(conn_session, OutSession)
+            assert conn_session.node is client_node
+            assert conn_session.remote_service is listening_node.service
+            assert conn_session.connection is connection
+            assert conn_session.is_outgoing
+            assert conn_session.our_protoconf == Protoconf.default()
 
-                listen_session, connection = listen_pair
-                assert isinstance(listen_session, ListeningSession)
-                assert listen_session.node is listening_node
-                assert listen_session.remote_service.address.host == listen_host
-                assert not listen_session.is_outgoing
-                assert listen_session.our_protoconf == Protoconf.default()
+            listen_session, connection = listen_pair
+            assert isinstance(listen_session, ListeningSession)
+            assert listen_session.node is listening_node
+            assert listen_session.remote_service.address.host == listen_host
+            assert not listen_session.is_outgoing
+            assert listen_session.our_protoconf == Protoconf.default()
 
     @pytest.mark.asyncio
     async def test_bad_magic(self, client_node, listening_node, caplog):
@@ -943,6 +912,7 @@ class TestSession:
                 with pytest.raises(ConnectionResetError):
                     await client_node.connect(listening_node.service)
 
+        print_caplog(caplog)
         assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
                          'got 0xf4e5f3f4 expected 0xe3e1f3e8')
 
