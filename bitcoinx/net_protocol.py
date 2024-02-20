@@ -8,8 +8,9 @@
 import asyncio
 import logging
 import os
+import sys
 import time
-from asyncio import Event, Queue, TaskGroup, open_connection
+from asyncio import Event, Queue, open_connection
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 from io import BytesIO
@@ -17,6 +18,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import List
 
+from .asyncio_compat import TaskGroup, timeout, ExceptionGroup
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
 )
@@ -648,6 +650,8 @@ class Listener:
     async def __aexit__(self, *args):
         self.server.close()
         await self.server.wait_closed()
+        if sys.version_info < (3, 11):
+            await asyncio.sleep(0.001)
 
 
 class SessionLogger(logging.LoggerAdapter):
@@ -876,7 +880,7 @@ class Session:
         while not self.headers_synced:
             await self.get_headers()
             try:
-                async with asyncio.timeout(timeout):
+                async with timeout(timeout):
                     await self.headers_received.wait()
             except asyncio.TimeoutError:
                 logging.error(f'timeout syncing headers after {timeout}s')

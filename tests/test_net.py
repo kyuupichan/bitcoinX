@@ -25,6 +25,7 @@ from bitcoinx.net_protocol import (
     ServicePacking, BlockLocator, version_payload, read_version_payload, _command,
     pack_headers_payload, unpack_headers_payload,
 )
+from bitcoinx.asyncio_compat import timeout
 
 from .utils import run_test_with_headers, create_random_branch, insert_tree
 
@@ -993,8 +994,8 @@ class TestSession:
                 async def maintain_connection(self, connection):
                     await connection.recv_exactly(1)
 
-            with pytest.raises(asyncio.TimeoutError):
-                async with asyncio.timeout(0.05):
+            with pytest.raises(TimeoutError):
+                async with timeout(0.05):
                     await client_node.connect(listening_node.service, session_cls=OutSession)
 
     @pytest.mark.asyncio
