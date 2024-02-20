@@ -3,7 +3,7 @@ import asqlite3
 
 import pytest
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, header_hash, MissingHeader, InsufficientPoW,
+    Bitcoin, BitcoinTestnet, MissingHeader, InsufficientPoW,
     bits_to_work, SimpleHeader, all_networks
 )
 from bitcoinx.misc import chunks

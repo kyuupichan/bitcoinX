@@ -2,7 +2,6 @@ import asyncio
 import copy
 import logging
 import platform
-import random
 import sys
 import time
 from io import BytesIO
