@@ -1279,4 +1279,4 @@ class TestSession:
         listening_chain = await listening_node.headers.longest_chain()
         assert client_chain.tip == listening_chain.tip
 
-        assert in_caplog(caplog, f'headers synchronized to height 9')
+        assert in_caplog(caplog, 'headers synchronized to height 9')
