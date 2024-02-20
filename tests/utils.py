@@ -182,3 +182,13 @@ def create_random_tree(base_header, branch_count=10, max_branch_length=10):
 async def insert_tree(headers, tree):
     for _, branch in tree:
         await headers.insert_headers(branch, check_work=False)
+
+
+def in_caplog(caplog, message, count=1):
+    return sum(message in record.message
+               for record in caplog.records) == count
+
+
+def print_caplog(caplog):
+    for record in caplog.records:
+        print(record.message)

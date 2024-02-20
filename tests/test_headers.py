@@ -1,15 +1,17 @@
 import dataclasses
+import logging
+
 import asqlite3
 
 import pytest
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, MissingHeader, InsufficientPoW, IncorrectBits,
-    bits_to_work, SimpleHeader, all_networks
+    bits_to_work, SimpleHeader, Header, all_networks, int_to_le_bytes,
 )
 
 from .utils import (
     run_test_with_headers, create_random_branch, insert_tree, create_random_tree,
-    create_random_header, first_mainnet_headers
+    create_random_header, first_mainnet_headers, in_caplog,
 )
 
 
@@ -18,8 +20,35 @@ class TestSimpleHeader:
     def test_eq(self):
         assert Bitcoin.genesis_header != BitcoinTestnet.genesis_header
 
-    def test_hash(self):
+    def test_hashable(self):
         assert len({Bitcoin.genesis_header, BitcoinTestnet.genesis_header}) == 2
+
+    def test_str(self):
+        assert str(Bitcoin.genesis_header) == (
+            'SimpleHeader(version=0x1, prev_hash=000000000000000000000000000000000000000000000'
+            '0000000000000000000, merkle_root=4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77a'
+            'b2127b7afdeda33b, timestamp=1231006505, bits=0x486604799, nonce=2083236893, hash='
+            '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f)'
+        )
+
+
+class TestHeader:
+
+    @staticmethod
+    def genesis():
+        simple = Bitcoin.genesis_header
+        return Header(simple.raw, 0, 1, int_to_le_bytes(simple.work()))
+
+    def test_hashable(self):
+        assert len({self.genesis(), self.genesis()}) == 1
+
+    def test_str(self):
+        assert str(self.genesis()) == (
+            'Header(version=0x1, prev_hash=000000000000000000000000000000000000000000000000000000'
+            '0000000000, merkle_root=4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afded'
+            'a33b, timestamp=1231006505, bits=0x486604799, nonce=2083236893, hash=000000000019d66'
+            '89c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f, height=0 chain_work=100010001)'
+        )
 
 
 def same_headers(simple, detailed):
@@ -40,6 +69,14 @@ class TestHeaders:
             assert not headers.conn.in_transaction
 
         run_test_with_headers(test, Bitcoin)
+
+    def test_double_init(self, caplog):
+        async def test(headers):
+            await headers.initialize()
+
+        with caplog.at_level(logging.INFO):
+            run_test_with_headers(test, Bitcoin)
+        assert in_caplog(caplog, 'database tables found')
 
     @pytest.mark.parametrize('network', all_networks)
     def test_genesis_header(self, network):

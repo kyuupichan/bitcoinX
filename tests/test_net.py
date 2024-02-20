@@ -26,7 +26,10 @@ from bitcoinx.net_protocol import (
 )
 from bitcoinx.asyncio_compat import timeout
 
-from .utils import run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers
+from .utils import (
+    run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers, in_caplog,
+    print_caplog,
+)
 
 
 @pytest.mark.parametrize("hostname,answer", (
@@ -834,16 +837,6 @@ def client_node(client_headers):
     yield node
     assert not node.incoming_sessions
     assert not node.outgoing_sessions
-
-
-def in_caplog(caplog, message, count=1):
-    return sum(message in record.message
-               for record in caplog.records) == count
-
-
-def print_caplog(caplog):
-    for record in caplog.records:
-        print(record.message)
 
 
 async def achunks(payload, size):
