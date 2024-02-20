@@ -895,14 +895,14 @@ class TestSession:
             assert conn_session.remote_service is listening_node.service
             assert conn_session.connection is connection
             assert conn_session.is_outgoing
-            assert conn_session.our_protoconf == Protoconf.default()
+            assert conn_session.protoconf == Protoconf.default()
 
             listen_session, connection = listen_pair
             assert isinstance(listen_session, ListeningSession)
             assert listen_session.node is listening_node
             assert listen_session.remote_service.address.host == listen_host
             assert not listen_session.is_outgoing
-            assert listen_session.our_protoconf == Protoconf.default()
+            assert listen_session.protoconf == Protoconf.default()
 
     @pytest.mark.asyncio
     async def test_bad_magic(self, client_node, listening_node, caplog):
@@ -1113,9 +1113,7 @@ class TestSession:
         async def test(self, _group):
             listener_session = list(listening_node.incoming_sessions)[0]
             assert listener_session.their_protoconf is None
-            assert self.protoconf is None
             await self.send_protoconf()
-            assert self.protoconf is not None
             await pause()
             assert listener_session.their_protoconf == self.protoconf
             raise MemoryError

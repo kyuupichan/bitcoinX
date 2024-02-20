@@ -679,7 +679,7 @@ class Session:
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = is_outgoing
-        self.protoconf = None
+        self.protoconf = Protoconf.default()
         self._on_handshake = on_handshake or self.__class__.on_handshake
         self.streaming_min_size = 10_000_000
 
@@ -982,7 +982,5 @@ class Session:
         if self.protoconf_sent:
             self.logger.warning('protoconf message already sent')
             return
-        if not self.protoconf:
-            self.protoconf = Protoconf.default()
         self.protoconf_sent = True
         await self.send_message(MessageHeader.PROTOCONF, self.protoconf.payload())
