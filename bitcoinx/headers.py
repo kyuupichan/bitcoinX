@@ -273,6 +273,8 @@ class Headers:
             cursor = await execute(prev_header_sql, (header.prev_hash, ))
             row = await cursor.fetchone()
             if not row:
+                if header.hash == self.genesis_header.hash:
+                    continue
                 raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
             prev_hdr_id, chain_id, height, chain_work = row
 

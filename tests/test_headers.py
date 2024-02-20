@@ -122,7 +122,7 @@ class TestHeaders:
 
     @staticmethod
     async def insert_first_headers(headers, count):
-        raw_headers = read_file('mainnet-headers-2016.raw', count * 80)[80:]
+        raw_headers = read_file('mainnet-headers-2016.raw', count * 80)
         simple_headers = [SimpleHeader(raw_header) for raw_header in chunks(raw_headers, 80)]
         await headers.insert_headers(simple_headers)
         return raw_headers
