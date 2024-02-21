@@ -32,6 +32,11 @@ from .utils import (
 )
 
 
+def test_caplog(caplog):
+    print_caplog(caplog)
+    assert not caplog.records
+
+
 @pytest.mark.parametrize("hostname,answer", (
     ('', False),
     ('a', True),
@@ -904,7 +909,6 @@ class TestSession:
                 with pytest.raises(ConnectionResetError):
                     await client_node.connect(listening_node.service)
 
-        print_caplog(caplog)
         assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
                          'got 0xf4e5f3f4 expected 0xe3e1f3e8')
 
@@ -1253,8 +1257,10 @@ class TestSession:
 
     @pytest.mark.asyncio
     async def test_getheaders_extend_chain(self, client_node, listening_node, caplog):
-        # This tests all cases around correctly-functioning client and listener requesting
-        # headers where a locator is not empty.
+        # This tests all cases around correctly-functioning client and listener where they
+        # are on different branches, branches A and B.  The listener is on branch A to
+        # height 9 as the longest, and the client on branch B.  The listener knows all of
+        # branch B except the tip.  Branch B is shorter than A.
 
         hash_stop = None
 
@@ -1274,14 +1280,10 @@ class TestSession:
         simples = first_mainnet_headers(20)
         await listening_node.headers.insert_headers(simples[:10])
 
-        # The idea here is to have two branches A and B.  The listener is on branch A to
-        # height 9 as the longest, but it knows the first header of branch B, which forks
-        # with last common block at height 2.  The client is on branch B which has been
-        # developed further, but it is still shorter than A.
         client_branch = simples[:3]
-        client_branch.extend(create_random_branch(client_branch[-1], 4))
+        client_branch.extend(create_random_branch(client_branch[-1], 5))
         await client_node.headers.insert_headers(client_branch, check_work=False)
-        await listening_node.headers.insert_headers(client_branch[:2], check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:-2], check_work=False)
         client_chain = await client_node.headers.longest_chain()
         assert client_chain.tip.hash == client_branch[-1].hash
 
@@ -1314,3 +1316,41 @@ class TestSession:
                 assert client_chain.tip.height == to_height
                 assert (await listening_node.headers.header_at_height(listening_chain, to_height)
                         == client_chain.tip)
+
+    @pytest.mark.asyncio
+    async def test_getheaders_shorter(self, client_node, listening_node, caplog):
+        # This tests all cases around correctly-functioning client and listener where they
+        # are on different branches, branches A and B.  The listener is on branch A to
+        # height 9, and the client on branch B which is longer.  The listener knows some of
+        # branch B.
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                raise MemoryError
+
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples)
+
+        client_branch = simples[:3]
+        client_branch.extend(create_random_branch(client_branch[-1], 10))
+        await client_node.headers.insert_headers(client_branch, check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:-5], check_work=False)
+        client_chain = await client_node.headers.longest_chain()
+        assert client_chain.tip.hash == client_branch[-1].hash
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+                client_chain = await client_node.headers.longest_chain()
+                listening_chain = await listening_node.headers.longest_chain()
+
+                # Check neither chain has grown
+                assert client_chain.tip.hash == client_branch[-1].hash
+                assert listening_chain.tip.hash == simples[-1].hash
+
+                assert in_caplog(caplog, 'headers synchronized to height 9')

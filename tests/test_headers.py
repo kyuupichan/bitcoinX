@@ -346,11 +346,8 @@ class TestHeaders:
     def test_header_at_height_bad(self):
         async def test(headers):
             chain = await headers.longest_chain()
-            with pytest.raises(MissingHeader):
-                await headers.header_at_height(chain, -1)
-            with pytest.raises(MissingHeader) as e:
-                await headers.header_at_height(chain, 2)
-            assert str(e.value) == 'no header at height 2; chain tip height is 0'
+            assert await headers.header_at_height(chain, -1) is None
+            assert await headers.header_at_height(chain, 2) is None
 
         run_test_with_headers(test)
 

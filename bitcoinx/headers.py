@@ -351,10 +351,7 @@ class Headers:
         return await self._query_headers(where_clause, (), False)
 
     async def header_at_height(self, chain, height):
-        '''Return the header on chain at height.'''
-        if not 0 <= height <= chain.tip.height:
-            raise MissingHeader(f'no header at height {height:,d}; '
-                                f'chain tip height is {chain.tip.height:,d}')
+        '''Return the header on chain at height, or None.'''
         return await self._header_at_height(chain.chain_id, height)
 
     async def median_time_past(self, prev_hash):

@@ -20,7 +20,7 @@ from typing import Sequence
 
 from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
 from .errors import (
-    ProtocolError, ForceDisconnectError, PackingError, MissingHeader,
+    ProtocolError, ForceDisconnectError, PackingError,
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
@@ -477,10 +477,7 @@ class BlockLocator:
                 if not header:
                     continue
 
-                try:
-                    chain_header = await headers.header_at_height(chain, header.height)
-                except MissingHeader:
-                    continue
+                chain_header = await headers.header_at_height(chain, header.height)
 
                 if header == chain_header:
                     first_height = header.height + 1
