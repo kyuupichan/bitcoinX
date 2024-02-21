@@ -1381,6 +1381,45 @@ class TestSession:
         assert in_caplog(caplog, 'headers message with headers that do not form a chain')
 
     @pytest.mark.asyncio
+    async def test_separated_headers(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(simples[2:]))
+                await pause()
+                raise ForceDisconnectError
+
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples)
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'ignoring 8 non-connecting headers')
+
+    @pytest.mark.asyncio
+    async def test_bad_pow_headers(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
+                await pause()
+                raise ForceDisconnectError
+
+        branch = create_random_branch(Bitcoin.genesis_header, 2)
+        await listening_node.headers.insert_headers(branch, check_work=False)
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        print_caplog(caplog)
+        assert in_caplog(caplog, 'hash value exceeds its target')
+
+    @pytest.mark.asyncio
     async def test_too_many_headers(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
@@ -1398,5 +1437,4 @@ class TestSession:
                 with pytest.raises(MemoryError):
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
 
-        print_caplog(caplog)
         assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')

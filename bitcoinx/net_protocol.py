@@ -900,7 +900,7 @@ class Session:
                 await self.node.headers.insert_headers(headers)
                 self.their_tip = headers[-1]
             except MissingHeader:
-                self.logger.info('ignoring {len(headers):,d} non-connecting headers')
+                self.logger.warning(f'ignoring {len(headers):,d} non-connecting headers')
             except HeaderException as e:
                 raise ProtocolError(f'headers message: {e}') from None
         finally:
