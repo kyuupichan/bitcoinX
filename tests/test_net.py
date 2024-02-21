@@ -972,7 +972,7 @@ class TestSession:
                 await client_node.connect(listening_node.service)
 
     @pytest.mark.asyncio
-    async def test_duplicate_version_message(self, client_node, listening_node, caplog):
+    async def test_duplicate_version(self, client_node, listening_node, caplog):
 
         class OutSession(Session):
             async def maintain_connection(self, connection):
@@ -1062,7 +1062,7 @@ class TestSession:
     #
 
     @pytest.mark.asyncio
-    async def test_duplicate_verack_message(self, client_node, listening_node, caplog):
+    async def test_duplicate_verack(self, client_node, listening_node, caplog):
 
         class OutSession(Session):
             async def send_verack_message(self, connection):
@@ -1087,7 +1087,7 @@ class TestSession:
                 await pause()
                 raise MemoryError
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
                 with pytest.raises(MemoryError):
                     await client_node.connect(listening_node.service, session_cls=OutSession)
@@ -1115,7 +1115,7 @@ class TestSession:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('force', (True, False))
-    async def test_duplicate_protoconf_received(self, client_node, listening_node, caplog, force):
+    async def test_duplicate_protoconf(self, client_node, listening_node, caplog, force):
 
         async def test(self, _group):
             await self.send_protoconf()
@@ -1438,3 +1438,82 @@ class TestSession:
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
 
         assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')
+
+    #
+    # SENDHEADERS message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_sendheaders_is_sent(self, client_node, listening_node):
+
+        class ClientSession(Session):
+            async def on_handshake(self, group):
+                await super().on_handshake(group)
+                await pause()
+                listener_session = list(listening_node.incoming_sessions)[0]
+                assert self.they_prefer_headers
+                assert listener_session.they_prefer_headers
+                raise MemoryError
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+    @pytest.mark.asyncio
+    async def test_sendheaders_understood(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                self.remote_service.protocol_version = 70_011
+                await self.send_sendheaders()
+                assert not self.sendheaders_sent
+                raise MemoryError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_sendheaders(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                listener_session = list(listening_node.incoming_sessions)[0]
+                await self.send_sendheaders()
+                await pause()
+                assert listener_session.they_prefer_headers
+
+                with caplog.at_level(logging.WARNING):
+                    await self.send_sendheaders()
+                assert in_caplog(caplog, 'sendheaders message already sent')
+                await pause()
+                assert not in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+
+                self.sendheaders_sent = False
+                await self.send_sendheaders()
+                await pause()
+                assert in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+                raise MemoryError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+
+    @pytest.mark.asyncio
+    async def test_sendheaders_payload(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.SENDHEADERS, b'0')
+                await pause()
+                raise MemoryError
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'sendheaders message has payload')

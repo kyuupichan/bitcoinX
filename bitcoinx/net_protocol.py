@@ -217,6 +217,7 @@ class BitcoinService:
     only done on the (resolved) network address.  start_height is the height at the time
     a connection waas made.
     '''
+    SENDHEADERS_VERSION = 70_012
 
     def __init__(self, *,
                  address=None,
@@ -244,6 +245,9 @@ class BitcoinService:
 
     def __hash__(self):
         return hash(self.address)
+
+    def understands_sendheaders(self):
+        return self.protocol_version >= self.SENDHEADERS_VERSION
 
     def pack(self):
         '''Return the address and service flags as an encoded service.'''
@@ -666,6 +670,9 @@ class Session:
         self.nonce = self.node.random_nonce()
         self.can_send_large_messages = False
         self.their_tip = node.headers.genesis_header
+        self.sendheaders_sent = False
+        self.we_prefer_headers = True
+        self.they_prefer_headers = False
 
         # Logging
         logger = logging.getLogger('Session')
@@ -722,8 +729,8 @@ class Session:
             raise e.exceptions[0] from None
 
     async def on_handshake(self, group):
-        # For now we simply send a protoconf message
         group.create_task(self.send_protoconf())
+        group.create_task(self.send_sendheaders())
 
     async def _send_unqueued(self, connection, command, payload):
         '''Send a command without queueing.  For use with handshake negotiation.'''
@@ -945,7 +952,7 @@ class Session:
             raise ProtocolError('duplicate verack message')
         self.verack_received.set()
         if payload:
-            self.logger.info('verack message has payload')
+            self.logger.warning('verack message has payload')
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
@@ -959,3 +966,18 @@ class Session:
             return
         self.protoconf_sent = True
         await self.send_message(MessageHeader.PROTOCONF, self.protoconf.payload())
+
+    async def on_sendheaders(self, payload):
+        if self.they_prefer_headers:
+            raise ProtocolError('duplicate sendheaders message')
+        self.they_prefer_headers = True
+        if payload:
+            self.logger.warning('sendheaders message has payload')
+
+    async def send_sendheaders(self):
+        if self.sendheaders_sent:
+            self.logger.warning('sendheaders message already sent')
+            return
+        if self.remote_service.understands_sendheaders():
+            self.sendheaders_sent = True
+            await self.send_message(MessageHeader.SENDHEADERS, b'')
