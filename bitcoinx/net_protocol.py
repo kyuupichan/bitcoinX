@@ -742,7 +742,6 @@ class Session:
     async def on_handshake(self, group):
         group.create_task(self.send_protoconf())
         group.create_task(self.send_sendheaders())
-        group.create_task(self.send_getaddr())
 
     async def _send_unqueued(self, connection, command, payload):
         '''Send a command without queueing.  For use with handshake negotiation.'''

@@ -1210,7 +1210,7 @@ class TestSession:
         assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
 
     #
-    # getheaders / headers message tests
+    # GETHEADERS / HEADERS message tests
     #
 
     @pytest.mark.asyncio
@@ -1538,3 +1538,42 @@ class TestSession:
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
 
         assert in_caplog(caplog, 'sendheaders message has payload')
+
+    #
+    # ADDR / GETADDR message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_getaddr_roundtrip(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_getaddr()
+                async with timeout(0.1):
+                    await on_addr_event.wait()
+                raise MemoryError
+
+            async def on_addr(self, payload):
+                on_addr_event.set()
+
+        on_addr_event = asyncio.Event()
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+    @pytest.mark.asyncio
+    async def test_getaddr_payload(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.GETADDR, b'0')
+                await pause()
+                raise MemoryError
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'getaddr message has payload')
