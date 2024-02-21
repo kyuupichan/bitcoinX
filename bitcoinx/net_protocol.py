@@ -385,15 +385,15 @@ def version_payload(service, remote_service, nonce):
     ))
 
 
-def pack_headers_payload(raw_headers):
+def pack_headers_payload(headers: List[SimpleHeader]):
     zero = pack_varint(0)
-    return pack_list(raw_headers, lambda raw_header: raw_header + zero)
+    return pack_list(headers, lambda header: header.raw + zero)
 
 
 def unpack_headers_payload(payload):
     def read_one(read):
         raw_header = read(80)
-        # A stupid tx count which seems to always be zero...
+        # A stupid tx count which the reference client sets to zero...
         read_varint(read)
         return SimpleHeader(raw_header)
 
@@ -467,7 +467,7 @@ class BlockLocator:
 
         return cls(version, locator, hash_stop)
 
-    async def fetch_raw_headers(self, headers, limit):
+    async def fetch_locator_headers(self, headers, limit):
         result = []
         if self.block_hashes:
             first_height = 1
@@ -482,7 +482,7 @@ class BlockLocator:
                 except MissingHeader:
                     continue
 
-                if header.hash == chain_header.hash:
+                if header == chain_header:
                     first_height = header.height + 1
                     break
 
@@ -490,20 +490,19 @@ class BlockLocator:
             result = []
             for height in range(first_height, stop_height):
                 header = await headers.header_at_height(chain, height)
-                result.append(header.raw)
+                result.append(header)
                 if header.hash == self.hash_stop:
                     break
         else:
             header = await headers.header_from_hash(self.hash_stop)
             if header:
-                result.append(header.raw)
+                result.append(header)
 
         return result
 
     async def headers_payload(self, headers, limit):
         '''Return the payload for a "headers" message in reply to "getheaders".'''
-        raw_headers = await self.fetch_raw_headers(headers, limit)
-        return pack_headers_payload(raw_headers)
+        return pack_headers_payload(await self.fetch_locator_headers(headers, limit))
 
     def validate_headers(self, headers):
         # headers is a list of SimpleHeader objects
