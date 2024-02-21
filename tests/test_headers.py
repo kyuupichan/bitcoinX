@@ -132,11 +132,13 @@ class TestHeaders:
     def test_unique_columns(self, colname):
         async def test(headers):
             header = Bitcoin.genesis_header
-            blob_literal = f"x'{getattr(header, colname).hex()}'"
-            columns, values = self.columns_and_values(colname, blob_literal)
+            colnames = ', '.join(COLNAMES)
+            questions = ', '.join('?' * len(COLNAMES))
+            values = [0] * len(COLNAMES)
+            values[COLNAMES.index(colname)] = getattr(header, colname)
             with pytest.raises(asqlite3.IntegrityError) as e:
                 await headers.conn.execute(headers.fixup_sql(
-                    f'INSERT INTO $S.Headers({columns}) VALUES ({values});'))
+                    f'INSERT INTO $S.Headers({colnames}) VALUES ({questions});'), values)
             # An sqlite3 module bug with Python before 3.11 (I think) sometimes gives an
             # error string of "not an error".  Googling shows a few cases online.
             assert str(e.value) in ('not and error',
@@ -144,32 +146,16 @@ class TestHeaders:
 
         run_test_with_headers(test)
 
-    @staticmethod
-    def columns_and_values(colname, value):
-        columns = ', '.join(COLNAMES)
-        values = [0] * len(COLNAMES)
-        if colname:
-            values[COLNAMES.index(colname)] = value
-        values = ', '.join(str(value) for value in values)
-        return columns, values
-
-    @pytest.mark.parametrize('colname', COLNAMES[1:])
+    @pytest.mark.parametrize('colname', COLNAMES)
     def test_null_insertions(self, colname):
         async def test(headers):
-            columns, values = self.columns_and_values(colname, 'NULL')
             with pytest.raises(asqlite3.IntegrityError) as e:
-                await headers.conn.execute(f'INSERT INTO Headers({columns}) VALUES ({values});')
+                await headers.conn.execute(headers.fixup_sql(
+                    f'INSERT INTO $S.Headers({colname}) VALUES (NULL);'))
             assert 'NOT NULL constraint failed' in str(e.value)
 
-        run_test_with_headers(test)
-
-    # Tests that test_null_insertions() logic works
-    def test_no_null_insertions(self):
-        async def test(headers):
-            columns, values = self.columns_and_values(None, None)
-            await headers.conn.execute(f'INSERT INTO Headers({columns}) VALUES ({values});')
-
-        run_test_with_headers(test)
+        if colname != 'prev_hdr_id':
+            run_test_with_headers(test)
 
     @staticmethod
     async def insert_first_headers(headers, count):
