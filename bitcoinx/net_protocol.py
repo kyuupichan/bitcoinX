@@ -16,7 +16,7 @@ from enum import IntEnum, IntFlag
 from io import BytesIO
 from ipaddress import ip_address
 from struct import Struct
-from typing import List
+from typing import Sequence
 
 from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
 from .errors import (
@@ -270,7 +270,7 @@ class Protoconf:
     LEGACY_MAX_PAYLOAD = 1024 * 1024
 
     max_payload: int
-    stream_policies: List[bytes]
+    stream_policies: Sequence[bytes]
 
     def max_inv_elements(self):
         return (self.max_payload - 9) // (4 + 32)
@@ -385,7 +385,7 @@ def version_payload(service, remote_service, nonce):
     ))
 
 
-def pack_headers_payload(headers: List[SimpleHeader]):
+def pack_headers_payload(headers: Sequence[SimpleHeader]):
     zero = pack_varint(0)
     return pack_list(headers, lambda header: header.raw + zero)
 
@@ -504,8 +504,7 @@ class BlockLocator:
         '''Return the payload for a "headers" message in reply to "getheaders".'''
         return pack_headers_payload(await self.fetch_locator_headers(headers, limit))
 
-    def validate_headers(self, headers):
-        # headers is a list of SimpleHeader objects
+    def validate_headers(self, headers: Sequence[SimpleHeader]):
         if not self.block_hashes:
             if self.version == 0:
                 raise ProtocolError('received unsolicited headers')
@@ -516,13 +515,13 @@ class BlockLocator:
         # Check that the first header branches from an entry in the locator, and that the
         # rest form a chain.
         prev_hash = None
-        for n, header in enumerate(headers):
-            if n:
-                if header.prev_hash != prev_hash:
-                    raise ProtocolError('received headers do not form a chain')
-            else:
+        for header in headers:
+            if prev_hash is None:
                 if header.prev_hash not in self.block_hashes:
                     raise ProtocolError('received headers are detached from the block locator')
+            else:
+                if header.prev_hash != prev_hash:
+                    raise ProtocolError('received headers do not form a chain')
             prev_hash = header.hash
 
 
