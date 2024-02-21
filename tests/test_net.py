@@ -1482,7 +1482,7 @@ class TestSession:
                 await client_node.connect(listening_node.service, session_cls=ClientSession)
 
     @pytest.mark.asyncio
-    async def test_sendheaders_understood(self, client_node, listening_node, caplog):
+    async def test_sendheaders_understood(self, client_node, listening_node):
 
         class ClientSession(Session):
             async def on_handshake(self, _group):
@@ -1491,10 +1491,10 @@ class TestSession:
                 assert not self.sendheaders_sent
                 raise MemoryError
 
-        with caplog.at_level(logging.ERROR):
-            async with listening_node.listen():
-                with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=ClientSession)
+            await pause()
 
     @pytest.mark.asyncio
     async def test_duplicate_sendheaders(self, client_node, listening_node, caplog):
