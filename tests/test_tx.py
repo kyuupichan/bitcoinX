@@ -391,7 +391,7 @@ class TestTx:
                                        f'{json["locktime"]:,d}')
         else:
             json['locktimeMeaning'] = (
-                'valid in blocks with MTP greater than 2021-01-20 23:56:27 UTC'
+                'valid in blocks with MTP greater than 2021-01-20 23:56:27+00:00'
             )
         flags += JSONFlags.LOCKTIME_MEANING
         assert Tx.from_hex(script).to_json(flags, coin) == json

@@ -2,8 +2,8 @@ import pytest
 
 from bitcoinx import (
     hex_str_to_hash, bits_to_work, bits_to_target, hash_to_value, hash_to_hex_str,
-    deserialized_header, header_hash, header_prev_hash, header_work, header_timestamp,
-    Bitcoin, BitcoinScalingTestnet, BitcoinRegtest, Network, BitcoinTestnet, all_networks
+    Bitcoin, BitcoinScalingTestnet, BitcoinRegtest, Network, BitcoinTestnet, all_networks,
+    SimpleHeader
 )
 
 
@@ -17,7 +17,7 @@ header_400k = (
 
 @pytest.mark.parametrize(
     "raw_header,hdr_hash,version,prev_hash,merkle_root,timestamp,bits,nonce", ((
-        Bitcoin.genesis_header,
+        Bitcoin.genesis_header.raw,
         '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f',
         1,
         '0000000000000000000000000000000000000000000000000000000000000000',
@@ -42,26 +42,21 @@ def test_Bitcoin(raw_header, hdr_hash, version, prev_hash, merkle_root,
     prev_hash = hex_str_to_hash(prev_hash)
     merkle_root = hex_str_to_hash(merkle_root)
 
-    assert header_hash(raw_header) == hdr_hash
-    assert header_prev_hash(raw_header) == prev_hash
-    assert header_work(raw_header) == bits_to_work(bits)
-    assert header_timestamp(raw_header) == timestamp
+    header = SimpleHeader(raw_header)
 
-    header = deserialized_header(raw_header, 0)
     assert header.version == version
     assert header.prev_hash == prev_hash
     assert header.merkle_root == merkle_root
     assert header.timestamp == timestamp
     assert header.bits == bits
     assert header.nonce == nonce
-    assert header.raw == raw_header
+
     assert header.hash == hdr_hash
-    assert header.height == 0
-    assert header.work() == header_work(raw_header)
+    assert header.work() == bits_to_work(bits)
+    assert header.raw == raw_header
     assert header.target() == bits_to_target(bits)
     assert header.hash_value() == hash_to_value(hdr_hash)
     assert header.hex_str() == hash_to_hex_str(hdr_hash)
-    assert 'height=0' in str(header)
 
 
 def test_from_WIF_byte():

@@ -3,10 +3,10 @@ parameters:
 
 steps:
 - script: |
-    python -m pip install coincurve pycryptodomex attrs
+    python -m pip install coincurve==18.0.0 pycryptodomex py-asqlite3
     python -m pip install flake8
     python -m pip install coveralls coverage
-    python -m pip install pytest
+    python -m pip install pytest pytest-asyncio
   displayName: Prepare general environment
   condition: |
     and(

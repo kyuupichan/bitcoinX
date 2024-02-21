@@ -1,21 +1,34 @@
 import asyncio
 import copy
-import random
+import logging
+import platform
+import sys
 import time
 from io import BytesIO
 from ipaddress import IPv4Address, IPv6Address
 from os import urandom
 
+import asqlite3
 import pytest
+import pytest_asyncio
 
 from bitcoinx import (
-    Bitcoin, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
+    Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
+    Headers, all_networks, ProtocolError, ForceDisconnectError,
+    NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
+    Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
+    ServicePart, Node, Session, SimpleHeader
 )
-from bitcoinx.errors import ProtocolError
-from bitcoinx.net import (
-    ServicePacking, NetAddress, NetworkProtocol, BitcoinService, Protoconf, MessageHeader,
-    ServiceFlags, Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
-    ServicePart,
+from bitcoinx.misc import chunks
+from bitcoinx.net_protocol import (
+    ServicePacking, BlockLocator, version_payload, read_version_payload, _command,
+    pack_headers_payload, unpack_headers_payload, unpack_addr_payload
+)
+from bitcoinx.asyncio_compat import timeout
+
+from .utils import (
+    run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers, in_caplog,
+    print_caplog,
 )
 
 
@@ -407,12 +420,12 @@ class TestServicePacking:
         assert services == srvcs
         assert addr == NetAddress.from_string(address)
 
-    def test_read_addrs(self):
+    def test_unpack_addr_payload(self):
         raw = bytearray()
         raw += pack_varint(len(pack_ts_tests))
         for address, _, ts, packed in pack_ts_tests:
             raw += bytes.fromhex(packed)
-        result = ServicePacking.read_addrs(BytesIO(raw).read)
+        result = unpack_addr_payload(raw)
         assert len(result) == len(pack_ts_tests)
         for n, (addr, srvcs, ts) in enumerate(result):
             address, services, timestamp, packed = pack_ts_tests[n]
@@ -454,7 +467,7 @@ class TestBitcoinService:
         service = BitcoinService()
         assert service.address == NetAddress('::', 0, check_port=False)
         assert service.services == ServiceFlags.NODE_NONE
-        assert service.protocol_version == 70_015
+        assert service.protocol_version in (70_015, 70_016)
         assert service.user_agent == f'/bitcoinx/{_version_str}'
         assert service.relay is True
         assert service.timestamp is None
@@ -515,25 +528,6 @@ class Dribble:
         self.cursor += size
         return result
 
-    @staticmethod
-    def lengths(total):
-        lengths = []
-        cursor = 0
-        while cursor < total:
-            length = min(random.randrange(1, total // 2), total - cursor)
-            lengths.append(length)
-            cursor += length
-        return lengths
-
-    @staticmethod
-    def parts(raw):
-        parts = []
-        start = 0
-        for length in Dribble.lengths(len(raw)):
-            parts.append(raw[start: start+length])
-            start += length
-        return parts
-
 
 std_header_tests = [
     (b'1234', b'0123456789ab', b'', b'12340123456789ab\0\0\0\0]\xf6\xe0\xe2'),
@@ -560,10 +554,6 @@ ALL_COMMANDS = ('addr', 'authch', 'authresp', 'block', 'blocktxn', 'cmpctblock',
 
 class TestMessageHeader:
 
-    def test_basics(self):
-        assert MessageHeader.STD_HEADER_SIZE == 24
-        assert MessageHeader.EXT_HEADER_SIZE == 44
-
     @pytest.mark.parametrize("command", ALL_COMMANDS)
     def test_commands(self, command):
         padding = 12 - len(command)
@@ -572,10 +562,12 @@ class TestMessageHeader:
     @pytest.mark.parametrize("magic, command, payload, answer", std_header_tests)
     def test_std_bytes(self, magic, command, payload, answer):
         assert MessageHeader.std_bytes(magic, command, payload) == answer
+        assert len(answer) == MessageHeader.STD_HEADER_SIZE
 
     @pytest.mark.parametrize("magic, command, payload_len, answer", ext_header_tests)
     def test_ext_bytes(self, magic, command, payload_len, answer):
         assert MessageHeader.ext_bytes(magic, command, payload_len) == answer
+        assert len(answer) == MessageHeader.EXT_HEADER_SIZE
 
     @pytest.mark.parametrize("magic, command, payload, answer", std_header_tests)
     def test_from_stream_std(self, magic, command, payload, answer):
@@ -610,8 +602,9 @@ class TestMessageHeader:
     def test_from_stream_ext_bad(self, raw):
         async def main():
             dribble = Dribble(raw)
-            with pytest.raises(ProtocolError):
+            with pytest.raises(ProtocolError) as e:
                 await MessageHeader.from_stream(dribble.recv_exactly)
+            assert 'ill-formed extended message header' == str(e.value)
 
         asyncio.run(main())
 
@@ -626,77 +619,108 @@ net_addresses = ['1.2.3.4', '4.3.2.1', '001:0db8:85a3:0000:0000:8a2e:0370:7334',
                  '2001:db8:85a3:8d3:1319:8a2e:370:7348']
 
 
-def random_net_address():
-    port = random.randrange(1024, 50000)
-    address = random.choice(net_addresses)
-    return NetAddress(address, port)
-
-
-def random_service():
-    address = random_net_address()
-    return BitcoinService(address=address)
-
-
 class TestNetworkProtocol:
 
-    def test_pack_block_locator(self):
+    @pytest.mark.parametrize("version, count, hash_stop", (
+        (70_015, 5, False),
+        (70_016, 20, True),
+        (70_015, 0, True),
+    ))
+    def test_getheaders_payload(self, version, count, hash_stop):
+        hash_stop = urandom(32) if hash_stop else None
+        locator = BlockLocator(version, [urandom(32) for _ in range(count)], hash_stop)
+        payload = locator.to_payload()
+        assert BlockLocator.from_payload(payload) == locator
+
+    def test_getheaders_payload_short(self):
+        locator = BlockLocator(700, [urandom(32)], urandom(31))
+        payload = locator.to_payload()
+        with pytest.raises(ProtocolError) as e:
+            BlockLocator.from_payload(payload)
+        assert str(e.value) == 'truncated getheaders payload'
+
+    def test_getheaders_payload_long(self, caplog):
+        locator = BlockLocator(700, [urandom(32) for _ in range(3)], urandom(32))
+        payload = locator.to_payload() + b'0'
+        with caplog.at_level(logging.WARNING):
+            assert locator == BlockLocator.from_payload(payload)
+
+        assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
+
+    def test_pack_getheaders_payload(self):
         def pack_hash(h):
             return h
 
-        locator = [urandom(32) for _ in range(6)]
+        block_hashes = [urandom(32) for _ in range(6)]
         hash_stop = urandom(32)
         protocol = 100
-        answer = pack_le_int32(protocol) + pack_list(locator, pack_hash)
+        answer = pack_le_int32(protocol) + pack_list(block_hashes, pack_hash)
 
-        assert NetworkProtocol.pack_block_locator(protocol, locator) == answer + bytes(32)
-        assert NetworkProtocol.pack_block_locator(protocol, locator, None) == answer + bytes(32)
-        assert NetworkProtocol.pack_block_locator(protocol, locator, hash_stop) \
-            == answer + hash_stop
+        assert BlockLocator(protocol, block_hashes, None).to_payload() == answer + bytes(32)
+        assert BlockLocator(protocol, block_hashes, hash_stop).to_payload() == answer + hash_stop
+
+    @pytest.mark.parametrize("count", (0, 10, 100, 2000))
+    def test_headers_payload(self, count):
+        headers = [SimpleHeader(urandom(80)) for _ in range(count)]
+        payload = pack_headers_payload(headers)
+        assert headers == unpack_headers_payload(payload)
+
+    def test_headers_payload_short(self):
+        headers = [SimpleHeader(urandom(80)) for _ in range(5)]
+        payload = pack_headers_payload(headers)
+        with pytest.raises(ProtocolError):
+            unpack_headers_payload(payload[:-1])
+
+    def test_headers_payload_long(self, caplog):
+        headers = [SimpleHeader(urandom(80)) for _ in range(5)]
+        payload = pack_headers_payload(headers)
+        with caplog.at_level(logging.INFO):
+            unpack_headers_payload(payload + b'0')
 
     def test_version_payload_bad_nonce(self):
         with pytest.raises(ValueError) as e:
-            NetworkProtocol.version_payload(X_service, BitcoinService(), bytes(7))
+            version_payload(X_service, BitcoinService(), bytes(7))
         assert 'nonce must be 8 bytes' == str(e.value)
 
     def test_version_payload_theirs_default(self):
         nonce = b'1234beef'
-        their_service = BitcoinService()
-        payload = NetworkProtocol.version_payload(X_service, their_service, nonce)
+        remote_service = BitcoinService()
+        payload = version_payload(X_service, remote_service, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000000000000000000000000000000000000000000000'
             '0000000000010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
             '666f6f6261723a312e302f05000000000744656661756c74')
         service = BitcoinService()
         service.address = X_service.address
-        result = NetworkProtocol.read_version_payload(service, payload)
+        result = read_version_payload(service, payload)
         assert service == X_service
-        assert result == (their_service.address, their_service.services, nonce)
+        assert result == (remote_service.address, remote_service.services, nonce)
 
     def test_version_payload_theirs_X(self):
         nonce = b'1234beef'
-        their_service = copy.copy(X_service)
-        payload = NetworkProtocol.version_payload(X_service, their_service, nonce)
+        remote_service = copy.copy(X_service)
+        payload = version_payload(X_service, remote_service, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000010000000000000000000000000000000000ffff01'
             '020304162e010000000000000000000000000000000000ffff01020304162e31323334626565660c2f'
             '666f6f6261723a312e302f05000000000744656661756c74')
         service = BitcoinService()
         service.address = X_service.address
-        result = NetworkProtocol.read_version_payload(service, payload)
+        result = read_version_payload(service, payload)
         assert service == X_service
-        assert result == (their_service.address, their_service.services, nonce)
+        assert result == (remote_service.address, remote_service.services, nonce)
 
     def test_version_payload_NetAddress(self):
         nonce = b'cabbages'
         address = NetAddress('1.2.3.4', 5)
-        payload = NetworkProtocol.version_payload(X_service, address, nonce)
+        payload = version_payload(X_service, address, nonce)
         assert payload == bytes.fromhex(
             '80380100010000000000000020a1070000000000000000000000000000000000000000000000ffff01'
             '0203040005010000000000000000000000000000000000ffff01020304162e63616262616765730c2f'
             '666f6f6261723a312e302f05000000000744656661756c74')
         service = BitcoinService(address=address)
         service_copy = copy.copy(service)
-        result = NetworkProtocol.read_version_payload(service, payload)
+        result = read_version_payload(service, payload)
         assert service == service_copy
         assert result == (address, ServiceFlags.NODE_NONE, nonce)
 
@@ -704,10 +728,10 @@ class TestNetworkProtocol:
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.timestamp = None
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload)
+        result = read_version_payload(service2, payload)
         assert 0 < time.time() - service2.timestamp < 5
         service.timestamp = service2.timestamp
         assert service == service2
@@ -717,10 +741,10 @@ class TestNetworkProtocol:
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.assoc_id = None
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload)
+        result = read_version_payload(service2, payload)
         assert service2.assoc_id is None
         assert service == service2
         assert result == (X_service.address, X_service.services, nonce)
@@ -729,12 +753,12 @@ class TestNetworkProtocol:
         nonce = b'cabbages'
         service = copy.copy(X_service)
         service.user_agent = 'xxx'
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
         # Non-UTF8 user agent
         payload = payload.replace(b'xxx', b'\xff' * 3)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload)
+        result = read_version_payload(service2, payload)
         assert service2.user_agent == '0xffffff'
         service2.user_agent = service.user_agent
         assert service == service2
@@ -743,11 +767,813 @@ class TestNetworkProtocol:
     def test_read_version_payload_no_relay(self):
         nonce = b'cabbages'
         service = BitcoinService()
-        payload = NetworkProtocol.version_payload(service, X_service, nonce)
+        payload = version_payload(service, X_service, nonce)
 
         service2 = BitcoinService(address=service.address)
-        result = NetworkProtocol.read_version_payload(service2, payload[:-1])
+        result = read_version_payload(service2, payload[:-1])
         assert service2.assoc_id is None
         assert service2.relay is True
         assert service == service2
         assert result == (X_service.address, X_service.services, nonce)
+
+
+class TestBlockLocator:
+    # FIXME: add more tests
+
+    def test_from_headers(self):
+        async def test(headers):
+            count = 100
+            branch = create_random_branch(headers.genesis_header, count)
+            await insert_tree(headers, [(None, branch)])
+            locator = await BlockLocator.from_block_hash(0, headers)
+            assert len(locator) == 8
+            assert locator.block_hashes[:-1] == [
+                branch[-(1 << loc_pos)].hash for loc_pos in range(7)]
+            assert locator.block_hashes[-1] == headers.genesis_header.hash
+
+        run_test_with_headers(test)
+
+    @pytest.mark.parametrize('network', all_networks)
+    def test_block_locator_empty_headers(self, network):
+        async def test(headers):
+            locator = await BlockLocator.from_block_hash(0, headers)
+            assert locator.block_hashes == [headers.genesis_header.hash]
+
+        run_test_with_headers(test, network)
+
+
+listen_host = IPv4Address('127.0.0.1')
+
+
+@pytest_asyncio.fixture
+async def listening_headers():
+    async with asqlite3.connect(':memory:') as conn:
+        headers = Headers(conn, 'main', Bitcoin)
+        await headers.initialize()
+        yield headers
+
+
+@pytest.fixture
+def listening_node(listening_headers):
+    service = BitcoinService(address=NetAddress(listen_host, 5656))
+    node = Node(service, Bitcoin, listening_headers)
+    yield node
+    if sys.version_info >= (3, 12):
+        assert not node.incoming_sessions
+    assert not node.outgoing_sessions
+
+
+@pytest_asyncio.fixture
+async def client_headers():
+    async with asqlite3.connect(':memory:') as conn:
+        headers = Headers(conn, 'main', Bitcoin)
+        await headers.initialize()
+        yield headers
+
+
+@pytest.fixture
+def client_node(client_headers):
+    node = Node(BitcoinService(), Bitcoin, client_headers)
+    yield node
+    assert not node.incoming_sessions
+    assert not node.outgoing_sessions
+
+
+async def achunks(payload, size):
+    for chunk in chunks(payload, size):
+        yield chunk
+
+
+async def pause(secs=None):
+    secs = 0.05 if platform.system() == 'Windows' else 0.01
+    await asyncio.sleep(secs)
+
+
+class TestNode:
+
+    @pytest.mark.asyncio
+    async def test_simple_listen(self, listening_node):
+        async with listening_node.listen():
+            assert listening_node.service.address.host == listen_host
+            assert listening_node.network is Bitcoin
+
+
+class TestSession:
+
+    @pytest.mark.asyncio
+    async def test_simple_connect(self, client_node, listening_node):
+        conn_pair = None
+        listen_pair = None
+        event = asyncio.Event()
+
+        class OutSession(Session):
+            async def maintain_connection(self, connection):
+                nonlocal conn_pair
+                conn_pair = (self, connection)
+                await event.wait()
+
+        class ListeningSession(Session):
+            async def maintain_connection(self, connection):
+                nonlocal listen_pair
+                listen_pair = (self, connection)
+                event.set()
+
+        async with listening_node.listen(session_cls=ListeningSession):
+            await client_node.connect(listening_node.service, session_cls=OutSession)
+
+            conn_session, connection = conn_pair
+            assert isinstance(conn_session, OutSession)
+            assert conn_session.node is client_node
+            assert conn_session.remote_service is listening_node.service
+            assert conn_session.connection is connection
+            assert conn_session.is_outgoing
+            assert conn_session.protoconf == Protoconf.default()
+
+            listen_session, connection = listen_pair
+            assert isinstance(listen_session, ListeningSession)
+            assert listen_session.node is listening_node
+            assert listen_session.remote_service.address.host == listen_host
+            assert not listen_session.is_outgoing
+            assert listen_session.protoconf == Protoconf.default()
+
+    @pytest.mark.asyncio
+    async def test_bad_magic(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                client_node.network = BitcoinTestnet
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
+                         'got 0xf4e5f3f4 expected 0xe3e1f3e8')
+
+    @pytest.mark.asyncio
+    async def test_bad_checksum(self, client_node, listening_node, caplog):
+
+        async def test(self, _group):
+            payload = b''
+            header = MessageHeader.std_bytes(self.node.network.magic, MessageHeader.PROTOCONF,
+                                             payload)
+            # Mess up the checksum
+            header = bytearray(header)
+            header[-1] ^= 0x0f
+            await self.connection.outgoing_messages.put((header, payload))
+            await pause()
+            raise MemoryError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, on_handshake=test)
+
+        assert in_caplog(caplog, 'protocol error: bad checksum for protoconf command')
+
+    @pytest.mark.asyncio
+    async def test_unhandled_command(self, client_node, listening_node, caplog):
+
+        async def test(self, _group):
+            await self.send_message(_command('zombie'), b'')
+            await pause()
+            raise MemoryError
+
+        with caplog.at_level(logging.DEBUG):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, on_handshake=test)
+
+        assert in_caplog(caplog, 'ignoring unhandled zombie command')
+
+    #
+    # VERSION message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_listener_waits_for_version_message(self, client_node, listening_node):
+        async with listening_node.listen():
+
+            class OutSession(Session):
+                async def maintain_connection(self, connection):
+                    await connection.recv_exactly(1)
+
+            with pytest.raises(TimeoutError):
+                async with timeout(0.05):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
+
+    @pytest.mark.asyncio
+    async def test_connector_sends_version_message(self, client_node, listening_node):
+
+        class ListeningSession(Session):
+            async def on_version(self, payload):
+                await super().on_version(payload)
+                raise ForceDisconnectError('test')
+
+        async with listening_node.listen(session_cls=ListeningSession):
+            with pytest.raises(ConnectionResetError):
+                await client_node.connect(listening_node.service)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_version(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def maintain_connection(self, connection):
+                await self.send_version_message(connection)
+                await self.send_version_message(connection)
+                await pause()
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'protocol error: duplicate version message')
+
+    @pytest.mark.asyncio
+    async def test_send_verack_first(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def maintain_connection(self, connection):
+                await self.send_verack_message(connection)
+                await pause()
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'verack message received before version message sent')
+
+    @pytest.mark.asyncio
+    async def test_send_protoconf_first(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def maintain_connection(self, connection):
+                await self._send_unqueued(connection, MessageHeader.PROTOCONF,
+                                          Protoconf.default().payload())
+                await pause()
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'protocol error: protoconf command '
+                         'received before handshake finished')
+
+    @pytest.mark.asyncio
+    async def test_send_corrupt_version_message(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def maintain_connection(self, connection):
+                await self._send_unqueued(connection, MessageHeader.VERSION,
+                                          bytes(10))
+                await pause()
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'corrupt version message')
+
+    @pytest.mark.asyncio
+    async def test_send_long_version_message(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def maintain_connection(self, connection):
+                await self._send_unqueued(connection, MessageHeader.VERSION,
+                                          await self.version_payload() + bytes(2))
+                await pause()
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'extra bytes at end of version payload')
+
+    @pytest.mark.asyncio
+    async def test_self_connect(self, listening_node, caplog):
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    await listening_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'error handling incoming connection: connected to ourself')
+        assert in_caplog(caplog, 'connection closed remotely')
+
+    #
+    # VERACK message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_duplicate_verack(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def send_verack_message(self, connection):
+                await super().send_verack_message(connection)
+                await super().send_verack_message(connection)
+                await pause()
+                raise MemoryError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'protocol error: duplicate verack message')
+
+    @pytest.mark.asyncio
+    async def test_verack_payload(self, client_node, listening_node, caplog):
+
+        class OutSession(Session):
+            async def send_verack_message(self, connection):
+                await self._send_unqueued(connection, MessageHeader.VERACK, b'0')
+                await pause()
+                raise MemoryError
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=OutSession)
+
+        assert in_caplog(caplog, 'verack message has payload')
+
+    #
+    # PROTOCONF message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_protoconf_understood(self, client_node, listening_node):
+
+        async def test(self, _group):
+            listener_session = list(listening_node.incoming_sessions)[0]
+            assert listener_session.their_protoconf is None
+            await self.send_protoconf()
+            await pause()
+            assert listener_session.their_protoconf == self.protoconf
+            raise MemoryError
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, on_handshake=test)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('force', (True, False))
+    async def test_duplicate_protoconf(self, client_node, listening_node, caplog, force):
+
+        async def test(self, _group):
+            await self.send_protoconf()
+            if force:
+                self.protoconf_sent = False
+            await self.send_protoconf()
+            await pause()
+            raise MemoryError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, on_handshake=test)
+
+        assert in_caplog(caplog, 'duplicate protoconf') is force
+
+    #
+    # EXTMSG message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_send_protoconf_as_large_message(self, client_node, listening_node):
+
+        async def test(self, _group):
+            listener_session = list(listening_node.incoming_sessions)[0]
+            assert listener_session.their_protoconf is None
+            self.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
+            payload = self.our_protoconf.payload()
+            await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                          achunks(payload, 4))
+            await pause()
+            assert listener_session.their_protoconf == self.our_protoconf
+            raise MemoryError
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, on_handshake=test)
+
+    @pytest.mark.asyncio
+    async def test_large_message_rejections(self, client_node, listening_node, caplog):
+
+        async def test(self, _group):
+            payload = Protoconf.default().payload()
+            # We should not accept sending a large message
+            with pytest.raises(RuntimeError):
+                await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                              achunks(payload, 4))
+            # Override the check
+            self.can_send_large_messages = True
+            await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
+                                          achunks(payload, 4))
+            await pause()
+
+        with caplog.at_level(logging.ERROR):
+            listening_node.service.protocol_version = 70_015
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service, on_handshake=test)
+
+        assert in_caplog(caplog, 'large message received but invalid')
+
+    @pytest.mark.asyncio
+    async def test_send_streaming_message(self, client_node, listening_node, caplog):
+
+        class ListeningSession(Session):
+            async def on_zombie_large(self, connection, size):
+                parts = [chunk async for chunk in connection.recv_chunks(size)]
+                self.zombie_payload = b''.join(parts)
+
+            async def on_zombie(self, payload):
+                self.zombie_payload2 = payload
+
+        async def test(self, _group):
+            listener_session = list(listening_node.incoming_sessions)[0]
+            listener_session.streaming_min_size = 200
+            await self.send_large_message(_command('zombie'), len(payload),
+                                          achunks(payload, 100))
+            await self.send_message(_command('zombie'), payload)
+            await self.send_large_message(_command('ghoul'), len(payload),
+                                          achunks(payload, 100))
+            await pause()
+            assert listener_session.zombie_payload == payload
+            assert listener_session.zombie_payload2 == payload
+            raise MemoryError
+
+        payload = urandom(2000)
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListeningSession):
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, on_handshake=test)
+
+        assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
+
+    #
+    # GETHEADERS / HEADERS message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_hash_stop_only(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+
+            async def on_handshake(self, _group):
+                # One known to the listener
+                self.expected_headers = [simples[2]]
+                locator = BlockLocator(1, [], simples[2].hash)
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+
+                # One not known to the listener, it which case it should ignore the request
+                self.expected_headers = []
+                locator = BlockLocator(1, [], simples[5].hash)
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                # Should timeout as nothing should be sent
+                async with timeout(0.1):
+                    await self.headers_received.wait()
+
+            async def on_headers(self, payload):
+                simple_headers = unpack_headers_payload(payload)
+                assert simple_headers == self.expected_headers
+                self.headers_received.set()
+
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples[:5])
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                with pytest.raises(TimeoutError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'ignoring getheaders for unknown block 000000009b7262315db')
+
+    @pytest.mark.asyncio
+    async def test_getheaders_extend_chain(self, client_node, listening_node, caplog):
+        # This tests all cases around correctly-functioning client and listener where they
+        # are on different branches, branches A and B.  The listener is on branch A to
+        # height 9 as the longest, and the client on branch B.  The listener knows all of
+        # branch B except the tip.  Branch B is shorter than A.
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+
+                client_chain = await client_node.headers.longest_chain()
+                listening_chain = await listening_node.headers.longest_chain()
+                assert client_chain.tip == listening_chain.tip
+
+                # Now extend the listener chain, but test that hash_stop is honoured when
+                # the client provides it (how exactly the client knows the hash is another
+                # question....)
+                await listening_node.headers.insert_headers(simples[10:])
+                listening_chain = await listening_node.headers.longest_chain()
+                assert client_chain.tip != listening_chain.tip
+
+                to_height = 15
+                hash_stop = simples[to_height].hash
+                locator = await self.block_locator()
+                locator.hash_stop = hash_stop
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+
+                client_chain = await client_node.headers.longest_chain()
+                assert client_chain.tip.height == to_height
+                assert (await listening_node.headers.header_at_height(listening_chain, to_height)
+                        == client_chain.tip)
+                assert not in_caplog(caplog, 'headers synchronized')
+
+                # The hash stop doesn't work now as we start after the tip...
+                locator = await self.block_locator()
+                locator.hash_stop = hash_stop
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                client_chain = await client_node.headers.longest_chain()
+                assert client_chain.tip == listening_chain.tip
+
+                assert not in_caplog(caplog, 'headers synchronized')
+
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                raise MemoryError
+
+        simples = first_mainnet_headers(20)
+        await listening_node.headers.insert_headers(simples[:10])
+
+        client_branch = simples[:3]
+        client_branch.extend(create_random_branch(client_branch[-1], 5))
+        await client_node.headers.insert_headers(client_branch, check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:-2], check_work=False)
+        client_chain = await client_node.headers.longest_chain()
+        assert client_chain.tip.hash == client_branch[-1].hash
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'headers synchronized to height 19')
+
+    @pytest.mark.asyncio
+    async def test_getheaders_shorter(self, client_node, listening_node, caplog):
+        # This tests all cases around correctly-functioning client and listener where they
+        # are on different branches, branches A and B.  The listener is on branch A to
+        # height 9, and the client on branch B which is longer.  The listener knows some of
+        # branch B.
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                assert not in_caplog(caplog, 'headers synchronized to height 9')
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                assert in_caplog(caplog, 'headers synchronized to height 9')
+                raise MemoryError
+
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples)
+
+        client_branch = simples[:3]
+        client_branch.extend(create_random_branch(client_branch[-1], 10))
+        await client_node.headers.insert_headers(client_branch, check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:-5], check_work=False)
+        client_chain = await client_node.headers.longest_chain()
+        assert client_chain.tip.hash == client_branch[-1].hash
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+                client_chain = await client_node.headers.longest_chain()
+                listening_chain = await listening_node.headers.longest_chain()
+
+                # Check neither chain has grown
+                assert client_chain.tip.hash == client_branch[-1].hash
+                assert listening_chain.tip.hash == simples[-1].hash
+
+    @pytest.mark.asyncio
+    async def test_unchained_headers(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                branch = create_random_branch(Bitcoin.genesis_header, 5)
+                branch.extend(create_random_branch(Bitcoin.genesis_header, 1))
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
+                await pause()
+                raise ForceDisconnectError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'headers message with headers that do not form a chain')
+
+    @pytest.mark.asyncio
+    async def test_separated_headers(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(simples[2:]))
+                await pause()
+                raise ForceDisconnectError
+
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples)
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'ignoring 8 non-connecting headers')
+
+    @pytest.mark.asyncio
+    async def test_bad_pow_headers(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
+                await pause()
+                raise ForceDisconnectError
+
+        branch = create_random_branch(Bitcoin.genesis_header, 2)
+        await listening_node.headers.insert_headers(branch, check_work=False)
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        print_caplog(caplog)
+        assert in_caplog(caplog, 'hash value exceeds its target')
+
+    @pytest.mark.asyncio
+    async def test_excess_headers_payload(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.HEADERS,
+                                        pack_headers_payload(simples) + b'1')
+                await pause()
+                raise ForceDisconnectError
+
+        simples = first_mainnet_headers(2)
+        await listening_node.headers.insert_headers(simples)
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'extra bytes at end of headers payload')
+
+    @pytest.mark.asyncio
+    async def test_too_many_headers(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                self.MAX_HEADERS = 5
+                await self.get_headers()
+                await self.headers_received.wait()
+                raise MemoryError
+
+        branch = create_random_branch(Bitcoin.genesis_header, 10)
+        await listening_node.headers.insert_headers(branch, check_work=False)
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')
+
+    #
+    # SENDHEADERS message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
+
+        class ClientSession(Session):
+            async def on_handshake(self, group):
+                await super().on_handshake(group)
+                await pause()
+                listener_session = list(listening_node.incoming_sessions)[0]
+                assert self.they_prefer_headers
+                assert listener_session.they_prefer_headers
+                assert self.their_protoconf
+                assert listener_session.their_protoconf
+                raise MemoryError
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+    @pytest.mark.asyncio
+    async def test_sendheaders_understood(self, client_node, listening_node):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                self.remote_service.protocol_version = 70_011
+                await self.send_sendheaders()
+                assert not self.sendheaders_sent
+                raise MemoryError
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=ClientSession)
+            await pause()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_sendheaders(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                listener_session = list(listening_node.incoming_sessions)[0]
+                await self.send_sendheaders()
+                await pause()
+                assert listener_session.they_prefer_headers
+
+                with caplog.at_level(logging.WARNING):
+                    await self.send_sendheaders()
+                assert in_caplog(caplog, 'sendheaders message already sent')
+                await pause()
+                assert not in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+
+                self.sendheaders_sent = False
+                await self.send_sendheaders()
+                await pause()
+                assert in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+                raise MemoryError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+    @pytest.mark.asyncio
+    async def test_sendheaders_payload(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.SENDHEADERS, b'0')
+                await pause()
+                raise MemoryError
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'sendheaders message has payload')
+
+    #
+    # ADDR / GETADDR message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_getaddr_roundtrip(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_getaddr()
+                async with timeout(0.1):
+                    await on_addr_event.wait()
+                raise MemoryError
+
+            async def on_addr(self, payload):
+                on_addr_event.set()
+
+        on_addr_event = asyncio.Event()
+
+        async with listening_node.listen():
+            with pytest.raises(MemoryError):
+                await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+    @pytest.mark.asyncio
+    async def test_getaddr_payload(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.GETADDR, b'0')
+                await pause()
+                raise MemoryError
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert in_caplog(caplog, 'getaddr message has payload')

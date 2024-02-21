@@ -9,7 +9,7 @@
 
 __all__ = (
     'Base58Error', 'DecryptionError',
-    'ChainException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
+    'HeaderException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
     'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError', 'CleanStackError',
     'ScriptTooLarge', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
@@ -19,7 +19,8 @@ __all__ = (
     'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
     'NumEqualVerifyFailed', 'InvalidSignatureCount', 'PushOnlyError', 'LockTimeError',
-    'StackMemoryUsageError', 'MerkleError', 'PackingError',
+    'StackMemoryUsageError', 'MerkleError', 'PackingError', 'ProtocolError', 'BadChecksumError',
+    'ForceDisconnectError',
 )
 
 from struct import error as PackingError
@@ -34,15 +35,15 @@ class Base58Error(ValueError):
     '''Exception used for Base58 errors.'''
 
 
-class ChainException(Exception):
-    '''Base class of exceptions raised in chain.py.'''
+class HeaderException(Exception):
+    '''Base class of exceptions raised in headers.py.'''
 
 
-class MissingHeader(ChainException):
+class MissingHeader(HeaderException):
     '''Raised by Headers.connect() when the previous header is missing.'''
 
 
-class IncorrectBits(ChainException):
+class IncorrectBits(HeaderException):
     '''Raised when a header has bits other than those required by the protocol.'''
 
     def __init__(self, header, required_bits):
@@ -51,10 +52,10 @@ class IncorrectBits(ChainException):
         self.required_bits = required_bits
 
     def __str__(self):
-        return f'header {self.header} requires bits 0x{self.required_bits}'
+        return f'header requires bits {self.required_bits} but has {self.header.bits}'
 
 
-class InsufficientPoW(ChainException):
+class InsufficientPoW(HeaderException):
     '''Raised when a header has less PoW than required by the protocol.'''
 
     def __init__(self, header):
@@ -62,8 +63,7 @@ class InsufficientPoW(ChainException):
         self.header = header
 
     def __str__(self):
-        return (f'header f{self.header} hash value f{self.header.hash_value()} exceeds '
-                f'its target {self.header.target()}')
+        return (f'header f{self.header.raw.hex()} hash value exceeds its target')
 
 
 class MerkleError(Exception):

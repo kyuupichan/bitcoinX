@@ -11,6 +11,8 @@ from .keys import *
 from .merkle import *
 from .misc import *
 from .mnemonic import *
+from .net import *
+from .net_protocol import *
 from .packing import *
 from .script import *
 from .signature import *
@@ -34,6 +36,8 @@ __all__ = sum((
     merkle.__all__,
     misc.__all__,
     mnemonic.__all__,
+    net.__all__,
+    net_protocol.__all__,
     packing.__all__,
     script.__all__,
     signature.__all__,

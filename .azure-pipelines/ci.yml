@@ -8,6 +8,7 @@ jobs:
     name: Py312_Ubuntu
     vmImage: 'ubuntu-latest'
     pythonVersion: '3.12'
+# For some reason on Azure, 3.12 has an issue with pycryptodomex
 #- template: run-tests.yml
 #  parameters:
 #    name: Py312_Mac
