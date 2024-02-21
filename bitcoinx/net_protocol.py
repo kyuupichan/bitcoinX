@@ -20,7 +20,7 @@ from typing import Sequence
 
 from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
 from .errors import (
-    ProtocolError, ForceDisconnectError, PackingError,
+    ProtocolError, ForceDisconnectError, PackingError, HeaderException, MissingHeader
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
@@ -501,29 +501,6 @@ class BlockLocator:
         '''Return the payload for a "headers" message in reply to "getheaders".'''
         return pack_headers_payload(await self.fetch_locator_headers(headers, limit))
 
-    def validate_headers(self, headers: Sequence[SimpleHeader]):
-        if not self.block_hashes:
-            if self.version == 0:
-                raise ProtocolError('received unsolicited headers')
-            if len(headers) != 1 or headers[0].hash != self.hash_stop:
-                raise ProtocolError('did not receive the single header requested')
-            return
-
-        # Check that the first header branches from an entry in the locator, and that the
-        # rest form a chain.
-        prev_hash = None
-        for header in headers:
-            if prev_hash is None:
-                if header.prev_hash not in self.block_hashes:
-                    raise ProtocolError('received headers are detached from the block locator')
-            else:
-                if header.prev_hash != prev_hash:
-                    raise ProtocolError('received headers do not form a chain')
-            prev_hash = header.hash
-
-
-BlockLocator.NULL = BlockLocator(0, [], None)
-
 
 class Connection:
     '''A single network connection.  Each connection has its own outgoing message queue
@@ -689,7 +666,6 @@ class Session:
         self.nonce = self.node.random_nonce()
         self.can_send_large_messages = False
         self.their_tip = node.headers.genesis_header
-        self.getheaders_locator = BlockLocator.NULL
 
         # Logging
         logger = logging.getLogger('Session')
@@ -894,7 +870,6 @@ class Session:
         if self.debug:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
-        self.getheaders_locator = locator
         self.headers_received.clear()
 
     # Callbacks when certain messages are received.
@@ -907,25 +882,27 @@ class Session:
 
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
-        locator = self.getheaders_locator
-        self.getheaders_locator = BlockLocator.NULL
-        # So we abandon a sync in case of any kind of error
-        self.headers_synced = True
+        # Note: we should expect unsolicited headers because of the sendheaders protocol
         try:
-            simple_headers = unpack_headers_payload(payload)
-            locator.validate_headers(simple_headers)
-
-            count = len(simple_headers)
-            if count > self.MAX_HEADERS:
-                self.logger.warning(f'protocol violation: {count:,d} headers received')
-
-            if simple_headers:
-                await self.node.headers.insert_headers(simple_headers)
-                self.their_tip = simple_headers[-1]
-            if count < self.MAX_HEADERS:
+            headers = unpack_headers_payload(payload)
+            count = len(headers)
+            if count == 0:
                 self.logger.info(f'headers synchronized to height {self.their_tip.height}')
-            else:
-                self.headers_synced = False
+                return
+            limit = self.MAX_HEADERS
+            if count > limit:
+                raise ProtocolError(f'headers message with {count:,d} headers but '
+                                    f'limit is {limit:,d}')
+            if not SimpleHeader.are_headers_chained(headers):
+                raise ProtocolError('headers message with headers that do not form a chain')
+            # This will fail if the headers do not connect.  It also validates PoW.
+            try:
+                await self.node.headers.insert_headers(headers)
+                self.their_tip = headers[-1]
+            except MissingHeader:
+                self.logger.info('ignoring {len(headers):,d} non-connecting headers')
+            except HeaderException as e:
+                raise ProtocolError(f'headers message: {e}') from None
         finally:
             self.headers_received.set()
 

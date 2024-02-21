@@ -32,11 +32,6 @@ from .utils import (
 )
 
 
-def test_caplog(caplog):
-    print_caplog(caplog)
-    assert not caplog.records
-
-
 @pytest.mark.parametrize("hostname,answer", (
     ('', False),
     ('a', True),
@@ -1262,17 +1257,49 @@ class TestSession:
         # height 9 as the longest, and the client on branch B.  The listener knows all of
         # branch B except the tip.  Branch B is shorter than A.
 
-        hash_stop = None
-
         class ClientSession(Session):
             async def on_handshake(self, _group):
-                if hash_stop is None:
-                    await self.get_headers()
-                else:
-                    locator = await self.block_locator()
-                    locator.hash_stop = hash_stop
-                    await self.get_headers(locator)
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
 
+                client_chain = await client_node.headers.longest_chain()
+                listening_chain = await listening_node.headers.longest_chain()
+                assert client_chain.tip == listening_chain.tip
+
+                # Now extend the listener chain, but test that hash_stop is honoured when
+                # the client provides it (how exactly the client knows the hash is another
+                # question....)
+                await listening_node.headers.insert_headers(simples[10:])
+                listening_chain = await listening_node.headers.longest_chain()
+                assert client_chain.tip != listening_chain.tip
+
+                to_height = 15
+                hash_stop = simples[to_height].hash
+                locator = await self.block_locator()
+                locator.hash_stop = hash_stop
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+
+                client_chain = await client_node.headers.longest_chain()
+                assert client_chain.tip.height == to_height
+                assert (await listening_node.headers.header_at_height(listening_chain, to_height)
+                        == client_chain.tip)
+                assert not in_caplog(caplog, 'headers synchronized')
+
+                # The hash stop doesn't work now as we start after the tip...
+                locator = await self.block_locator()
+                locator.hash_stop = hash_stop
+                await self.get_headers(locator)
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                client_chain = await client_node.headers.longest_chain()
+                assert client_chain.tip == listening_chain.tip
+
+                assert not in_caplog(caplog, 'headers synchronized')
+
+                await self.get_headers()
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
                 raise MemoryError
@@ -1292,30 +1319,7 @@ class TestSession:
                 with pytest.raises(MemoryError):
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
 
-                client_chain = await client_node.headers.longest_chain()
-                listening_chain = await listening_node.headers.longest_chain()
-                assert client_chain.tip == listening_chain.tip
-
-                assert in_caplog(caplog, 'headers synchronized to height 9')
-                caplog.clear()
-
-                # Now extend the listener chain, but test that hash_stop is honoured when
-                # the client provides it (how exactly the client knows the hash is another
-                # question....)
-                await listening_node.headers.insert_headers(simples[10:])
-                listening_chain = await listening_node.headers.longest_chain()
-                assert client_chain.tip != listening_chain.tip
-
-                to_height = 15
-                hash_stop = simples[to_height].hash
-                with pytest.raises(MemoryError):
-                    await client_node.connect(listening_node.service, session_cls=ClientSession)
-
-                assert in_caplog(caplog, f'headers synchronized to height {to_height}')
-                client_chain = await client_node.headers.longest_chain()
-                assert client_chain.tip.height == to_height
-                assert (await listening_node.headers.header_at_height(listening_chain, to_height)
-                        == client_chain.tip)
+        assert in_caplog(caplog, 'headers synchronized to height 19')
 
     @pytest.mark.asyncio
     async def test_getheaders_shorter(self, client_node, listening_node, caplog):
@@ -1329,6 +1333,11 @@ class TestSession:
                 await self.get_headers()
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
+                assert not in_caplog(caplog, 'headers synchronized to height 9')
+                await self.get_headers()
+                assert not self.headers_received.is_set()
+                await self.headers_received.wait()
+                assert in_caplog(caplog, 'headers synchronized to height 9')
                 raise MemoryError
 
         simples = first_mainnet_headers(10)
@@ -1353,4 +1362,41 @@ class TestSession:
                 assert client_chain.tip.hash == client_branch[-1].hash
                 assert listening_chain.tip.hash == simples[-1].hash
 
-                assert in_caplog(caplog, 'headers synchronized to height 9')
+    @pytest.mark.asyncio
+    async def test_unchained_headers(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                branch = create_random_branch(Bitcoin.genesis_header, 5)
+                branch.extend(create_random_branch(Bitcoin.genesis_header, 1))
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
+                await pause()
+                raise ForceDisconnectError
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'headers message with headers that do not form a chain')
+
+    @pytest.mark.asyncio
+    async def test_too_many_headers(self, client_node, listening_node, caplog):
+
+        class ClientSession(Session):
+            async def on_handshake(self, _group):
+                self.MAX_HEADERS = 5
+                await self.get_headers()
+                await self.headers_received.wait()
+                raise MemoryError
+
+        branch = create_random_branch(Bitcoin.genesis_header, 10)
+        await listening_node.headers.insert_headers(branch, check_work=False)
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(MemoryError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        print_caplog(caplog)
+        assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')
