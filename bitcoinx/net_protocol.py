@@ -18,7 +18,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import Sequence
 
-from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
+from .asyncio_compat import TaskGroup, ExceptionGroup
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, HeaderException, MissingHeader
 )
@@ -201,14 +201,6 @@ class ServicePacking:
         address, services = cls.read(read)
         return (address, services, timestamp)
 
-    @classmethod
-    def read_addrs(cls, read):
-        '''Return a lits of (NetAddress, services, timestamp) triples from an addr
-        message payload.'''
-        count = read_varint(read)
-        read_with_timestamp = cls.read_with_timestamp
-        return [read_with_timestamp(read) for _ in range(count)]
-
 
 class BitcoinService:
     '''Represents a bitcoin network service.
@@ -253,9 +245,13 @@ class BitcoinService:
         '''Return the address and service flags as an encoded service.'''
         return ServicePacking.pack(self.address, self.services)
 
-    def pack_with_timestamp(self, timestamp):
+    def pack_with_timestamp(self):
         '''Return an encoded service with a 4-byte timestamp prefix.'''
-        return ServicePacking.pack_with_timestamp(self.address, self.services, timestamp)
+        return ServicePacking.pack_with_timestamp(self.address, self.services,
+                                                  self.safe_timestamp())
+
+    def safe_timestamp(self):
+        return int(time.time()) if self.timestamp is None else self.timestamp
 
     def __str__(self):
         return repr(self)
@@ -353,7 +349,7 @@ def read_version_payload(service, payload):
         service.assoc_id = None
 
     if read(1) != b'':
-        logging.info('extra bytes at end of version payload')
+        logging.warning('extra bytes at end of version payload')
 
     return (our_address, our_services, nonce)
 
@@ -372,13 +368,12 @@ def version_payload(service, remote_service, nonce):
     else:
         remote_service_packed = remote_service.pack()
 
-    timestamp = int(time.time()) if service.timestamp is None else service.timestamp
     assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
 
     return b''.join((
         pack_le_int32(service.protocol_version),
         pack_le_uint64(service.services),
-        pack_le_int64(timestamp),
+        pack_le_int64(service.safe_timestamp()),
         remote_service_packed,
         service.pack(),   # In practice this is ignored by receiver
         nonce,
@@ -407,7 +402,22 @@ def unpack_headers_payload(payload):
     except PackingError:
         raise ProtocolError('truncated headers payload')
     if read(1) != b'':
-        logging.info('extra bytes at end of headers payload')
+        logging.warning('extra bytes at end of headers payload')
+    return result
+
+
+def pack_addr_payload(services):
+    return pack_list(services, BitcoinService.pack_with_timestamp)
+
+
+def unpack_addr_payload(payload):
+    read = BytesIO(payload).read
+    try:
+        result = read_list(read, ServicePacking.read_with_timestamp)
+    except PackingError:
+        raise ProtocolError('truncated addr payload')
+    if read(1) != b'':
+        logging.warning('extra bytes at end of addr payload')
     return result
 
 
@@ -467,7 +477,7 @@ class BlockLocator:
         if len(hash_stop) != 32:
             raise ProtocolError('truncated getheaders payload')
         if read(1) != b'':
-            logging.info('extra bytes at end of getheaders payload')
+            logging.warning('extra bytes at end of getheaders payload')
 
         return cls(version, locator, hash_stop)
 
@@ -704,6 +714,7 @@ class Session:
             header = 'incoming'
             try:
                 header = await MessageHeader.from_stream(connection.recv_exactly)
+                # FIXME: don't wait for message processing....
                 await self.handle_message(connection, header)
             except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
                 self.logger.error('connection closed remotely')
@@ -731,6 +742,7 @@ class Session:
     async def on_handshake(self, group):
         group.create_task(self.send_protoconf())
         group.create_task(self.send_sendheaders())
+        group.create_task(self.send_getaddr())
 
     async def _send_unqueued(self, connection, command, payload):
         '''Send a command without queueing.  For use with handshake negotiation.'''
@@ -842,27 +854,19 @@ class Session:
             await handler(connection, size)
         return True
 
+    async def services(self):
+        '''Returns the services to send in response to a getaddr message.  Intended to be
+        overridden.'''
+        return [self.node.service]
+
     # Call to request various things from the peer
 
-    async def get_addr(self):
-        '''Call to request network nodes from the peer.'''
-
     async def get_data(self, items):
+
         '''Request various items from the peer.'''
 
     async def get_block(self, block_hash):
         '''Call to request the block with the given hash.'''
-
-    async def sync_headers(self, timeout_secs):
-        self.headers_synced = False
-        while not self.headers_synced:
-            await self.get_headers()
-            try:
-                async with timeout(timeout_secs):
-                    await self.headers_received.wait()
-            except asyncio.TimeoutError:
-                logging.error(f'timeout syncing headers after {timeout}s')
-                break
 
     async def block_locator(self):
         return await BlockLocator.from_block_hash(self.node.service.protocol_version,
@@ -880,12 +884,6 @@ class Session:
         self.headers_received.clear()
 
     # Callbacks when certain messages are received.
-
-    async def on_addr(self, services):
-        '''Called when an addr message is received.'''
-
-    async def on_block(self, raw):
-        '''Called when a block is received.'''
 
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
@@ -981,3 +979,14 @@ class Session:
         if self.remote_service.understands_sendheaders():
             self.sendheaders_sent = True
             await self.send_message(MessageHeader.SENDHEADERS, b'')
+
+    async def on_getaddr(self, payload):
+        if payload:
+            self.logger.warning('getaddr message has payload')
+        await self.send_message(MessageHeader.ADDR, pack_addr_payload(await self.services()))
+
+    async def send_getaddr(self):
+        await self.send_message(MessageHeader.GETADDR, b'')
+
+    async def on_addr(self, payload):
+        unpack_addr_payload(payload)

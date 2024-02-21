@@ -22,7 +22,7 @@ from bitcoinx import (
 from bitcoinx.misc import chunks
 from bitcoinx.net_protocol import (
     ServicePacking, BlockLocator, version_payload, read_version_payload, _command,
-    pack_headers_payload, unpack_headers_payload,
+    pack_headers_payload, unpack_headers_payload, unpack_addr_payload
 )
 from bitcoinx.asyncio_compat import timeout
 
@@ -420,12 +420,12 @@ class TestServicePacking:
         assert services == srvcs
         assert addr == NetAddress.from_string(address)
 
-    def test_read_addrs(self):
+    def test_unpack_addr_payload(self):
         raw = bytearray()
         raw += pack_varint(len(pack_ts_tests))
         for address, _, ts, packed in pack_ts_tests:
             raw += bytes.fromhex(packed)
-        result = ServicePacking.read_addrs(BytesIO(raw).read)
+        result = unpack_addr_payload(raw)
         assert len(result) == len(pack_ts_tests)
         for n, (addr, srvcs, ts) in enumerate(result):
             address, services, timestamp, packed = pack_ts_tests[n]
@@ -642,7 +642,7 @@ class TestNetworkProtocol:
     def test_getheaders_payload_long(self, caplog):
         locator = BlockLocator(700, [urandom(32) for _ in range(3)], urandom(32))
         payload = locator.to_payload() + b'0'
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.WARNING):
             assert locator == BlockLocator.from_payload(payload)
 
         assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
@@ -1040,7 +1040,7 @@ class TestSession:
                                           await self.version_payload() + bytes(2))
                 await pause()
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
                 await client_node.connect(listening_node.service, session_cls=OutSession)
 
@@ -1420,6 +1420,26 @@ class TestSession:
         assert in_caplog(caplog, 'hash value exceeds its target')
 
     @pytest.mark.asyncio
+    async def test_excess_headers_payload(self, client_node, listening_node, caplog):
+
+        class ListenerSession(Session):
+            async def on_handshake(self, _group):
+                await self.send_message(MessageHeader.HEADERS,
+                                        pack_headers_payload(simples) + b'1')
+                await pause()
+                raise ForceDisconnectError
+
+        simples = first_mainnet_headers(2)
+        await listening_node.headers.insert_headers(simples)
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service)
+
+        assert in_caplog(caplog, 'extra bytes at end of headers payload')
+
+    @pytest.mark.asyncio
     async def test_too_many_headers(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
@@ -1444,7 +1464,7 @@ class TestSession:
     #
 
     @pytest.mark.asyncio
-    async def test_sendheaders_is_sent(self, client_node, listening_node):
+    async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
 
         class ClientSession(Session):
             async def on_handshake(self, group):
@@ -1453,6 +1473,8 @@ class TestSession:
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert self.they_prefer_headers
                 assert listener_session.they_prefer_headers
+                assert self.their_protoconf
+                assert listener_session.their_protoconf
                 raise MemoryError
 
         async with listening_node.listen():
@@ -1500,7 +1522,6 @@ class TestSession:
             async with listening_node.listen():
                 with pytest.raises(MemoryError):
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
-
 
     @pytest.mark.asyncio
     async def test_sendheaders_payload(self, client_node, listening_node, caplog):
