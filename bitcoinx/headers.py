@@ -96,6 +96,15 @@ class SimpleHeader:
                 f'merkle_root={hths(self.merkle_root)}, timestamp={self.timestamp}, '
                 f'bits=0x{self.bits}, nonce={self.nonce}, hash={hths(self.hash)})')
 
+    @staticmethod
+    def are_headers_chained(headers):
+        prev_hash = None
+        for header in headers:
+            if header.prev_hash != prev_hash and prev_hash is not None:
+                return False
+            prev_hash = header.hash
+        return True
+
 
 @dataclass
 class Header(SimpleHeader):

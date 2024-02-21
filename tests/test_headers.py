@@ -31,6 +31,15 @@ class TestSimpleHeader:
             '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f)'
         )
 
+    def test_are_headers_chained_good(self):
+        branch = create_random_branch(Bitcoin.genesis_header, 10)
+        assert SimpleHeader.are_headers_chained(branch) is True
+
+    def test_are_headers_chained_not(self):
+        branch = create_random_branch(Bitcoin.genesis_header, 10)
+        branch.append(create_random_header(Bitcoin.genesis_header))
+        assert SimpleHeader.are_headers_chained(branch) is False
+
 
 class TestHeader:
 
