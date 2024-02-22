@@ -96,6 +96,7 @@ class TestHeaders:
             header = network.genesis_header
             header2 = await headers.header_from_hash(header.hash)
             assert same_headers(header, header2)
+            await self.check_tip_and_height(headers)
 
         run_test_with_headers(test, network)
 
@@ -339,6 +340,8 @@ class TestHeaders:
                     assert ((await headers.header_at_height(chain, height)).hash
                             == full_chain[height].hash)
 
+            await self.check_tip_and_height(headers)
+
         run_test_with_headers(test)
 
     def test_header_at_height_bad(self):
@@ -379,6 +382,8 @@ class TestHeaders:
             assert longest in chains
             assert all(chain.chain_work() <= longest.chain_work() for chain in chains)
 
+            await self.check_tip_and_height(headers)
+
         run_test_with_headers(test)
 
     async def check_tree(self, headers, genesis_header, tree):
@@ -398,8 +403,14 @@ class TestHeaders:
         async def test(headers):
             tree, genesis_header = await self.insert_random_tree(headers)
             await self.check_tree(headers, genesis_header, tree)
+            await self.check_tip_and_height(headers)
 
         run_test_with_headers(test)
+
+    async def check_tip_and_height(self, headers):
+        chain = await headers.longest_chain()
+        assert await headers.tip() == chain.tip
+        assert await headers.height() == chain.tip.height
 
     def test_chains_manual(self):
         async def test(headers):
@@ -432,6 +443,8 @@ class TestHeaders:
             assert set(await headers.chains(H4.hash)) == {chain_1}
             assert set(await headers.chains(H5.hash)) == {chain_2}
             assert set(await headers.chains(H6.hash)) == {chain_3}
+
+            await self.check_tip_and_height(headers)
 
         run_test_with_headers(test)
 

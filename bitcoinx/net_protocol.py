@@ -568,10 +568,6 @@ class Node:
         self.outgoing_sessions = set()
         self.incoming_sessions = set()
 
-    async def height(self):
-        chain = await self.headers.longest_chain()
-        return chain.tip.height
-
     def random_nonce(self):
         while True:
             nonce = random_nonce()
@@ -758,7 +754,7 @@ class Session:
     async def version_payload(self):
         # Send version message with our current height
         our_service = self.node.service
-        our_service.start_height = await self.node.height()
+        our_service.start_height = await self.node.headers.height()
         self.log_service_details(our_service, 'sending version message:')
         return version_payload(our_service, self.remote_service.address, self.nonce)
 

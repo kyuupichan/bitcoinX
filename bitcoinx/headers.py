@@ -348,6 +348,14 @@ class Headers:
                 longest, max_work = chain, chain_work
         return longest
 
+    async def tip(self):
+        '''Returns the tip of the longest chain.'''
+        return (await self.longest_chain()).tip
+
+    async def height(self):
+        '''Returns the height of the longest chain.'''
+        return (await self.tip()).height
+
     async def _header_at_height(self, chain_id, height):
         where_clause = f'''height={height} AND chain_id=(
             SELECT chain_id FROM (
