@@ -22,7 +22,7 @@ from bitcoinx import (
 from bitcoinx.misc import chunks
 from bitcoinx.net_protocol import (
     ServicePacking, BlockLocator, version_payload, read_version_payload, _command,
-    pack_headers_payload, unpack_headers_payload, unpack_addr_payload
+    pack_headers_payload, unpack_headers_payload, unpack_addr_payload, services_from_seeds,
 )
 from bitcoinx.asyncio_compat import timeout
 
@@ -847,6 +847,12 @@ async def achunks(payload, size):
 async def pause(secs=None):
     secs = 0.05 if platform.system() == 'Windows' else 0.01
     await asyncio.sleep(secs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('network', all_networks)
+async def test_services_from_seeds(network):
+    return await services_from_seeds(network)
 
 
 class TestNode:

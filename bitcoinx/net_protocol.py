@@ -8,6 +8,7 @@
 import asyncio
 import logging
 import os
+import socket
 import sys
 import time
 from asyncio import Event, Queue, open_connection
@@ -18,7 +19,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import Sequence
 
-from .asyncio_compat import TaskGroup, ExceptionGroup
+from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, HeaderException, MissingHeader
 )
@@ -554,6 +555,39 @@ class Connection:
 
     async def __aexit__(self, *args):
         await self.close()
+
+
+async def services_from_seeds(network, time_out=10.0):
+    async def seed_addresses(loop, host):
+        port = network.default_port
+        try:
+            info = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as e:
+            logging.info(f'error looking up seed {host}: {e}')
+            return []
+        assert all(item[0] in (socket.AF_INET, socket.AF_INET6) for item in info)
+        assert all(item[1] == socket.SOCK_STREAM for item in info)
+        assert all(item[2] == socket.IPPROTO_TCP for item in info)
+        assert all(not item[3] for item in info)
+        return [item[4] for item in info]
+
+    tasks = []
+    loop = asyncio.get_running_loop()
+    try:
+        async with timeout(time_out):
+            async with TaskGroup() as group:
+                for seed in network.seeds:
+                    tasks.append(group.create_task(seed_addresses(loop, seed)))
+    except TimeoutError:
+        pass
+
+    addresses = set()
+    for task in tasks:
+        if not task.cancelled():
+            addresses.update(task.result())
+    # FIXME: NetAddress should preserve the 4-tuple for IPv6
+    return [BitcoinService(address=NetAddress(address[0], address[1]))
+            for address in addresses]
 
 
 class Node:
