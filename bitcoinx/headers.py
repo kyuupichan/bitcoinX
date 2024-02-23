@@ -254,7 +254,8 @@ class Headers:
         self.genesis_header = await self.header_from_hash(gh.hash)
 
     async def insert_headers(self, simple_headers, *, check_work=True):
-        '''Insert headers into the Headers table.
+        '''Insert headers into the Headers table, and returns the number of new headers actually
+        added.
 
         simple_headers is a sequence of SimpleHeader objects.  Proof of work is checked
         if check_work is True.
@@ -276,6 +277,7 @@ class Headers:
 
         execute = self.conn.execute
         required_bits = self.network.required_bits
+        count = 0
         for header in simple_headers:
             cursor = await execute(prev_header_sql, (header.prev_hash, ))
             row = await cursor.fetchone()
@@ -295,10 +297,12 @@ class Headers:
                     raise InsufficientPoW(header)
 
             chain_work = int_to_le_bytes(le_bytes_to_int(chain_work) + bits_to_work(header.bits))
-            await execute(insert_header_sql,
+            cursor = await execute(insert_header_sql,
                           (prev_hdr_id, chain_work, header.hash, header.merkle_root,
                            header.version, header.timestamp, header.bits, header.nonce,
                            header.prev_hash))
+            count += cursor.rowcount
+        return count
 
     async def _query_headers(self, where_clause, params, is_multi):
         sql = f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, height,

@@ -161,7 +161,7 @@ class TestHeaders:
     @staticmethod
     async def insert_first_headers(headers, count):
         simple_headers = first_mainnet_headers(count)
-        await headers.insert_headers(simple_headers)
+        assert await headers.insert_headers(simple_headers) == count - 1
         return simple_headers
 
     def test_insert_headers(self):
@@ -202,11 +202,14 @@ class TestHeaders:
         async def test(headers):
             N = 5
             branch = create_random_branch(headers.genesis_header, N)
-            await headers.insert_headers(branch[:N - 1], check_work=False)
+            count = await headers.insert_headers(branch[:-1], check_work=False)
+            assert count == N - 1
             chain = await headers.longest_chain()
-            assert chain.tip.height == 4
-            await headers.insert_headers(branch, check_work=False)
-            assert chain.tip.height == 4
+            assert chain.tip.height == N - 1
+            count = await headers.insert_headers(branch, check_work=False)
+            assert count == 1
+            chain = await headers.longest_chain()
+            assert chain.tip.height == N
 
         run_test_with_headers(test)
 
@@ -241,12 +244,12 @@ class TestHeaders:
     def test_headers_height_1(self):
         async def test(headers):
             header1 = create_random_header(headers.genesis_header)
-            await headers.insert_headers([header1], check_work=False)
+            assert await headers.insert_headers([header1], check_work=False) == 1
             header1 = await headers.header_from_hash(header1.hash)
             assert header1.chain_id == headers.genesis_header.chain_id
 
             header2 = create_random_header(headers.genesis_header)
-            await headers.insert_headers([header2], check_work=False)
+            assert await headers.insert_headers([header2], check_work=False) == 1
             header2 = await headers.header_from_hash(header2.hash)
             assert header2.chain_id != headers.genesis_header.chain_id
 
@@ -425,7 +428,7 @@ class TestHeaders:
             H6, = create_random_branch(H1, 1)
 
             H = (H1, H2, H3, H4, H5, H6)
-            await headers.insert_headers(H, check_work=False)
+            assert await headers.insert_headers(H, check_work=False) == len(H)
 
             # This ensures chain_id is set
             H1, H2, H3, H4, H5, H6 = [await headers.header_from_hash(h.hash) for h in H]
