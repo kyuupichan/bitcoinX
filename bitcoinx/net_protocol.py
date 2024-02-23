@@ -686,14 +686,13 @@ class Session:
     '''
     MAX_HEADERS = 2000
 
-    def __init__(self, node, remote_service, connection, is_outgoing, *, on_handshake=None):
+    def __init__(self, node, remote_service, connection, is_outgoing):
         self.node = node
         self.remote_service = remote_service
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = is_outgoing
         self.protoconf = Protoconf.default()
-        self._on_handshake = on_handshake or self.__class__.on_handshake
         self.streaming_min_size = 10_000_000
 
         # State
@@ -710,6 +709,7 @@ class Session:
         self.sendheaders_sent = False
         self.we_prefer_headers = True
         self.they_prefer_headers = False
+        self.group = None
 
         # Logging
         logger = logging.getLogger('Session')
@@ -721,6 +721,7 @@ class Session:
         '''Handle sending the queue of messages.  This sends all messages except the initial
         version / verack handshake.
         '''
+        await self.verack_received.wait()
         send = self.connection.send
         while True:
             header, payload = await connection.outgoing_messages.get()
@@ -754,17 +755,23 @@ class Session:
                 self.logger.exception(f'unexpected error handling {header} message')
                 raise
 
+    async def disconnect(self):
+        if not self.group:
+            raise RuntimeError('not connected')
+        await self.group.cancel_remaining()
+
     async def maintain_connection(self, connection):
         '''Maintains a connection.'''
+        self.group = TaskGroup()
         try:
-            async with TaskGroup() as group:
+            async with self.group as group:
                 group.create_task(self.recv_messages_loop(connection))
-                group.create_task(self.perform_handshake(connection))
-                await self.verack_received.wait()
+                group.create_task(self.perform_handshake(connection, group))
                 group.create_task(self.send_messages_loop(connection))
-                await self._on_handshake(self, group)
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
+        finally:
+            self.group = None
 
     async def on_handshake(self, group):
         group.create_task(self.send_protoconf())
@@ -797,7 +804,7 @@ class Session:
     async def send_verack_message(self, connection):
         await self._send_unqueued(connection, MessageHeader.VERACK, b'')
 
-    async def perform_handshake(self, connection):
+    async def perform_handshake(self, connection, group):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
         if self.is_outgoing:
@@ -812,6 +819,7 @@ class Session:
         # Send verack.  The handhsake is complete once verack is received
         await self.send_verack_message(connection)
         await self.verack_received.wait()
+        await self.on_handshake(group)
 
     def connection_for_command(self, _command):
         return self.connection
@@ -910,7 +918,7 @@ class Session:
         self.headers_received.clear()
 
     async def sync_headers(self, time_out=30.0):
-        prior_work = initial_work = self.their_tip.chain_work()
+        current_work = initial_work = self.their_tip.chain_work()
         while True:
             prior_work = current_work
             await self.get_headers()
@@ -986,9 +994,9 @@ class Session:
             raise ProtocolError('verack message received before version message sent')
         if self.verack_received.is_set():
             raise ProtocolError('duplicate verack message')
-        self.verack_received.set()
         if payload:
             self.logger.warning('verack message has payload')
+        self.verack_received.set()
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''

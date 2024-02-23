@@ -1,237 +1,217 @@
 # Provide timeouts similar to curio, code based on aiorpcX.  They are more useful than
 # those introduced in Python 3.11.
-
-# Provide slightly degraded TaskGroup functions for Python 3.10 and earlier.
-# Taken from Lib/asyncio/taskgroups.py, Lib/asyncio/timeouts.py.
-# Adapted with permission from the EdgeDB project; license: PSFL.
+#
+# Also provide a TaskGroup that is similar to that in Python 3.11, but has slightly
+# better semantics.  I'm not a fan of those in curio or Python 3.11.
 
 import sys
-from asyncio import get_running_loop, CancelledError, current_task
+from asyncio import get_running_loop, CancelledError, current_task, Semaphore, Event
+from collections import deque
 
 
-if sys.version_info >= (3, 11):
+if sys.version_info < (3, 11):
 
-    from asyncio import TaskGroup
-    ExceptionGroup = ExceptionGroup   # noqa: F821
+    class BaseExceptionGroup(BaseException):
+        def __new__(cls, msg, excs):
+            if not excs:
+                raise ValueError('exceptions must be a non-empty sequence')
+            if not all(isinstance(exc, BaseException) for exc in excs):
+                raise ValueError('exceptions must be instances of BaseException')
+            is_eg = issubclass(cls, ExceptionGroup)
+            if all(isinstance(exc, Exception) for exc in excs):
+                if not is_eg:
+                    cls = ExceptionGroup
+            elif is_eg:
+                raise TypeError('exceptions must all be instances of Exception')
+            return super().__new__(cls, msg, excs)
 
-else:
-    import enum
-    from types import TracebackType
-    from typing import final, Optional, Type
+        def __init__(self, msg, excs):
+            self._msg = msg
+            self._excs = tuple(excs)
 
-    class ExceptionGroup(Exception):
+        @property
+        def message(self):
+            return self._msg
+
+        @property
+        def exceptions(self):
+            return self._excs
+
+    class ExceptionGroup(BaseExceptionGroup, Exception):
         pass
 
-    class TaskGroup:
-        # parent cancelling is removed....
+else:
+    BaseExceptionGroup = BaseExceptionGroup
+    ExceptionGroup = ExceptionGroup
 
-        def __init__(self):
-            self._entered = False
-            self._exiting = False
-            self._aborting = False
-            self._loop = None
-            self._parent_task = None
-            self._parent_cancel_requested = False
-            self._tasks = set()
-            self._errors = []
-            self._base_error = None
-            self._on_completed_fut = None
 
-        def __repr__(self):
-            info = ['']
-            if self._tasks:
-                info.append(f'tasks={len(self._tasks)}')
-            if self._errors:
-                info.append(f'errors={len(self._errors)}')
-            if self._aborting:
-                info.append('cancelling')
-            elif self._entered:
-                info.append('entered')
+class TaskGroup:
+    '''A class representing a group of executing tasks. New tasks can be added using the
+    create_task() or add_task() methods below.
 
-            info_str = ' '.join(info)
-            return f'<TaskGroup{info_str}>'
+    When join() is called, any task that raises an exception other than CancelledError
+    causes the all the other tasks in the group to be cancelled.  Similarly, if the join()
+    operation itself is cancelled then all running tasks in the group are cancelled.  Once
+    join() returns all tasks have completed and new tasks may not be added.  Tasks can be
+    added while join() is waiting.
 
-        async def __aenter__(self):
-            if self._entered:
-                raise RuntimeError(
-                    f"TaskGroup {self!r} has already been entered")
-            if self._loop is None:
-                self._loop = get_running_loop()
-            self._parent_task = current_task(self._loop)
-            if self._parent_task is None:
-                raise RuntimeError(
-                    f'TaskGroup {self!r} cannot determine the parent task')
-            self._entered = True
+    A TaskGroup is normally used as a context manager, which calls the join() method on
+    context-exit.  Each TaskGroup is an independent entity.  Task groups do not form a
+    hierarchy or any kind of relationship to other previously created task groups or
+    tasks.
 
-            return self
+    A TaskGroup can be used as an asynchronous iterator, where each task is returned as it
+    completes.
 
-        async def __aexit__(self, et, exc, tb):
-            self._exiting = True
+    All still-running tasks can be cancelled by calling cancel_remaining().  It waits for
+    the tasks to be cancelled and then returns.  If any task blocks cancellation, this
+    routine will not return - a similar caution applies to join().
 
-            if (exc is not None and
-                    self._is_base_error(exc) and
-                    self._base_error is None):
-                self._base_error = exc
+    The public attribute joined is True if the task group join() operation has completed.
+    New tasks cannot be added to a joined task group.
 
-            if et is not None and issubclass(et, CancelledError):
-                propagate_cancellation_error = exc
-            else:
-                propagate_cancellation_error = None
+    Once all tasks are done, if any raised an exception then those are raised in a
+    BaseExceptionGroup.  If the task group itself raised an error (other than an instance
+    of CancelledError) then that is included.
+    '''
 
-            if et is not None:
-                if not self._aborting:
-                    # Our parent task is being cancelled:
-                    #
-                    #    async with TaskGroup() as g:
-                    #        g.create_task(...)
-                    #        await ...  # <- CancelledError
-                    #
-                    # or there's an exception in "async with":
-                    #
-                    #    async with TaskGroup() as g:
-                    #        g.create_task(...)
-                    #        1 / 0
-                    #
-                    self._abort()
+    def __init__(self):
+        self._loop = None
+        # Tasks that have not yet finished
+        self._pending = set()
+        # Tasks that have completed and whose results have not yet been processed
+        self._done = deque()
+        self._semaphore = Semaphore(0)
+        self._errors = []
+        self.joined = False
 
-            # We use while-loop here because "self._on_completed_fut"
-            # can be cancelled multiple times if our parent task
-            # is being cancelled repeatedly (or even once, when
-            # our own cancellation is already in progress)
-            while self._tasks:
-                if self._on_completed_fut is None:
-                    self._on_completed_fut = self._loop.create_future()
-
-                try:
-                    await self._on_completed_fut
-                except CancelledError as ex:
-                    if not self._aborting:
-                        # Our parent task is being cancelled:
-                        #
-                        #    async def wrapper():
-                        #        async with TaskGroup() as g:
-                        #            g.create_task(foo)
-                        #
-                        # "wrapper" is being cancelled while "foo" is
-                        # still running.
-                        propagate_cancellation_error = ex
-                        self._abort()
-                self._on_completed_fut = None
-
-            assert not self._tasks
-
-            if self._base_error is not None:
-                raise self._base_error
-
-            # Propagate CancelledError if there is one, except if there
-            # are other errors -- those have priority.
-            if propagate_cancellation_error is not None and not self._errors:
-                raise propagate_cancellation_error
-
-            if et is not None and not issubclass(et, CancelledError):
+    def _on_done(self, task):
+        task._task_group = None
+        self._pending.discard(task)
+        self._done.append(task)
+        self._semaphore.release()
+        if not task.cancelled():
+            exc = task.exception()
+            if exc:
                 self._errors.append(exc)
 
-            if self._errors:
-                # Exceptions are heavy objects that can have object
-                # cycles (bad for GC); let's not keep a reference to
-                # a bunch of them.
-                try:
-                    me = self._errors[0]
-                    raise me from None
-                finally:
-                    self._errors = None
+    def _add_task(self, task):
+        '''Add an already existing task to the task group.'''
+        if hasattr(task, '_task_group'):
+            raise RuntimeError('task is already part of a group')
+        task._task_group = self
+        if task.done():
+            self._on_done(task)
+        else:
+            self._pending.add(task)
+            task.add_done_callback(self._on_done)
 
-        def create_task(self, coro, *, name=None, context=None):
-            """Create a new task in this group and return it.
+    def create_task(self, coro, *, name=None, context=None):
+        '''Create a new task and put it in the group. Returns a Task instance.'''
+        if self.joined:
+            raise RuntimeError('task group terminated')
+        if context:
+            task = self._loop.create_task(coro, name=name, context=context)
+        else:
+            task = self._loop.create_task(coro, name=name)
+        self._add_task(task)
+        return task
 
-            Similar to `asyncio.create_task`.
-            """
-            if not self._entered:
-                raise RuntimeError(f"TaskGroup {self!r} has not been entered")
-            if self._exiting and not self._tasks:
-                raise RuntimeError(f"TaskGroup {self!r} is finished")
-            if self._aborting:
-                raise RuntimeError(f"TaskGroup {self!r} is shutting down")
-            if context is None:
-                task = self._loop.create_task(coro, name=name)
-            else:
-                task = self._loop.create_task(coro, name=name, context=context)
+    async def add_task(self, task):
+        '''Add an already existing task to the task group.'''
+        if self.joined:
+            raise RuntimeError('task group terminated')
+        self._add_task(task)
 
-            # optimization: Immediately call the done callback if the task is
-            # already done (e.g. if the coro was able to complete eagerly),
-            # and skip scheduling a done callback
-            if task.done():
-                self._on_task_done(task)
-            else:
-                self._tasks.add(task)
-                task.add_done_callback(self._on_task_done)
-            return task
+    async def next_done(self):
+        '''Return the next completed task and remove it from the group.  Return None if no more
+        tasks remain. A TaskGroup may also be used as an asynchronous iterator.
+        '''
+        if self._done or self._pending:
+            await self._semaphore.acquire()
+        if self._done:
+            return self._done.popleft()
+        return None
 
-        # Since Python 3.8 Tasks propagate all exceptions correctly,
-        # except for KeyboardInterrupt and SystemExit which are
-        # still considered special.
+    async def next_result(self):
+        '''Return the result of the next completed task and remove it from the group. If the task
+        failed with an exception, that exception is raised. A RuntimeError exception is
+        raised if no tasks remain.
+        '''
+        task = await self.next_done()
+        if not task:
+            raise RuntimeError('no tasks remain')
+        return task.result()
 
-        def _is_base_error(self, exc: BaseException) -> bool:
-            assert isinstance(exc, BaseException)
-            return isinstance(exc, (SystemExit, KeyboardInterrupt))
+    def _maybe_raise_error(self, exc):
+        assert exc is None or isinstance(exc, CancelledError)
+        # First priority: put the task errors in a group
+        if self._errors:
+            beg = BaseExceptionGroup('unhandled errors in a TaskGroup', self._errors)
+            self._errors = None
+            raise beg from None
 
-        def _abort(self):
-            self._aborting = True
+        # Second: the cancellation error
+        if exc is not None:
+            raise exc
 
-            for t in self._tasks:
-                if not t.done():
-                    t.cancel()
-
-        def _on_task_done(self, task):
-            self._tasks.discard(task)
-
-            if self._on_completed_fut is not None and not self._tasks:
-                if not self._on_completed_fut.done():
-                    self._on_completed_fut.set_result(True)
-            if task.cancelled():
-                return
-
-            exc = task.exception()
+    async def join(self, *, exc=None):
+        '''Wait for tasks in the group to terminate according to the wait policy for the group.
+        '''
+        try:
             if exc is None:
-                return
+                while not self._errors and await self.next_done():
+                    pass
+        except BaseException as e:
+            exc = e
+        finally:
+            if exc:
+                if not isinstance(exc, CancelledError):
+                    self._errors.append(exc)
+                    exc = None
+            self.joined = True
+            await self.cancel_remaining()
+            self._maybe_raise_error(exc)
 
-            self._errors.append(exc)
-            if self._is_base_error(exc) and self._base_error is None:
-                self._base_error = exc
+    async def _cancel_tasks(self, tasks):
+        '''Cancel the passed set of tasks.  Wait for them to complete.'''
+        for task in tasks:
+            task.cancel()
 
-            if self._parent_task.done():
-                # Not sure if this case is possible, but we want to handle
-                # it anyways.
-                self._loop.call_exception_handler({
-                    'message': f'Task {task!r} has errored out but its parent '
-                               f'task {self._parent_task} is already completed',
-                    'exception': exc,
-                    'task': task,
-                })
-                return
+        if tasks:
+            def pop_task(task):
+                unfinished.remove(task)
+                if not unfinished:
+                    all_done.set()
 
-            if not self._aborting:
-                # If parent task *is not* being cancelled, it means that we want
-                # to manually cancel it to abort whatever is being run right now
-                # in the TaskGroup.  But we want to mark parent task as
-                # "not cancelled" later in __aexit__.  Example situation that
-                # we need to handle:
-                #
-                #    async def foo():
-                #        try:
-                #            async with TaskGroup() as g:
-                #                g.create_task(crash_soon())
-                #                await something  # <- this needs to be canceled
-                #                                 #    by the TaskGroup, e.g.
-                #                                 #    foo() needs to be cancelled
-                #        except Exception:
-                #            # Ignore any exceptions raised in the TaskGroup
-                #            pass
-                #        await something_else     # this line has to be called
-                #                                 # after TaskGroup is finished.
-                self._abort()
-                self._parent_cancel_requested = True
-                self._parent_task.cancel()
+            unfinished = set(tasks)
+            all_done = Event()
+            for task in tasks:
+                task.add_done_callback(pop_task)
+            await all_done.wait()
+
+    async def cancel_remaining(self):
+        '''Cancel all remaining tasks and wait for them to complete.
+        If any task blocks cancellation this routine will not return.
+        '''
+        await self._cancel_tasks(self._pending)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        task = await self.next_done()
+        if task:
+            return task
+        raise StopAsyncIteration
+
+    async def __aenter__(self):
+        if self._loop is None:
+            self._loop = get_running_loop()
+        return self
+
+    async def __aexit__(self, et, exc, _traceback):
+        await self.join(exc=exc)
 
 
 class TimeoutCancellationError(Exception):
@@ -335,65 +315,32 @@ class Deadline:
 
 
 def timeout_after(seconds):
-    '''Execute the specified coroutine and return its result. However,
-    issue a cancellation request to the calling task after seconds
-    have elapsed.  When this happens, a TaskTimeout exception is
-    raised.  If coro is None, the result of this function serves
-    as an asynchronous context manager that applies a timeout to a
-    block of statements.
+    '''The result of this function serves as an asynchronous context manager that applies a
+    timeout to a block of statements.  It issues a cancellation request to the calling
+    task after seconds have elapsed.  When this leaves the context manager, a TimeoutError
+    exception is raised.
 
-    timeout_after() may be composed with other timeout_after()
-    operations (i.e., nested timeouts).  If an outer timeout expires
-    first, then TimeoutCancellationError is raised instead of
-    TaskTimeout.  If an inner timeout expires and fails to properly
-    TaskTimeout, a UncaughtTimeoutError is raised in the outer
+    timeout_after() may be composed with other timeout or ignore operations (i.e., nested
+    timeouts).  If an outer timeout expires first, then TimeoutCancellationError is raised
+    instead of TaskTimeout.  If an inner timeout expires and its TakeTimeout is uncaught
+    and propagates to an outer timeout, an UncaughtTimeoutError is raised in the outer
     timeout.
-
     '''
     return Deadline(seconds)
 
 
 def timeout_at(clock):
-    '''Execute the specified coroutine and return its result. However,
-    issue a cancellation request to the calling task after seconds
-    have elapsed.  When this happens, a TaskTimeout exception is
-    raised.  If coro is None, the result of this function serves
-    as an asynchronous context manager that applies a timeout to a
-    block of statements.
-
-    timeout_after() may be composed with other timeout_after()
-    operations (i.e., nested timeouts).  If an outer timeout expires
-    first, then TimeoutCancellationError is raised instead of
-    TaskTimeout.  If an inner timeout expires and fails to properly
-    TaskTimeout, a UncaughtTimeoutError is raised in the outer
-    timeout.
-
+    '''The same as timeout_after, except an absolute time (in terms of loop.time()) is given,
+    rather than a relative time.
     '''
     return Deadline(clock, is_relative=False)
 
 
 def ignore_after(seconds):
-    '''Execute the specified coroutine and return its result. Issue a
-    cancellation request after seconds have elapsed. When a timeout
-    occurs, no exception is raised. Instead, timeout_result is
-    returned.
-
-    If coro is None, the result is an asynchronous context manager
-    that applies a timeout to a block of statements. For the context
-    manager case, the resulting context manager object has an expired
-    attribute set to True if time expired.
-
-    Note: ignore_after() may also be composed with other timeout
-    operations. TimeoutCancellationError and UncaughtTimeoutError
-    exceptions might be raised according to the same rules as for
-    timeout_after().
-    '''
+    '''The same as timeout_after, except that on timing out no exception is raised.'''
     return Deadline(seconds, raise_timeout=False)
 
 
 def ignore_at(clock):
-    '''
-    Stop the enclosed task or block of code at an absolute
-    clock value. Same usage as ignore_after().
-    '''
+    '''The same as timeout_at, except that on timing out no exception is raised.'''
     return Deadline(clock, raise_timeout=False, is_relative=False)
