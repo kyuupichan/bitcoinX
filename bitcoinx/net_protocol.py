@@ -557,7 +557,7 @@ class Connection:
         await self.close()
 
 
-async def services_from_seeds(network, time_out=10.0):
+async def services_from_seeds(network, timeout=20.0):
     async def seed_addresses(loop, host):
         port = network.default_port
         try:
@@ -571,17 +571,15 @@ async def services_from_seeds(network, time_out=10.0):
         assert all(not item[3] for item in info)
         return [item[4] for item in info]
 
-    tasks = []
+    addresses = set()
     loop = asyncio.get_running_loop()
-    async with ignore_after(time_out):
+    async with ignore_after(timeout):
         async with TaskGroup() as group:
             for seed in network.seeds:
-                tasks.append(group.create_task(seed_addresses(loop, seed)))
+                group.create_task(seed_addresses(loop, seed))
+            async for task in group:
+                addresses.update(task.result())
 
-    addresses = set()
-    for task in tasks:
-        if not task.cancelled():
-            addresses.update(task.result())
     # FIXME: NetAddress should preserve the 4-tuple for IPv6
     return [BitcoinService(address=NetAddress(address[0], address[1]))
             for address in addresses]
@@ -917,12 +915,12 @@ class Session:
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         self.headers_received.clear()
 
-    async def sync_headers(self, time_out=30.0):
+    async def sync_headers(self, timeout=30.0):
         current_work = initial_work = self.their_tip.chain_work()
         while True:
             prior_work = current_work
             await self.get_headers()
-            async with ignore_after(time_out):
+            async with ignore_after(timeout):
                 await self.headers_received.wait()
             current_work = self.their_tip.chain_work
             # if no progress, we presumably have everything
