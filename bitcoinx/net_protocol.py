@@ -19,7 +19,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import Sequence
 
-from .asyncio_compat import TaskGroup, ExceptionGroup, timeout
+from .aiolib import TaskGroup, ExceptionGroup, ignore_after
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, HeaderException, MissingHeader
 )
@@ -573,13 +573,10 @@ async def services_from_seeds(network, time_out=10.0):
 
     tasks = []
     loop = asyncio.get_running_loop()
-    try:
-        async with timeout(time_out):
-            async with TaskGroup() as group:
-                for seed in network.seeds:
-                    tasks.append(group.create_task(seed_addresses(loop, seed)))
-    except TimeoutError:
-        pass
+    async with ignore_after(time_out):
+        async with TaskGroup() as group:
+            for seed in network.seeds:
+                tasks.append(group.create_task(seed_addresses(loop, seed)))
 
     addresses = set()
     for task in tasks:
@@ -911,6 +908,18 @@ class Session:
             self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         self.headers_received.clear()
+
+    async def sync_headers(self, time_out=30.0):
+        prior_work = initial_work = self.their_tip.chain_work()
+        while True:
+            prior_work = current_work
+            await self.get_headers()
+            async with ignore_after(time_out):
+                await self.headers_received.wait()
+            current_work = self.their_tip.chain_work
+            # if no progress, we presumably have everything
+            if current_work <= prior_work:
+                return current_work > initial_work
 
     # Callbacks when certain messages are received.
 

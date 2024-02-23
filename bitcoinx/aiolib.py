@@ -1,17 +1,21 @@
-# Provide slightly degraded TaskGroup and Timeout functions for Python 3.10 and earlier.
+# Provide timeouts similar to curio, code based on aiorpcX.  They are more useful than
+# those introduced in Python 3.11.
+
+# Provide slightly degraded TaskGroup functions for Python 3.10 and earlier.
 # Taken from Lib/asyncio/taskgroups.py, Lib/asyncio/timeouts.py.
 # Adapted with permission from the EdgeDB project; license: PSFL.
 
 import sys
+from asyncio import get_running_loop, CancelledError, current_task
+
 
 if sys.version_info >= (3, 11):
 
-    from asyncio import TaskGroup, timeout, timeout_at, Timeout
+    from asyncio import TaskGroup
     ExceptionGroup = ExceptionGroup   # noqa: F821
 
 else:
     import enum
-    from asyncio import get_running_loop, CancelledError, current_task, TimerHandle, Task
     from types import TracebackType
     from typing import final, Optional, Type
 
@@ -229,163 +233,167 @@ else:
                 self._parent_cancel_requested = True
                 self._parent_task.cancel()
 
-    class _State(enum.Enum):
-        CREATED = "created"
-        ENTERED = "active"
-        EXPIRING = "expiring"
-        EXPIRED = "expired"
-        EXITED = "finished"
 
-    @final
-    class Timeout:
-        """Asynchronous context manager for cancelling overdue coroutines.
+class TimeoutCancellationError(Exception):
+    '''Raised on an inner timeout context when an outer timeout expires first.'''
 
-        Use `timeout()` or `timeout_at()` rather than instantiating this class directly.
-        """
 
-        def __init__(self, when: Optional[float]) -> None:
-            """Schedule a timeout that will trigger at a given loop time.
+class UncaughtTimeoutError(Exception):
+    '''Raised when an inner timeout expires, is not handled, and filters through to an outer
+    context.'''
 
-            - If `when` is `None`, the timeout will never trigger.
-            - If `when < loop.time()`, the timeout will trigger on the next
-              iteration of the event loop.
-            """
-            self._state = _State.CREATED
 
-            self._timeout_handler: Optional[TimerHandle] = None
-            self._task: Optional[Task] = None
-            self._when = when
+class Deadline:
 
-        def when(self) -> Optional[float]:
-            """Return the current deadline."""
-            return self._when
+    def __init__(self, when, *, raise_timeout=True, is_relative=True):
+        self._when = when
+        self._raise = raise_timeout
+        self._is_relative = is_relative
+        self._deadline = None
+        self._in_use = False
+        self.expired = False
 
-        def reschedule(self, when: Optional[float]) -> None:
-            """Reschedule the timeout."""
-            if self._state is not _State.ENTERED:
-                if self._state is _State.CREATED:
-                    raise RuntimeError("Timeout has not been entered")
-                raise RuntimeError(
-                    f"Cannot change state of {self._state.value} Timeout",
-                )
+    @staticmethod
+    def reset_timeout(task):
+        def on_timeout(task):
+            cause = task._timeout_setter
+            assert cause is not None
+            task.cancel()
+            task._timeout_handler = None
+            cause.expired = True
 
-            self._when = when
+        # Find out what cause has the earliest deadline
+        cause = None
+        for deadline in task._deadlines:
+            if not cause or deadline._deadline < cause._deadline:
+                cause = deadline
 
-            if self._timeout_handler is not None:
-                self._timeout_handler.cancel()
+        if task._timeout_handler:
+            # Optimisation only - leave the handler if the cause hasn't changed
+            if task._timeout_setter is cause:
+                return
+            task._timeout_handler.cancel()
+            task._timeout_handler = None
+            task._timeout_setter = None
 
-            if when is None:
-                self._timeout_handler = None
+        if cause:
+            task._timeout_setter = cause
+            loop = get_running_loop()
+            if cause._deadline <= loop.time():
+                on_timeout(task)
             else:
-                loop = get_running_loop()
-                if when <= loop.time():
-                    self._timeout_handler = loop.call_soon(self._on_timeout)
-                else:
-                    self._timeout_handler = loop.call_at(when, self._on_timeout)
+                task._timeout_handler = loop.call_at(cause._deadline, on_timeout, task)
 
-        def expired(self) -> bool:
-            """Is timeout expired during execution?"""
-            return self._state in (_State.EXPIRING, _State.EXPIRED)
-
-        def __repr__(self) -> str:
-            info = ['']
-            if self._state is _State.ENTERED:
-                when = round(self._when, 3) if self._when is not None else None
-                info.append(f"when={when}")
-            info_str = ' '.join(info)
-            return f"<Timeout [{self._state.value}]{info_str}>"
-
-        async def __aenter__(self) -> "Timeout":
-            if self._state is not _State.CREATED:
-                raise RuntimeError("Timeout has already been entered")
+    async def __aenter__(self):
+        if self._in_use:
+            raise RuntimeError('timeout already in use')
+        self._in_use = True
+        self.expired = False
+        if self._when is not None:
+            self._deadline = self._when
+            if self._is_relative:
+                self._deadline += get_running_loop().time()
+            # Add ourself to the task's deadlines
             task = current_task()
-            if task is None:
-                raise RuntimeError("Timeout should be used inside a task")
-            self._state = _State.ENTERED
-            self._task = task
-            self.reschedule(self._when)
-            return self
+            if not hasattr(task, '_deadlines'):
+                task._deadlines = set()
+                task._timeout_handler = None
+                task._timeout_setter = None
+            task._deadlines.add(self)
+            self.reset_timeout(task)
+        return self
 
-        async def __aexit__(
-            self,
-            exc_type: Optional[Type[BaseException]],
-            exc_val: Optional[BaseException],
-            exc_tb: Optional[TracebackType],
-        ) -> Optional[bool]:
-            assert self._state in (_State.ENTERED, _State.EXPIRING)
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self._in_use = False
+        task = current_task()
 
-            if self._timeout_handler is not None:
-                self._timeout_handler.cancel()
-                self._timeout_handler = None
+        if self._deadline is not None:
+            # Remove our deadline regardless of cause.
+            task._deadlines.remove(self)
 
-            if self._state is _State.EXPIRING:
-                self._state = _State.EXPIRED
+            # If we set the current timeout, it needs to be reset
+            if task._timeout_setter is self:
+                self.reset_timeout(task)
 
-                if exc_type is not None:
-                    # Since there are no new cancel requests, we're
-                    # handling this.
-                    if issubclass(exc_type, CancelledError):
-                        raise TimeoutError from exc_val
-                    elif exc_val is not None:
-                        self._insert_timeout_error(exc_val)
-            elif self._state is _State.ENTERED:
-                self._state = _State.EXITED
+        if exc_type is TimeoutError:
+            raise UncaughtTimeoutError
 
-            return None
+        # If a race condition caused an exception to be raised before our cancellation
+        # was processed, let that through
+        if self.expired and exc_type in (CancelledError, TimeoutCancellationError):
+            if exc_type is CancelledError and hasattr(task, 'uncancel'):
+                task.uncancel()
+            if self._raise:
+                raise TimeoutError from None
+            return True
 
-        def _on_timeout(self) -> None:
-            assert self._state is _State.ENTERED
-            self._task.cancel()
-            self._state = _State.EXPIRING
-            # drop the reference early
-            self._timeout_handler = None
-
-        @staticmethod
-        def _insert_timeout_error(exc_val: BaseException) -> None:
-            while exc_val.__context__ is not None:
-                if isinstance(exc_val.__context__, CancelledError):
-                    te = TimeoutError()
-                    te.__context__ = te.__cause__ = exc_val.__context__
-                    exc_val.__context__ = te
-                    break
-                exc_val = exc_val.__context__
-
-    def timeout(delay: Optional[float]) -> Timeout:
-        """Timeout async context manager.
-
-        Useful in cases when you want to apply timeout logic around block
-        of code or in cases when asyncio.wait_for is not suitable. For example:
-
-        >>> async with asyncio.timeout(10):  # 10 seconds timeout
-        ...     await long_running_task()
+        # Did an outer timeout trigger?
+        if exc_type is CancelledError and task._timeout_setter:
+            if hasattr(task, 'uncancel'):
+                task.uncancel()
+            raise TimeoutCancellationError
 
 
-        delay - value in seconds or None to disable timeout logic
+def timeout_after(seconds):
+    '''Execute the specified coroutine and return its result. However,
+    issue a cancellation request to the calling task after seconds
+    have elapsed.  When this happens, a TaskTimeout exception is
+    raised.  If coro is None, the result of this function serves
+    as an asynchronous context manager that applies a timeout to a
+    block of statements.
 
-        long_running_task() is interrupted by raising asyncio.CancelledError,
-        the top-most affected timeout() context manager converts CancelledError
-        into TimeoutError.
-        """
-        loop = get_running_loop()
-        return Timeout(loop.time() + delay if delay is not None else None)
+    timeout_after() may be composed with other timeout_after()
+    operations (i.e., nested timeouts).  If an outer timeout expires
+    first, then TimeoutCancellationError is raised instead of
+    TaskTimeout.  If an inner timeout expires and fails to properly
+    TaskTimeout, a UncaughtTimeoutError is raised in the outer
+    timeout.
 
-    def timeout_at(when: Optional[float]) -> Timeout:
-        """Schedule the timeout at absolute time.
-
-        Like timeout() but argument gives absolute time in the same clock system
-        as loop.time().
-
-        Please note: it is not POSIX time but a time with
-        undefined starting base, e.g. the time of the system power on.
-
-        >>> async with asyncio.timeout_at(loop.time() + 10):
-        ...     await long_running_task()
+    '''
+    return Deadline(seconds)
 
 
-        when - a deadline when timeout occurs or None to disable timeout logic
+def timeout_at(clock):
+    '''Execute the specified coroutine and return its result. However,
+    issue a cancellation request to the calling task after seconds
+    have elapsed.  When this happens, a TaskTimeout exception is
+    raised.  If coro is None, the result of this function serves
+    as an asynchronous context manager that applies a timeout to a
+    block of statements.
 
-        long_running_task() is interrupted by raising asyncio.CancelledError,
-        the top-most affected timeout() context manager converts CancelledError
-        into TimeoutError.
-        """
-        return Timeout(when)
+    timeout_after() may be composed with other timeout_after()
+    operations (i.e., nested timeouts).  If an outer timeout expires
+    first, then TimeoutCancellationError is raised instead of
+    TaskTimeout.  If an inner timeout expires and fails to properly
+    TaskTimeout, a UncaughtTimeoutError is raised in the outer
+    timeout.
+
+    '''
+    return Deadline(clock, is_relative=False)
+
+
+def ignore_after(seconds):
+    '''Execute the specified coroutine and return its result. Issue a
+    cancellation request after seconds have elapsed. When a timeout
+    occurs, no exception is raised. Instead, timeout_result is
+    returned.
+
+    If coro is None, the result is an asynchronous context manager
+    that applies a timeout to a block of statements. For the context
+    manager case, the resulting context manager object has an expired
+    attribute set to True if time expired.
+
+    Note: ignore_after() may also be composed with other timeout
+    operations. TimeoutCancellationError and UncaughtTimeoutError
+    exceptions might be raised according to the same rules as for
+    timeout_after().
+    '''
+    return Deadline(seconds, raise_timeout=False)
+
+
+def ignore_at(clock):
+    '''
+    Stop the enclosed task or block of code at an absolute
+    clock value. Same usage as ignore_after().
+    '''
+    return Deadline(clock, raise_timeout=False, is_relative=False)
