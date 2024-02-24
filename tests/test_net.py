@@ -946,8 +946,7 @@ class TestSession:
 
         async with listening_node.listen():
             async with ignore_after(0.05):
-                async with client_node.connect(listening_node.service,
-                                               session_cls=ClientSession) as session:
+                async with client_node.connect(listening_node.service, session_cls=ClientSession):
                     pass
 
     @pytest.mark.asyncio
@@ -958,7 +957,7 @@ class TestSession:
 
         async with listening_node.listen(session_cls=ListeningSession):
             with pytest.raises(ConnectionResetError):
-                async with client_node.connect(listening_node.service) as session:
+                async with client_node.connect(listening_node.service):
                     pass
 
     @pytest.mark.asyncio
@@ -987,7 +986,7 @@ class TestSession:
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service,
-                                                   session_cls=ClientSession) as session:
+                                                   session_cls=ClientSession):
                         pass
 
         assert in_caplog(caplog, 'verack message received before version message sent')
@@ -1104,8 +1103,7 @@ class TestSession:
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               session_cls=ClientSession) as session:
+                async with client_node.connect(listening_node.service, session_cls=ClientSession):
                     pass
 
         assert not in_caplog(caplog, 'command received before handshake finished')
@@ -1220,9 +1218,8 @@ class TestSession:
         payload = urandom(2000)
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen(session_cls=ListeningSession):
-                    async with client_node.connect(listening_node.service,
-                                                   session_cls=ClientSession):
-                        pass
+                async with client_node.connect(listening_node.service, session_cls=ClientSession):
+                    pass
 
         assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
 

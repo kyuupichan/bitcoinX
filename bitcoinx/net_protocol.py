@@ -609,7 +609,7 @@ class Node:
             host, port = writer.transport.get_extra_info('peername')
             service = BitcoinService(address=NetAddress(host, port))
             connection = Connection(reader, writer)
-            async with self.session(service, connection, session_cls=session_cls) as session:
+            async with self.session(service, connection, session_cls=session_cls):
                 pass
         except Exception as e:
             logging.exception(f'error handling incoming connection: {e}')
@@ -719,7 +719,6 @@ class Session:
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
         finally:
-            connection = self.connection
             self.group = None
             self.node.unregister_session(self)
             await self.connection.close()
@@ -790,7 +789,7 @@ class Session:
         return version_payload(our_service, self.remote_service.address, self.nonce)
 
     async def send_version_message(self):
-        await self.send_message( MessageHeader.VERSION, await self.version_payload())
+        await self.send_message(MessageHeader.VERSION, await self.version_payload())
         self.version_sent = True
 
     async def send_verack_message(self):
