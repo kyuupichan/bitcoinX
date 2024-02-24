@@ -154,6 +154,7 @@ MessageHeader.STREAMACK = _command('streamack')
 MessageHeader.TX = _command('tx')
 MessageHeader.VERACK = _command('verack')
 MessageHeader.VERSION = _command('version')
+MessageHeader.HANDSHAKE_COMMANDS = {MessageHeader.VERSION, MessageHeader.VERACK}
 
 
 class ServiceFlags(IntFlag):
@@ -760,7 +761,7 @@ class Session:
         try:
             async with self.group as group:
                 group.create_task(self.recv_messages_loop(connection))
-                group.create_task(self.perform_handshake(connection, group))
+                group.create_task(self.perform_handshake(group))
                 group.create_task(self.send_messages_loop(connection))
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
@@ -770,12 +771,6 @@ class Session:
     async def on_handshake(self, group):
         group.create_task(self.send_protoconf())
         group.create_task(self.send_sendheaders())
-
-    async def _send_unqueued(self, connection, command, payload):
-        '''Send a command without queueing.  For use with handshake negotiation.'''
-        self.logger.debug(f'sending unqueued {command} message')
-        header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
-        await connection.send(header + payload)
 
     def log_service_details(self, serv, headline):
         self.logger.info(headline)
@@ -790,39 +785,48 @@ class Session:
         self.log_service_details(our_service, 'sending version message:')
         return version_payload(our_service, self.remote_service.address, self.nonce)
 
-    async def send_version_message(self, connection):
-        payload = await self.version_payload()
-        await self._send_unqueued(connection, MessageHeader.VERSION, payload)
+    async def send_version_message(self):
+        await self.send_message( MessageHeader.VERSION, await self.version_payload())
         self.version_sent = True
 
-    async def send_verack_message(self, connection):
-        await self._send_unqueued(connection, MessageHeader.VERACK, b'')
+    async def send_verack_message(self):
+        await self.send_message(MessageHeader.VERACK, b'')
 
-    async def perform_handshake(self, connection, group):
+    async def perform_handshake(self, group):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
         if self.is_outgoing:
-            await self.send_version_message(connection)
+            await self.send_version_message()
             # Outoing connections wait now
             await self.version_received.wait()
         else:
             # Incoming connections wait for version message first
             await self.version_received.wait()
-            await self.send_version_message(connection)
+            await self.send_version_message()
 
         # Send verack.  The handhsake is complete once verack is received
-        await self.send_verack_message(connection)
+        await self.send_verack_message()
         await self.verack_received.wait()
         await self.on_handshake(group)
 
     def connection_for_command(self, _command):
         return self.connection
 
+    #
+    # Sending messages
+    #
+
     async def send_message(self, command, payload):
         '''Send a command and its payload.'''
         connection = self.connection_for_command(command)
         header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
-        await connection.outgoing_messages.put((header, payload))
+
+        # Ensure that handhsake messages are prioritised.  The outgoing message queue
+        # doesn't start being consumed until the handshake is complete.
+        if command in MessageHeader.HANDSHAKE_COMMANDS:
+            await connection.send(header + payload)
+        else:
+            await connection.outgoing_messages.put((header, payload))
 
     async def send_large_message(self, command, payload_len, payload_func):
         '''Send a command as an extended message with its payload.'''
@@ -831,6 +835,10 @@ class Session:
         connection = self.connection_for_command(command)
         header = MessageHeader.ext_bytes(self.node.network.magic, command, payload_len)
         await connection.outgoing_messages.put((header, payload_func))
+
+    #
+    # Receiving messages
+    #
 
     async def handle_message(self, connection, header):
         if self.debug:
