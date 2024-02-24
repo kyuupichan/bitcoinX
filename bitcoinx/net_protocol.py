@@ -529,7 +529,8 @@ class Connection:
         self.writer.close()
         try:
             await self.writer.wait_closed()
-        except (BrokenPipeError, ConnectionResetError):   # CRE happens on Windows it seems
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # CRE and CAE can happens on Windows...
             pass
 
     async def send(self, data):
@@ -557,9 +558,9 @@ async def services_from_seeds(network, timeout=20.0):
         except socket.gaierror as e:
             logging.info(f'error looking up seed {host}: {e}')
             return []
-        print(info)
-        # assert all(item[0] in (socket.AF_INET, socket.AF_INET6) for item in info)
-        assert all(item[1] == socket.SOCK_STREAM for item in info)
+        assert all(item[0] in (socket.AF_INET, socket.AF_INET6) for item in info)
+        # 0 appears here on Windows....
+        assert all(item[1] in (socket.SOCK_STREAM, 0) for item in info)
         assert all(item[2] == socket.IPPROTO_TCP for item in info)
         assert all(not item[3] for item in info)
         return [item[4] for item in info]
