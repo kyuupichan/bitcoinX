@@ -854,7 +854,7 @@ class Session:
 
         if not self.handshake_complete.is_set():
             if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
-                raise ProtocolError(f'{header} command received before handshake finished')
+                raise ForceDisconnectError(f'{header} command received before handshake finished')
 
         if header.is_extended and await self.handle_large_message(connection, header):
             return
@@ -1019,7 +1019,7 @@ class Session:
 
     async def on_verack(self, payload):
         if not self.version_sent:
-            raise ProtocolError('verack message received before version message sent')
+            raise ForceDisconnectError('verack message received before version message sent')
         if self.handshake_complete.is_set():
             raise ProtocolError('duplicate verack message')
         if payload:

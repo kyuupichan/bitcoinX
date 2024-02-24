@@ -963,7 +963,7 @@ class TestSession:
                     await connection.recv_exactly(1)
 
             with pytest.raises(TimeoutError):
-                async with timeout_after(0.05):
+                async with timeout_after(0.1):
                     await client_node.connect(listening_node.service, session_cls=ClientSession)
 
     @pytest.mark.asyncio
@@ -982,10 +982,10 @@ class TestSession:
     async def test_duplicate_version(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def maintain_connection(self, connection):
-                await self.send_version_message()
-                await self.send_version_message()
-                await pause()
+            async def send_version_message(self):
+                await super().send_version_message()
+                await super().send_version_message()
+                await self.disconnect()
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
@@ -997,13 +997,13 @@ class TestSession:
     async def test_send_verack_first(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def maintain_connection(self, connection):
+            async def send_version_message(self):
                 await self.send_verack_message()
-                await pause()
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                await client_node.connect(listening_node.service, session_cls=ClientSession)
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
 
         assert in_caplog(caplog, 'verack message received before version message sent')
 
@@ -1011,33 +1011,32 @@ class TestSession:
     async def test_send_other_first(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def maintain_connection(self, connection):
+            async def send_version_message(self):
                 # Force the first message
                 command = MessageHeader.SENDHEADERS
                 payload = b''
                 connection = self.connection_for_command(command)
                 header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
                 await connection.send(header + payload)
-                await pause()
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                await client_node.connect(listening_node.service, session_cls=ClientSession)
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
 
-        assert in_caplog(caplog, 'protocol error: sendheaders command '
-                         'received before handshake finished')
+        assert in_caplog(caplog, 'sendheaders command received before handshake finished')
 
     @pytest.mark.asyncio
     async def test_send_corrupt_version_message(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def maintain_connection(self, connection):
+            async def send_version_message(self):
                 await self.send_message(MessageHeader.VERSION, bytes(10))
-                await pause()
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                await client_node.connect(listening_node.service, session_cls=ClientSession)
+                with pytest.raises(ConnectionResetError):
+                    await client_node.connect(listening_node.service, session_cls=ClientSession)
 
         assert in_caplog(caplog, 'corrupt version message')
 
@@ -1045,10 +1044,11 @@ class TestSession:
     async def test_send_long_version_message(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def maintain_connection(self, connection):
-                await self.send_message(MessageHeader.VERSION,
-                                        await self.version_payload() + bytes(2))
-                await pause()
+            async def on_handshake_complete(self, group):
+                await self.disconnect()
+
+            async def version_payload(self):
+                return await super().version_payload() + bytes(2)
 
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
