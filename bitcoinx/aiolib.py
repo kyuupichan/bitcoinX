@@ -5,7 +5,7 @@
 # better semantics.  I'm not a fan of those in curio or Python 3.11.
 
 import sys
-from asyncio import get_running_loop, CancelledError, current_task, Semaphore, Event
+from asyncio import get_running_loop, CancelledError, current_task, Semaphore, Event, create_task
 from collections import deque
 
 
@@ -76,7 +76,6 @@ class TaskGroup:
     '''
 
     def __init__(self):
-        self._loop = None
         # Tasks that have not yet finished
         self._pending = set()
         # Tasks that have completed and whose results have not yet been processed
@@ -111,9 +110,9 @@ class TaskGroup:
         if self.joined:
             raise RuntimeError('task group terminated')
         if context:
-            task = self._loop.create_task(coro, name=name, context=context)
+            task = create_task(coro, name=name, context=context)
         else:
-            task = self._loop.create_task(coro, name=name)
+            task = create_task(coro, name=name)
         self._add_task(task)
         return task
 
@@ -206,8 +205,6 @@ class TaskGroup:
         raise StopAsyncIteration
 
     async def __aenter__(self):
-        if self._loop is None:
-            self._loop = get_running_loop()
         return self
 
     async def __aexit__(self, et, exc, _traceback):

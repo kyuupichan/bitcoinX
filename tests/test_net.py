@@ -819,8 +819,15 @@ def listening_node(listening_headers):
     node = Node(service, listening_headers)
     yield node
     if sys.version_info >= (3, 12):
-        assert not node.incoming_sessions
-    assert not node.outgoing_sessions
+        assert not node.sessions
+    else:
+        assert all(not session.is_outgoing for session in node.sessions)
+
+
+def listening_session(listening_node):
+    for session in listening_node.sessions:
+        if not session.is_outgoing:
+            return session
 
 
 @pytest_asyncio.fixture
@@ -835,8 +842,7 @@ async def client_headers():
 def client_node(client_headers):
     node = Node(BitcoinService(), client_headers)
     yield node
-    assert not node.incoming_sessions
-    assert not node.outgoing_sessions
+    assert not node.sessions
 
 
 async def achunks(payload, size):
@@ -1107,7 +1113,7 @@ class TestSession:
 
         class ClientSession(Session):
             async def on_handshake_complete(self, group):
-                listener_session = list(listening_node.incoming_sessions)[0]
+                listener_session = listening_session(listening_node)
                 assert listener_session.their_protoconf is None
                 await pause()
                 # Check the protoconf message got through
@@ -1133,7 +1139,7 @@ class TestSession:
 
         class ClientSession(Session):
             async def on_handshake_complete(self, group):
-                listener_session = list(listening_node.incoming_sessions)[0]
+                listener_session = listening_session(listening_node)
                 assert listener_session.their_protoconf is None
                 await self.send_protoconf()
                 await pause()
@@ -1171,7 +1177,7 @@ class TestSession:
 
         class ClientSession(Session):
             async def on_handshake_complete(self, group):
-                listener_session = list(listening_node.incoming_sessions)[0]
+                listener_session = listening_session(listening_node)
                 assert listener_session.their_protoconf is None
                 self.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
                 payload = self.our_protoconf.payload()
@@ -1220,7 +1226,7 @@ class TestSession:
 
         class ClientSession(Session):
             async def on_handshake_complete(self, group):
-                listener_session = list(listening_node.incoming_sessions)[0]
+                listener_session = listening_session(listening_node)
                 listener_session.streaming_min_size = 200
                 await self.send_large_message(_command('zombie'), len(payload),
                                               achunks(payload, 100))
@@ -1536,73 +1542,56 @@ class TestSession:
 
     @pytest.mark.asyncio
     async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
-
-        class ClientSession(Session):
-            async def on_handshake_complete(self, group):
-                await super().on_handshake_complete(group)
-                await pause()
-                listener_session = list(listening_node.incoming_sessions)[0]
-                assert self.they_prefer_headers
-                assert listener_session.they_prefer_headers
-                assert self.their_protoconf
-                assert listener_session.their_protoconf
-                await self.disconnect()
-
         async with listening_node.listen():
-            await client_node.connect(listening_node.service, session_cls=ClientSession)
+            async with client_node.connect(listening_node.service) as session:
+                await pause()
+                listener_session = listening_session(listening_node)
+                assert session.they_prefer_headers
+                assert listener_session.they_prefer_headers
+                assert session.their_protoconf
+                assert listener_session.their_protoconf
+                await session.close()
 
     @pytest.mark.asyncio
     async def test_sendheaders_understood(self, client_node, listening_node):
-
-        class ClientSession(Session):
-            async def on_handshake_complete(self, group):
-                self.remote_service.protocol_version = 70_011
-                await self.send_sendheaders()
-                assert not self.sendheaders_sent
-                await self.disconnect()
-
         async with listening_node.listen():
-            await client_node.connect(listening_node.service, session_cls=ClientSession)
+            async with client_node.connect(listening_node.service) as session:
+                session.remote_service.protocol_version = 70_011
+                await session.send_sendheaders()
+                assert not session.sendheaders_sent
+                await session.close()
             await pause()
 
     @pytest.mark.asyncio
     async def test_duplicate_sendheaders(self, client_node, listening_node, caplog):
-
-        class ClientSession(Session):
-            async def on_handshake_complete(self, group):
-                listener_session = list(listening_node.incoming_sessions)[0]
-                await self.send_sendheaders()
-                await pause()
-                assert listener_session.they_prefer_headers
-
-                with caplog.at_level(logging.WARNING):
-                    await self.send_sendheaders()
-                assert in_caplog(caplog, 'sendheaders message already sent')
-                await pause()
-                assert not in_caplog(caplog, 'protocol error: duplicate sendheaders message')
-
-                self.sendheaders_sent = False
-                await self.send_sendheaders()
-                await pause()
-                assert in_caplog(caplog, 'protocol error: duplicate sendheaders message')
-                await self.disconnect()
-
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                await client_node.connect(listening_node.service, session_cls=ClientSession)
+                async with client_node.connect(listening_node.service) as session:
+                    listener_session = listening_session(listening_node)
+                    await session.send_sendheaders()
+                    await pause()
+                    assert listener_session.they_prefer_headers
+
+                    with caplog.at_level(logging.WARNING):
+                        await session.send_sendheaders()
+                    assert in_caplog(caplog, 'sendheaders message already sent')
+                    await pause()
+                    assert not in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+
+                    self.sendheaders_sent = False
+                    await session.send_sendheaders()
+                    await pause()
+                    assert in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+                    await session.close()
 
     @pytest.mark.asyncio
     async def test_sendheaders_payload(self, client_node, listening_node, caplog):
-
-        class ClientSession(Session):
-            async def on_handshake_complete(self, group):
-                await self.send_message(MessageHeader.SENDHEADERS, b'0')
-                await pause()
-                await self.disconnect()
-
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
-                await client_node.connect(listening_node.service, session_cls=ClientSession)
+                async with client_node.connect(listening_node.service) as session:
+                    await session.send_message(MessageHeader.SENDHEADERS, b'0')
+                    await pause()
+                    await session.close()
 
         assert in_caplog(caplog, 'sendheaders message has payload')
 
@@ -1611,34 +1600,26 @@ class TestSession:
     #
 
     @pytest.mark.asyncio
-    async def test_getaddr_roundtrip(self, client_node, listening_node, caplog):
-
-        class ClientSession(Session):
-            async def on_handshake_complete(self, group):
-                await self.send_getaddr()
-                async with timeout_after(0.1):
-                    await on_addr_event.wait()
-                await self.disconnect()
-
-            async def on_addr(self, payload):
-                on_addr_event.set()
+    async def test_getaddr_roundtrip(self, client_node, listening_node):
+        async def on_addr(payload):
+            on_addr_event.set()
 
         on_addr_event = asyncio.Event()
-
         async with listening_node.listen():
-            await client_node.connect(listening_node.service, session_cls=ClientSession)
+            async with client_node.connect(listening_node.service) as session:
+                session.on_addr = on_addr
+                await session.send_getaddr()
+                async with timeout_after(0.1):
+                    await on_addr_event.wait()
+                await session.close()
 
     @pytest.mark.asyncio
     async def test_getaddr_payload(self, client_node, listening_node, caplog):
-
-        class ClientSession(Session):
-            async def on_handshake_complete(self, group):
-                await self.send_message(MessageHeader.GETADDR, b'0')
-                await pause()
-                await self.disconnect()
-
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
-                await client_node.connect(listening_node.service, session_cls=ClientSession)
+                async with client_node.connect(listening_node.service) as session:
+                    await session.send_message(MessageHeader.GETADDR, b'0')
+                    await pause()
+                    await session.close()
 
         assert in_caplog(caplog, 'getaddr message has payload')
