@@ -14,6 +14,7 @@ import time
 from asyncio import Event, Queue, open_connection
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
+from functools import partial
 from io import BytesIO
 from ipaddress import ip_address
 from struct import Struct
@@ -547,12 +548,6 @@ class Connection:
             yield chunk
             size -= recv_size
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        await self.close()
-
 
 async def services_from_seeds(network, timeout=20.0):
     async def seed_addresses(loop, host):
@@ -591,8 +586,7 @@ class Node:
         self.service = service
         self.headers = headers
         self.network = headers.network
-        self.outgoing_sessions = set()
-        self.incoming_sessions = set()
+        self.sessions = set()
 
     def random_nonce(self):
         while True:
@@ -601,48 +595,42 @@ class Node:
                 return nonce
 
     def is_our_nonce(self, nonce):
-        return any(nonce == session.nonce for session in self.outgoing_sessions)
+        return any(session.is_outgoing and nonce == session.nonce
+                   for session in self.sessions)
 
-    async def connect(self, service, *, session_cls=None, **kwargs):
-        '''Establish an outgoing connection to a service (a BitcoinService instance).  When
-        connected, call session_cls (a callable) and await its member funciont
-        maintain_connection().
-        '''
-        session_cls = session_cls or Session
-        reader, writer = await open_connection(str(service.address.host), service.address.port)
-        async with Connection(reader, writer) as connection:
-            session = session_cls(self, service, connection, True, **kwargs)
-            await self.run_session(session)
+    def register_session(self, session):
+        self.sessions.add(session)
+
+    def unregister_session(self, session):
+        self.sessions.remove(session)
+
+    async def _on_client_connection(self, reader, writer, *, session_cls=None):
+        try:
+            host, port = writer.transport.get_extra_info('peername')
+            service = BitcoinService(address=NetAddress(host, port))
+            connection = Connection(reader, writer)
+            async with self.session(service, connection, session_cls=session_cls):
+                pass
+        except Exception as e:
+            logging.exception(f'error handling incoming connection: {e}')
 
     def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
-        async def on_client(reader, writer):
-            try:
-                async with Connection(reader, writer) as connection:
-                    host, port = writer.transport.get_extra_info('peername')
-                    remote = BitcoinService(address=NetAddress(host, port))
-                    session = (session_cls or Session)(self, remote, connection, False)
-                    await self.run_session(session)
-            except Exception as e:
-                logging.exception(f'error handling incoming connection: {e}')
-
         host = str(self.service.address.host)
         port = self.service.address.port
-        return Listener(asyncio.start_server(on_client, host, port))
+        on_client_connection = partial(self._on_client_connection, session_cls=session_cls)
+        return Listener(asyncio.start_server(on_client_connection, host, port))
 
-    async def run_session(self, session):
-        '''Establish an outgoing connection to a service (a BitcoinService instance).  When
-        connected, call session_cls (a callable) and await its member funciont
-        maintain_connection().
+    def session(self, remote_service, connection, *, session_cls=None):
+        return (session_cls or Session)(self, remote_service, connection)
+
+    def connect(self, remote_service, *, session_cls=None):
+        '''A client session, that when used as an async context manager, establishes an outgoing
+        connection to remote_service (a BitcoinService instance).
         '''
-        sessions = self.outgoing_sessions if session.is_outgoing else self.incoming_sessions
-        sessions.add(session)
-        try:
-            await session.maintain_connection(session.connection)
-        finally:
-            sessions.remove(session)
+        return self.session(remote_service, None, session_cls=session_cls)
 
 
 class Listener:
@@ -681,12 +669,12 @@ class Session:
     '''
     MAX_HEADERS = 2000
 
-    def __init__(self, node, remote_service, connection, is_outgoing):
+    def __init__(self, node, remote_service, connection):
         self.node = node
         self.remote_service = remote_service
         # The main connection.  For now, the only one.
         self.connection = connection
-        self.is_outgoing = is_outgoing
+        self.is_outgoing = connection is None
         self.protoconf = Protoconf.default()
         self.streaming_min_size = 10_000_000
 
@@ -711,6 +699,33 @@ class Session:
         context = {'remote_address': f'{remote_service.address}'}
         self.logger = SessionLogger(logger, context)
         self.debug = logger.isEnabledFor(logging.DEBUG)
+
+    async def __aenter__(self):
+        if self.connection is None:
+            address = self.remote_service.address
+            reader, writer = await open_connection(str(address.host), address.port)
+            self.connection = Connection(reader, writer)
+        self.node.register_session(self)
+        self.group = TaskGroup()
+        self.group.create_task(self.maintain_connection(self.connection))
+        return self
+
+    async def __aexit__(self, _et, exc, _tb):
+        await self._close(exc)
+
+    async def _close(self, exc=None):
+        try:
+            await self.group.join(exc=exc)
+        except ExceptionGroup as e:
+            raise e.exceptions[0] from None
+        finally:
+            self.group = None
+            self.node.unregister_session(self)
+            await self.connection.close()
+
+    async def close(self):
+        if self.group:
+            await self.group.cancel_remaining()
 
     async def send_messages_loop(self, connection):
         '''Handle sending the queue of messages.  This sends all messages except the initial
@@ -750,23 +765,15 @@ class Session:
                 self.logger.exception(f'unexpected error handling {header} message')
                 raise
 
-    async def disconnect(self):
-        if not self.group:
-            raise RuntimeError('not connected')
-        await self.group.cancel_remaining()
-
     async def maintain_connection(self, connection):
         '''Maintains a connection.'''
-        self.group = TaskGroup()
-        try:
-            async with self.group as group:
-                group.create_task(self.recv_messages_loop(connection))
-                group.create_task(self.send_messages_loop(connection))
-                group.create_task(self.handshake_processing(group))
-        except ExceptionGroup as e:
-            raise e.exceptions[0] from None
-        finally:
-            self.group = None
+        async def perform_handshake_and_callback():
+            await self.perform_handshake()
+            await self.on_handshake_complete()
+
+        self.group.create_task(self.recv_messages_loop(connection))
+        self.group.create_task(self.send_messages_loop(connection))
+        self.group.create_task(perform_handshake_and_callback())
 
     def log_service_details(self, serv, headline):
         self.logger.info(headline)
@@ -782,7 +789,7 @@ class Session:
         return version_payload(our_service, self.remote_service.address, self.nonce)
 
     async def send_version_message(self):
-        await self.send_message( MessageHeader.VERSION, await self.version_payload())
+        await self.send_message(MessageHeader.VERSION, await self.version_payload())
         self.version_sent = True
 
     async def send_verack_message(self):
@@ -804,13 +811,9 @@ class Session:
         await self.send_verack_message()
         await self.handshake_complete.wait()
 
-    async def handshake_processing(self, group):
-        await self.perform_handshake()
-        await self.on_handshake_complete(group)
-
-    async def on_handshake_complete(self, group):
-        group.create_task(self.send_protoconf())
-        group.create_task(self.send_sendheaders())
+    async def on_handshake_complete(self):
+        self.group.create_task(self.send_protoconf())
+        self.group.create_task(self.send_sendheaders())
 
     def connection_for_command(self, _command):
         return self.connection
