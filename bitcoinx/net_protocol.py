@@ -586,10 +586,10 @@ class Node:
     by a Session, which references the Node to manage unified state.
     '''
 
-    def __init__(self, service, network, headers):
+    def __init__(self, service, headers):
         self.service = service
-        self.network = network
         self.headers = headers
+        self.network = headers.network
         self.outgoing_sessions = set()
         self.incoming_sessions = set()
 

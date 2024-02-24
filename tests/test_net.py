@@ -816,7 +816,7 @@ async def listening_headers():
 @pytest.fixture
 def listening_node(listening_headers):
     service = BitcoinService(address=NetAddress(listen_host, 5656))
-    node = Node(service, Bitcoin, listening_headers)
+    node = Node(service, listening_headers)
     yield node
     if sys.version_info >= (3, 12):
         assert not node.incoming_sessions
@@ -833,7 +833,7 @@ async def client_headers():
 
 @pytest.fixture
 def client_node(client_headers):
-    node = Node(BitcoinService(), Bitcoin, client_headers)
+    node = Node(BitcoinService(), client_headers)
     yield node
     assert not node.incoming_sessions
     assert not node.outgoing_sessions
