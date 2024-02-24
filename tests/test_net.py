@@ -918,7 +918,7 @@ class TestSession:
     async def test_bad_checksum(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 payload = b''
                 header = MessageHeader.std_bytes(self.node.network.magic, MessageHeader.PROTOCONF,
                                                  payload)
@@ -939,7 +939,7 @@ class TestSession:
     async def test_unhandled_command(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.send_message(_command('zombie'), b'')
                 await pause()
                 await self.disconnect()
@@ -1106,7 +1106,7 @@ class TestSession:
     async def test_handshake_prioritized(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
                 await pause()
@@ -1114,9 +1114,9 @@ class TestSession:
                 assert listener_session.their_protoconf == self.protoconf
                 await self.disconnect()
 
-            async def perform_handshake(self, group):
+            async def perform_handshake(self):
                 await self.send_message(MessageHeader.PROTOCONF, Protoconf.default().payload())
-                await super().perform_handshake(group)
+                await super().perform_handshake()
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
@@ -1132,7 +1132,7 @@ class TestSession:
     async def test_protoconf_understood(self, client_node, listening_node):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
                 await self.send_protoconf()
@@ -1148,7 +1148,7 @@ class TestSession:
     async def test_duplicate_protoconf(self, client_node, listening_node, caplog, force):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.send_protoconf()
                 if force:
                     self.protoconf_sent = False
@@ -1170,7 +1170,7 @@ class TestSession:
     async def test_send_protoconf_as_large_message(self, client_node, listening_node):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert listener_session.their_protoconf is None
                 self.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
@@ -1188,7 +1188,7 @@ class TestSession:
     async def test_large_message_rejections(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 payload = Protoconf.default().payload()
                 # We should not accept sending a large message
                 with pytest.raises(RuntimeError):
@@ -1219,7 +1219,7 @@ class TestSession:
                 self.zombie_payload2 = payload
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 listener_session.streaming_min_size = 200
                 await self.send_large_message(_command('zombie'), len(payload),
@@ -1248,7 +1248,7 @@ class TestSession:
 
         class ClientSession(Session):
 
-            async def on_handshake(self, _group):
+            async def on_handshake_complete(self, _group):
                 # One known to the listener
                 self.expected_headers = [simples[2]]
                 locator = BlockLocator(1, [], simples[2].hash)
@@ -1288,7 +1288,7 @@ class TestSession:
         # branch B except the tip.  Branch B is shorter than A.
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.get_headers()
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
@@ -1362,7 +1362,7 @@ class TestSession:
         # branch B.
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.get_headers()
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
@@ -1398,7 +1398,7 @@ class TestSession:
     async def test_unchained_headers(self, client_node, listening_node, caplog):
 
         class ListenerSession(Session):
-            async def on_handshake(self, _group):
+            async def on_handshake_complete(self, _group):
                 branch = create_random_branch(Bitcoin.genesis_header, 5)
                 branch.extend(create_random_branch(Bitcoin.genesis_header, 1))
                 await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
@@ -1416,7 +1416,7 @@ class TestSession:
     async def test_separated_headers(self, client_node, listening_node, caplog):
 
         class ListenerSession(Session):
-            async def on_handshake(self, _group):
+            async def on_handshake_complete(self, _group):
                 await self.send_message(MessageHeader.HEADERS, pack_headers_payload(simples[2:]))
                 await pause()
                 await self.disconnect()
@@ -1435,7 +1435,7 @@ class TestSession:
     async def test_bad_pow_headers(self, client_node, listening_node, caplog):
 
         class ListenerSession(Session):
-            async def on_handshake(self, _group):
+            async def on_handshake_complete(self, _group):
                 await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
                 await pause()
                 await self.disconnect()
@@ -1455,7 +1455,7 @@ class TestSession:
     async def test_excess_headers_payload(self, client_node, listening_node, caplog):
 
         class ListenerSession(Session):
-            async def on_handshake(self, _group):
+            async def on_handshake_complete(self, _group):
                 await self.send_message(MessageHeader.HEADERS,
                                         pack_headers_payload(simples) + b'1')
                 await pause()
@@ -1475,7 +1475,7 @@ class TestSession:
     async def test_too_many_headers(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 self.MAX_HEADERS = 5
                 await self.get_headers()
                 await self.headers_received.wait()
@@ -1511,7 +1511,7 @@ class TestSession:
                 self.COUNT += 1
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 assert await self.sync_headers()
                 assert not await self.sync_headers()
                 await self.disconnect()
@@ -1538,8 +1538,8 @@ class TestSession:
     async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
-                await super().on_handshake(group)
+            async def on_handshake_complete(self, group):
+                await super().on_handshake_complete(group)
                 await pause()
                 listener_session = list(listening_node.incoming_sessions)[0]
                 assert self.they_prefer_headers
@@ -1555,7 +1555,7 @@ class TestSession:
     async def test_sendheaders_understood(self, client_node, listening_node):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 self.remote_service.protocol_version = 70_011
                 await self.send_sendheaders()
                 assert not self.sendheaders_sent
@@ -1569,7 +1569,7 @@ class TestSession:
     async def test_duplicate_sendheaders(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 listener_session = list(listening_node.incoming_sessions)[0]
                 await self.send_sendheaders()
                 await pause()
@@ -1595,7 +1595,7 @@ class TestSession:
     async def test_sendheaders_payload(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.send_message(MessageHeader.SENDHEADERS, b'0')
                 await pause()
                 await self.disconnect()
@@ -1614,7 +1614,7 @@ class TestSession:
     async def test_getaddr_roundtrip(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.send_getaddr()
                 async with timeout_after(0.1):
                     await on_addr_event.wait()
@@ -1632,7 +1632,7 @@ class TestSession:
     async def test_getaddr_payload(self, client_node, listening_node, caplog):
 
         class ClientSession(Session):
-            async def on_handshake(self, group):
+            async def on_handshake_complete(self, group):
                 await self.send_message(MessageHeader.GETADDR, b'0')
                 await pause()
                 await self.disconnect()

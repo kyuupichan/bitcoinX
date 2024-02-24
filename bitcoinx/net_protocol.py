@@ -693,7 +693,7 @@ class Session:
         # State
         self.version_sent = False
         self.version_received = Event()
-        self.verack_received = Event()
+        self.handshake_complete = Event()
         self.headers_received = Event()
         self.headers_synced = False
         self.protoconf_sent = False
@@ -716,7 +716,7 @@ class Session:
         '''Handle sending the queue of messages.  This sends all messages except the initial
         version / verack handshake.
         '''
-        await self.verack_received.wait()
+        await self.handshake_complete.wait()
         send = self.connection.send
         while True:
             header, payload = await connection.outgoing_messages.get()
@@ -761,16 +761,12 @@ class Session:
         try:
             async with self.group as group:
                 group.create_task(self.recv_messages_loop(connection))
-                group.create_task(self.perform_handshake(group))
                 group.create_task(self.send_messages_loop(connection))
+                group.create_task(self.handshake_processing(group))
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
         finally:
             self.group = None
-
-    async def on_handshake(self, group):
-        group.create_task(self.send_protoconf())
-        group.create_task(self.send_sendheaders())
 
     def log_service_details(self, serv, headline):
         self.logger.info(headline)
@@ -792,7 +788,7 @@ class Session:
     async def send_verack_message(self):
         await self.send_message(MessageHeader.VERACK, b'')
 
-    async def perform_handshake(self, group):
+    async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
         if self.is_outgoing:
@@ -806,8 +802,15 @@ class Session:
 
         # Send verack.  The handhsake is complete once verack is received
         await self.send_verack_message()
-        await self.verack_received.wait()
-        await self.on_handshake(group)
+        await self.handshake_complete.wait()
+
+    async def handshake_processing(self, group):
+        await self.perform_handshake()
+        await self.on_handshake_complete(group)
+
+    async def on_handshake_complete(self, group):
+        group.create_task(self.send_protoconf())
+        group.create_task(self.send_sendheaders())
 
     def connection_for_command(self, _command):
         return self.connection
@@ -849,7 +852,7 @@ class Session:
             raise ForceDisconnectError(f'bad magic: got 0x{header.magic.hex()} '
                                        f'expected 0x{magic.hex()}')
 
-        if not self.verack_received.is_set():
+        if not self.handshake_complete.is_set():
             if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
                 raise ProtocolError(f'{header} command received before handshake finished')
 
@@ -866,7 +869,7 @@ class Session:
 
         if not header.is_extended and header.payload_checksum(payload) != header.checksum:
             # Maybe force disconnect if we get too many bad checksums in a short time
-            error = ProtocolError if self.verack_received.is_set() else ForceDisconnectError
+            error = ProtocolError if self.handshake_complete.is_set() else ForceDisconnectError
             raise error(f'bad checksum for {header} command')
 
         await handler(payload)
@@ -1017,11 +1020,11 @@ class Session:
     async def on_verack(self, payload):
         if not self.version_sent:
             raise ProtocolError('verack message received before version message sent')
-        if self.verack_received.is_set():
+        if self.handshake_complete.is_set():
             raise ProtocolError('duplicate verack message')
         if payload:
             self.logger.warning('verack message has payload')
-        self.verack_received.set()
+        self.handshake_complete.set()
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
