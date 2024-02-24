@@ -512,10 +512,6 @@ class BlockLocator:
 
         return result
 
-    async def headers_payload(self, headers, limit):
-        '''Return the payload for a "headers" message in reply to "getheaders".'''
-        return pack_headers_payload(await self.fetch_locator_headers(headers, limit))
-
 
 class Connection:
     '''A single network connection.  Each connection has its own outgoing message queue
@@ -915,23 +911,43 @@ class Session:
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         self.headers_received.clear()
 
-    async def sync_headers(self, timeout=30.0):
+    async def sync_headers(self, timeout=15.0):
+        '''Synchronoize headers.  Should normally be enough to reach the remote node's tip.
+        Returns True if progress was made.
+        '''
         current_work = initial_work = self.their_tip.chain_work()
-        while True:
+        no_progress = 0
+        while no_progress < 3:
             prior_work = current_work
             await self.get_headers()
+            no_progress += 1
             async with ignore_after(timeout):
                 await self.headers_received.wait()
-            current_work = self.their_tip.chain_work
-            # if no progress, we presumably have everything
+                # No headers received, or protocol error?
+                if self.headers_received.count == -1:
+                    break
+                no_progress -= 1
+            current_work = self.their_tip.chain_work()
             if current_work <= prior_work:
-                return current_work > initial_work
+                no_progress += 1
+            else:
+                no_progress = 0
+        return current_work > initial_work
+
+    async def send_headers(self, headers):
+        assert len(headers) <= self.MAX_HEADERS
+        await self.send_message(MessageHeader.HEADERS, pack_headers_payload(headers))
 
     # Callbacks when certain messages are received.
 
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
         # Note: we should expect unsolicited headers because of the sendheaders protocol
+        # An inserted count of -1 indicates either that zero headers were received, or
+        # that the received headers broke the protocol.  Either case should stop
+        # sync_headers().  Note that receiving a disconnected header leaves it at zero.
+        inserted_count = -1
+        headers_obj = self.node.headers
         try:
             headers = unpack_headers_payload(payload)
             count = len(headers)
@@ -946,21 +962,24 @@ class Session:
                 raise ProtocolError('headers message with headers that do not form a chain')
             # This will fail if the headers do not connect.  It also validates PoW.
             try:
-                await self.node.headers.insert_headers(headers)
-                self.their_tip = headers[-1]
+                inserted_count = await headers_obj.insert_headers(headers)
+                new_tip = await headers_obj.header_from_hash(headers[-1].hash)
+                if new_tip.chain_work() > self.their_tip.chain_work():
+                    self.their_tip = new_tip
             except MissingHeader:
                 self.logger.warning(f'ignoring {len(headers):,d} non-connecting headers')
             except HeaderException as e:
                 raise ProtocolError(f'headers message: {e}') from None
         finally:
             self.headers_received.set()
+            self.headers_received.count = inserted_count
 
     async def on_getheaders(self, payload):
         locator = BlockLocator.from_payload(payload)
-        headers_payload = await locator.headers_payload(self.node.headers, self.MAX_HEADERS)
+        headers = await locator.fetch_locator_headers(self.node.headers, self.MAX_HEADERS)
         # Ignore if there are no block hashes and the hash_stop block is missing
-        if locator.block_hashes or len(headers_payload) > 1:
-            await self.send_message(MessageHeader.HEADERS, headers_payload)
+        if locator.block_hashes or headers:
+            await self.send_headers(headers)
         else:
             self.logger.info('ignoring getheaders for unknown block '
                              f'{hash_to_hex_str(locator.hash_stop)}')

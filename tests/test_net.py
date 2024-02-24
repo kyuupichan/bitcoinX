@@ -14,7 +14,7 @@ import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
-    Headers, all_networks, ProtocolError, ForceDisconnectError,
+    Headers, all_networks, ProtocolError,
     NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Session, SimpleHeader
@@ -972,7 +972,7 @@ class TestSession:
         class ListeningSession(Session):
             async def on_version(self, payload):
                 await super().on_version(payload)
-                raise ForceDisconnectError('test')
+                await self.disconnect()
 
         async with listening_node.listen(session_cls=ListeningSession):
             with pytest.raises(ConnectionResetError):
@@ -1267,6 +1267,7 @@ class TestSession:
                 await self.get_headers()
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
+                assert self.headers_received.count == 7
 
                 client_chain = await client_node.headers.longest_chain()
                 listening_chain = await listening_node.headers.longest_chain()
@@ -1286,6 +1287,7 @@ class TestSession:
                 await self.get_headers(locator)
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
+                assert self.headers_received.count == 6
 
                 client_chain = await client_node.headers.longest_chain()
                 assert client_chain.tip.height == to_height
@@ -1299,6 +1301,7 @@ class TestSession:
                 await self.get_headers(locator)
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
+                assert self.headers_received.count == 4
                 client_chain = await client_node.headers.longest_chain()
                 assert client_chain.tip == listening_chain.tip
 
@@ -1307,6 +1310,7 @@ class TestSession:
                 await self.get_headers()
                 assert not self.headers_received.is_set()
                 await self.headers_received.wait()
+                assert self.headers_received.count == -1
                 await self.disconnect()
 
         simples = first_mainnet_headers(20)
@@ -1374,7 +1378,7 @@ class TestSession:
                 branch.extend(create_random_branch(Bitcoin.genesis_header, 1))
                 await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
                 await pause()
-                raise ForceDisconnectError
+                await self.disconnect()
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen(session_cls=ListenerSession):
@@ -1390,7 +1394,7 @@ class TestSession:
             async def on_handshake(self, _group):
                 await self.send_message(MessageHeader.HEADERS, pack_headers_payload(simples[2:]))
                 await pause()
-                raise ForceDisconnectError
+                await self.disconnect()
 
         simples = first_mainnet_headers(10)
         await listening_node.headers.insert_headers(simples)
@@ -1409,7 +1413,7 @@ class TestSession:
             async def on_handshake(self, _group):
                 await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
                 await pause()
-                raise ForceDisconnectError
+                await self.disconnect()
 
         branch = create_random_branch(Bitcoin.genesis_header, 2)
         await listening_node.headers.insert_headers(branch, check_work=False)
@@ -1430,7 +1434,7 @@ class TestSession:
                 await self.send_message(MessageHeader.HEADERS,
                                         pack_headers_payload(simples) + b'1')
                 await pause()
-                raise ForceDisconnectError
+                await self.disconnect()
 
         simples = first_mainnet_headers(2)
         await listening_node.headers.insert_headers(simples)
@@ -1460,6 +1464,46 @@ class TestSession:
                 await client_node.connect(listening_node.service, session_cls=ClientSession)
 
         assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')
+
+    @pytest.mark.asyncio
+    async def test_sync_headers(self, client_node, listening_node):
+        # Test that the client syncs with the listening node, even when it's on a branch
+        # whose length is greater than the atomic send limit, and the listener occasionally
+        # sends a disconnected header
+
+        class ListenerSession(Session):
+
+            COUNT = 0
+            MAX_HEADERS = 10
+
+            async def on_getheaders(self, payload):
+                await super().on_getheaders(payload)
+                if self.COUNT % 3 == 0:
+                    chain = await self.node.headers.longest_chain()
+                    height = 93 + self.COUNT // 3
+                    header = await self.node.headers.header_at_height(chain, height)
+                    await self.send_headers([header])
+                self.COUNT += 1
+
+        class ClientSession(Session):
+            async def on_handshake(self, group):
+                assert await self.sync_headers()
+                assert not await self.sync_headers()
+                await self.disconnect()
+
+        # Client is on a branch of length 25 from genesis
+        branch = create_random_branch(Bitcoin.genesis_header, 25)
+        assert await client_node.headers.insert_headers(branch, check_work=False) == 25
+
+        # Listening node has the first 101 mainnet heaaders, to height 100
+        height = 100
+        headers = first_mainnet_headers(height + 1)
+        assert await listening_node.headers.insert_headers(headers) == height
+
+        async with listening_node.listen(session_cls=ListenerSession):
+            await client_node.connect(listening_node.service, session_cls=ClientSession)
+
+        assert await client_node.headers.height() == height
 
     #
     # SENDHEADERS message tests

@@ -298,9 +298,9 @@ class Headers:
 
             chain_work = int_to_le_bytes(le_bytes_to_int(chain_work) + bits_to_work(header.bits))
             cursor = await execute(insert_header_sql,
-                          (prev_hdr_id, chain_work, header.hash, header.merkle_root,
-                           header.version, header.timestamp, header.bits, header.nonce,
-                           header.prev_hash))
+                                   (prev_hdr_id, chain_work, header.hash, header.merkle_root,
+                                    header.version, header.timestamp, header.bits, header.nonce,
+                                    header.prev_hash))
             count += cursor.rowcount
         return count
 
