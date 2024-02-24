@@ -558,7 +558,7 @@ async def services_from_seeds(network, timeout=20.0):
             logging.info(f'error looking up seed {host}: {e}')
             return []
         assert all(item[0] in (socket.AF_INET, socket.AF_INET6) for item in info)
-        assert all(item[1] == socket.SOCK_STREAM for item in info)
+        # assert all(item[1] == socket.SOCK_STREAM for item in info)
         # assert all(item[2] == socket.IPPROTO_TCP for item in info)
         # assert all(not item[3] for item in info)
         return [item[4] for item in info]
