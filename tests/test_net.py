@@ -1038,6 +1038,8 @@ class TestSession:
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service, session_cls=ClientSession):
                     pass
+                # Seems to be needed on Windows sometimes for the listener session to close
+                await pause()
 
         assert in_caplog(caplog, 'extra bytes at end of version payload')
 
