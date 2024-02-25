@@ -20,7 +20,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import Sequence
 
-from .aiolib import TaskGroup, ExceptionGroup, ignore_after
+from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after
 from .errors import (
     ProtocolError, ForceDisconnectError, PackingError, HeaderException, MissingHeader
 )
@@ -590,6 +590,7 @@ class Node:
         self.headers = headers
         self.network = headers.network
         self.sessions = set()
+        self.sync_headers_lock = asyncio.Lock()
         self.logger = prefixed_logger('Node', str(self.network))
 
     def random_nonce(self):
@@ -697,21 +698,20 @@ class Session:
         # Logging
         self.logger = prefixed_logger(str(node.network), str(remote_service.address))
         self.debug = self.logger.isEnabledFor(logging.DEBUG)
+        self.unhandled_commands = set()
 
     async def __aenter__(self):
         if self.connection is None:
             address = self.remote_service.address
             reader, writer = await open_connection(str(address.host), address.port)
-            self.connection = Connection(reader, writer)
+            async with timeout_after(10.0):
+                self.connection = Connection(reader, writer)
         self.node.register_session(self)
         self.group = TaskGroup()
         self.group.create_task(self.maintain_connection(self.connection))
         return self
 
     async def __aexit__(self, _et, exc, _tb):
-        await self._close(exc)
-
-    async def _close(self, exc=None):
         try:
             await self.group.join(exc=exc)
         except ExceptionGroup as e:
@@ -864,8 +864,9 @@ class Session:
         payload = await connection.recv_exactly(header.payload_len)
         handler = getattr(self, f'on_{command}', None)
         if not handler:
-            if self.debug:
-                self.logger.debug(f'ignoring unhandled {command} command')
+            if command not in self.unhandled_commands:
+                self.unhandled_commands.add(command)
+                self.logger.warning(f'ignoring unhandled {command} message')
             return
 
         if not header.is_extended and header.payload_checksum(payload) != header.checksum:
@@ -923,10 +924,7 @@ class Session:
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         self.headers_received.clear()
 
-    async def sync_headers(self, timeout=15.0):
-        '''Synchronoize headers.  Should normally be enough to reach the remote node's tip.
-        Returns True if progress was made.
-        '''
+    async def _sync_headers(self, *, timeout=15.0):
         current_work = initial_work = self.their_tip.chain_work()
         no_progress = 0
         while no_progress < 3:
@@ -945,6 +943,14 @@ class Session:
             else:
                 no_progress = 0
         return current_work > initial_work
+
+    async def sync_headers(self, *, timeout=15.0):
+        '''Synchronoize headers.  Should normally be enough to reach the remote node's tip.
+        Acquire a lock so that simultaneous attempts to sync headers with remote services
+        are avoided.  Return True if progress was made.
+        '''
+        async with self.node.sync_headers_lock:
+            return await self._sync_headers(timeout=timeout)
 
     async def send_headers(self, headers):
         assert len(headers) <= self.MAX_HEADERS
@@ -975,13 +981,16 @@ class Session:
             # This will fail if the headers do not connect.  It also validates PoW.
             try:
                 inserted_count = await headers_obj.insert_headers(headers)
+            except MissingHeader:
+                self.logger.warning(f'ignoring {count:,d} non-connecting headers')
+            except HeaderException as e:
+                raise ProtocolError(f'headers message: {e}') from None
+            else:
+                self.logger.info(f'inserted {inserted_count:,d} headers, '
+                                 f'our height is {await headers_obj.height()}')
                 new_tip = await headers_obj.header_from_hash(headers[-1].hash)
                 if new_tip.chain_work() > self.their_tip.chain_work():
                     self.their_tip = new_tip
-            except MissingHeader:
-                self.logger.warning(f'ignoring {len(headers):,d} non-connecting headers')
-            except HeaderException as e:
-                raise ProtocolError(f'headers message: {e}') from None
         finally:
             self.headers_received.set()
             self.headers_received.count = inserted_count

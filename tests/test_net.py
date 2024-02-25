@@ -929,7 +929,7 @@ class TestSession:
                     await pause()
                     await session.close()
 
-        assert in_caplog(caplog, 'ignoring unhandled zombie command')
+        assert in_caplog(caplog, 'ignoring unhandled zombie message')
 
     #
     # VERSION message tests
