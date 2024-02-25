@@ -12,6 +12,7 @@ __all__ = (
     'int_to_be_bytes', 'int_to_le_bytes', 'CONTEXT',
 )
 
+import logging
 import os
 from functools import partial
 
@@ -66,3 +67,15 @@ class cachedproperty:
         value = self.f(obj)
         setattr(obj, self.f.__name__, value)
         return value
+
+
+class PrefixedLogger(logging.LoggerAdapter):
+    '''Prepends a connection identifier to a logging message.'''
+
+    def process(self, msg, kwargs):
+        return f'[{self.extra}] {msg}', kwargs
+
+
+def prefixed_logger(name, text):
+    extra = text
+    return PrefixedLogger(logging.getLogger(name), extra)

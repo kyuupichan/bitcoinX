@@ -26,6 +26,7 @@ from .errors import (
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
+from .misc import prefixed_logger
 from .net import NetAddress
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
@@ -589,6 +590,7 @@ class Node:
         self.headers = headers
         self.network = headers.network
         self.sessions = set()
+        self.logger = prefixed_logger('Node', str(self.network))
 
     def random_nonce(self):
         while True:
@@ -607,14 +609,18 @@ class Node:
         self.sessions.remove(session)
 
     async def _on_client_connection(self, reader, writer, *, session_cls=None):
+        session = None
         try:
             host, port = writer.transport.get_extra_info('peername')
             service = BitcoinService(address=NetAddress(host, port))
             connection = Connection(reader, writer)
-            async with self.session(service, connection, session_cls=session_cls):
+            async with self.session(service, connection, session_cls=session_cls) as session:
                 pass
         except Exception as e:
-            logging.exception(f'error handling incoming connection: {e}')
+            if session:
+                session.logger.exception(f'disconnected: {e}')
+            else:
+                self.logger.exception(f'error from {host}:{port}: {e}')
 
     def listen(self, *, session_cls=None):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
@@ -650,14 +656,6 @@ class Listener:
         await self.server.wait_closed()
         if sys.version_info < (3, 11):
             await asyncio.sleep(0.001)
-
-
-class SessionLogger(logging.LoggerAdapter):
-
-    '''Prepends a connection identifier to a logging message.'''
-    def process(self, msg, kwargs):
-        remote_address = self.extra.get('remote_address', 'unknown')
-        return f'[{remote_address}] {msg}', kwargs
 
 
 class Session:
@@ -697,10 +695,8 @@ class Session:
         self.group = None
 
         # Logging
-        logger = logging.getLogger('Session')
-        context = {'remote_address': f'{remote_service.address}'}
-        self.logger = SessionLogger(logger, context)
-        self.debug = logger.isEnabledFor(logging.DEBUG)
+        self.logger = prefixed_logger(str(node.network), str(remote_service.address))
+        self.debug = self.logger.isEnabledFor(logging.DEBUG)
 
     async def __aenter__(self):
         if self.connection is None:
@@ -854,7 +850,7 @@ class Session:
 
         magic = self.node.network.magic
         if header.magic != magic:
-            raise ForceDisconnectError(f'bad magic: got 0x{header.magic.hex()} '
+            raise ForceDisconnectError(f'bad magic 0x{header.magic.hex()} '
                                        f'expected 0x{magic.hex()}')
 
         if not self.handshake_complete.is_set():

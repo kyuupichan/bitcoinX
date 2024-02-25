@@ -7,14 +7,13 @@
 
 
 from dataclasses import dataclass
-import logging
 
 import asqlite3
 
 from .base58 import base58_encode_check
 from .errors import InsufficientPoW, IncorrectBits, MissingHeader
 from .hashes import hash_to_hex_str, hash_to_value, double_sha256 as header_hash
-from .misc import le_bytes_to_int, int_to_le_bytes, cachedproperty
+from .misc import le_bytes_to_int, int_to_le_bytes, cachedproperty, prefixed_logger
 from .packing import pack_byte, pack_header, unpack_le_uint32, unpack_le_int32
 from .work import bits_to_target, target_to_bits, bits_to_work
 
@@ -217,6 +216,7 @@ class Headers:
         self.conn = conn
         self.schema = schema
         self.network = network
+        self.logger = prefixed_logger('Headers', str(network))
         self.genesis_header = None    # An instance of Header
 
     def fixup_sql(self, sql):
@@ -228,7 +228,7 @@ class Headers:
         '''
         try:
             self.genesis_header = await self.header_from_hash(self.network.genesis_header.hash)
-            logging.info('database tables found')
+            self.logger.info(f'found headers to height {await self.height()}')
             return
         except asqlite3.OperationalError:
             pass
@@ -244,14 +244,13 @@ class Headers:
                         self.CREATE_CHAINS_VIEW, self.CREATE_ANCESTORS_VIEW,
                         self.CREATE_HEADERS_TRIGGER):
                 await self.conn.execute(self.fixup_sql(sql))
-            logging.info('database tables and views created')
 
             await self.conn.execute(self.fixup_sql(self.INSERT_GENESIS),
                                     (int_to_le_bytes(gh.work()), gh.hash, gh.merkle_root,
                                      gh.version, gh.timestamp, gh.bits, gh.nonce))
-            logging.info('{self.network} genesis header {gh.hex_str()} inserted')
 
         self.genesis_header = await self.header_from_hash(gh.hash)
+        self.logger.info('database tables created')
 
     async def insert_headers(self, simple_headers, *, check_work=True):
         '''Insert headers into the Headers table, and returns the number of new headers actually

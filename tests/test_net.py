@@ -901,8 +901,7 @@ class TestSession:
                     async with client_node.connect(listening_node.service):
                         pass
 
-        assert in_caplog(caplog, 'error handling incoming connection: bad magic: '
-                         'got 0xf4e5f3f4 expected 0xe3e1f3e8')
+        assert in_caplog(caplog, 'disconnected: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
 
     @pytest.mark.asyncio
     async def test_bad_checksum(self, client_node, listening_node, caplog):
@@ -1051,7 +1050,7 @@ class TestSession:
                     async with listening_node.connect(listening_node.service):
                         pass
 
-        assert in_caplog(caplog, 'error handling incoming connection: connected to ourself')
+        assert in_caplog(caplog, 'disconnected: connected to ourself')
         assert in_caplog(caplog, 'connection closed remotely')
 
     #
