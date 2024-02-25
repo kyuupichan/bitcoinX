@@ -591,6 +591,7 @@ class Node:
         self.network = headers.network
         self.sessions = set()
         self.sync_headers_lock = asyncio.Lock()
+        self.remote_services = set()
         self.logger = prefixed_logger('Node', str(self.network))
 
     def random_nonce(self):
@@ -640,6 +641,36 @@ class Node:
         connection to remote_service (a BitcoinService instance).
         '''
         return self.session(remote_service, None, session_cls=session_cls)
+
+    async def remote_service(self):
+        if self.remote_services:
+            return self.remote_services.pop()
+        return None
+
+    async def outgoing_session(self, on_session, *, session_cls=None):
+        while True:
+            service = await self.remote_service()
+            if not service:
+                return
+            session = None
+            try:
+                async with self.connect(service, session_cls=session_cls) as session:
+                    done = await on_session(session)
+                    await session.close()
+                    if done:
+                        return
+            except Exception as e:
+                if session:
+                    session.logger.exception('connection lost')
+                else:
+                    self.logger.debug(f'failed to connect to {service.address}: {e}')
+
+    async def establish_outgoing_sessions(self, on_session, limit, session_cls=None):
+        if not self.remote_services:
+            self.remote_services = await services_from_seeds(self.network)
+        async with TaskGroup() as group:
+            for _ in range(limit):
+                group.create_task(self.outgoing_session(on_session, session_cls=session_cls))
 
 
 class Listener:
