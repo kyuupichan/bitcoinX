@@ -185,8 +185,10 @@ async def insert_tree(headers, tree):
 
 
 def in_caplog(caplog, message, count=1):
-    return sum(message in record.message
-               for record in caplog.records) == count
+    cap_count = sum(message in record.message for record in caplog.records)
+    if count is None:
+        return bool(cap_count)
+    return count == cap_count
 
 
 def print_caplog(caplog):

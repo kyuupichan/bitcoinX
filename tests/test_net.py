@@ -894,7 +894,7 @@ class TestSession:
                     async with client_node.connect(listening_node.service):
                         pass
 
-        assert in_caplog(caplog, 'disconnected: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
+        assert in_caplog(caplog, 'fatal protocol error: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
 
     @pytest.mark.asyncio
     async def test_bad_checksum(self, client_node, listening_node, caplog):
@@ -1043,7 +1043,7 @@ class TestSession:
                     async with listening_node.connect(listening_node.service):
                         pass
 
-        assert in_caplog(caplog, 'disconnected: connected to ourself')
+        assert in_caplog(caplog, 'protocol error: connected to ourself')
         assert in_caplog(caplog, 'connection closed remotely')
 
     #
@@ -1143,15 +1143,15 @@ class TestSession:
     #
 
     @pytest.mark.asyncio
-    async def test_send_protoconf_as_large_message(self, client_node, listening_node):
+    async def test_send_protoconf_as_ext_message(self, client_node, listening_node):
         class ClientSession(Session):
             async def on_handshake_complete(self):
                 listener_session = await listening_session(listening_node)
                 assert listener_session.their_protoconf is None
                 self.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
                 payload = self.our_protoconf.payload()
-                await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
-                                              achunks(payload, 4))
+                await self.send_ext_message(MessageHeader.PROTOCONF, len(payload),
+                                            achunks(payload, 4))
                 await pause()
                 assert listener_session.their_protoconf == self.our_protoconf
                 await self.close()
@@ -1161,18 +1161,18 @@ class TestSession:
                 pass
 
     @pytest.mark.asyncio
-    async def test_large_message_rejections(self, client_node, listening_node, caplog):
+    async def test_ext_message_rejections(self, client_node, listening_node, caplog):
         class ClientSession(Session):
             async def on_handshake_complete(self):
                 payload = Protoconf.default().payload()
                 # We should not accept sending a large message
                 with pytest.raises(RuntimeError):
-                    await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
-                                                  achunks(payload, 4))
+                    await self.send_ext_message(MessageHeader.PROTOCONF, len(payload),
+                                                achunks(payload, 4))
                 # Override the check
-                self.can_send_large_messages = True
-                await self.send_large_message(MessageHeader.PROTOCONF, len(payload),
-                                              achunks(payload, 4))
+                self.can_send_ext_messages = True
+                await self.send_ext_message(MessageHeader.PROTOCONF, len(payload),
+                                            achunks(payload, 4))
 
         with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
@@ -1182,7 +1182,7 @@ class TestSession:
                                                    session_cls=ClientSession):
                         pass
 
-        assert in_caplog(caplog, 'large message received but invalid')
+        assert in_caplog(caplog, 'ext message received but invalid', count=2)
 
     @pytest.mark.asyncio
     async def test_send_streaming_message(self, client_node, listening_node, caplog):
@@ -1198,11 +1198,11 @@ class TestSession:
             async def on_handshake_complete(self):
                 listener_session = await listening_session(listening_node)
                 listener_session.streaming_min_size = 200
-                await self.send_large_message(_command('zombie'), len(payload),
-                                              achunks(payload, 100))
+                await self.send_ext_message(_command('zombie'), len(payload),
+                                            achunks(payload, 100))
                 await self.send_message(_command('zombie'), payload)
-                await self.send_large_message(_command('ghoul'), len(payload),
-                                              achunks(payload, 100))
+                await self.send_ext_message(_command('ghoul'), len(payload),
+                                            achunks(payload, 100))
                 await pause()
                 assert listener_session.zombie_payload == payload
                 assert listener_session.zombie_payload2 == payload
@@ -1214,7 +1214,7 @@ class TestSession:
                 async with client_node.connect(listening_node.service, session_cls=ClientSession):
                     pass
 
-        assert in_caplog(caplog, 'ignoring large ghoul with payload of 2,000 bytes')
+        assert in_caplog(caplog, 'ignoring unhandled extended ghoul messages')
 
     #
     # GETHEADERS / HEADERS message tests
@@ -1660,3 +1660,25 @@ class TestSession:
                     await session.close()
 
             assert in_caplog(caplog, 'unexpected pong')
+
+    @pytest.mark.asyncio
+    async def test_parallel_handling(self, client_node, listening_node, caplog):
+        # Test commands are handled in parallel
+        class ListenerSession(Session):
+            async def on_parallel(self, payload):
+                times.append(time.time())
+                await asyncio.sleep(delay)
+
+        times = []
+        delay = 1.0
+        async with listening_node.listen(session_cls=ListenerSession):
+            async with client_node.connect(listening_node.service) as session:
+                async with TaskGroup() as group:
+                    await group.create_task(session.send_message(_command('parallel'), b''))
+                    await group.create_task(session.send_message(_command('parallel'), b''))
+                    await pause()
+                    await group.cancel_remaining()
+                await session.close()
+
+        is_parallel = abs(times[0] - times[1]) < delay / 2
+        assert is_parallel

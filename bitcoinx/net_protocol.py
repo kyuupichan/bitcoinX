@@ -307,9 +307,6 @@ class Protoconf:
         stream_policies = read_varbytes(read)
         return Protoconf(max_payload, stream_policies.split(b','))
 
-#
-# Network Protocol
-#
 
 @dataclass
 class Payload:
@@ -614,7 +611,7 @@ class Node:
                 pass
         except Exception as e:
             if session:
-                session.logger.exception(f'disconnected: {e}')
+                session.logger.exception(f'fatal error: {e}')
             else:
                 self.logger.exception(f'error from {host}:{port}: {e}')
 
@@ -720,12 +717,14 @@ class Session:
         self.protoconf_sent = False
         self.their_protoconf = None
         self.nonce = self.node.random_nonce()
-        self.can_send_large_messages = False
+        self.can_send_ext_messages = False
         self.their_tip = node.headers.genesis_header
         self.sendheaders_sent = False
         self.we_prefer_headers = True
         self.they_prefer_headers = False
         self.pings = {}
+
+        # Session management
         self.group = None
 
         # Logging
@@ -777,25 +776,6 @@ class Session:
                 await send(header)
                 async for part in payload:
                     await send(part)
-
-    async def recv_messages_loop(self, connection):
-        '''Read messages from a stream and pass them to handlers for processing.'''
-        while True:
-            header = 'incoming'
-            try:
-                header = await MessageHeader.from_stream(connection.recv_exactly)
-                # FIXME: don't wait for message processing....
-                await self.handle_message(connection, header)
-            except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
-                self.logger.error('connection closed remotely')
-                raise ConnectionResetError('connection closed remotely') from None
-            except ForceDisconnectError:
-                raise
-            except ProtocolError as e:
-                self.logger.error(f'protocol error: {e}')
-            except Exception:
-                self.logger.exception(f'unexpected error handling {header} message')
-                raise
 
     async def ping_loop(self):
         while True:
@@ -884,10 +864,10 @@ class Session:
         else:
             await connection.outgoing_messages.put((header, payload))
 
-    async def send_large_message(self, command, payload_len, payload_func):
+    async def send_ext_message(self, command, payload_len, payload_func):
         '''Send a command as an extended message with its payload.'''
-        if not self.can_send_large_messages:
-            raise RuntimeError('large messages cannot be sent')
+        if not self.can_send_ext_messages:
+            raise RuntimeError('extended messages cannot be sent')
         connection = self.connection_for_command(command)
         header = MessageHeader.ext_bytes(self.node.network.magic, command, payload_len)
         await connection.outgoing_messages.put((header, payload_func))
@@ -896,55 +876,87 @@ class Session:
     # Receiving messages
     #
 
-    async def handle_message(self, connection, header):
-        if self.debug:
-            self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
+    async def recv_messages_loop(self, connection):
+        '''Read messages from a stream and pass them to handlers for processing.'''
+        create_task = self.group.create_task
+        while True:
+            header = 'incoming'
+            try:
+                header = await MessageHeader.from_stream(connection.recv_exactly)
+                if self.debug:
+                    self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
 
-        magic = self.node.network.magic
-        if header.magic != magic:
-            raise ForceDisconnectError(f'bad magic 0x{header.magic.hex()} '
-                                       f'expected 0x{magic.hex()}')
+                magic = self.node.network.magic
+                if header.magic != magic:
+                    raise ForceDisconnectError(f'bad magic 0x{header.magic.hex()} '
+                                               f'expected 0x{magic.hex()}')
 
-        if not self.handshake_complete.is_set():
-            if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
-                raise ForceDisconnectError(f'{header} command received before handshake finished')
+                # Each connection is a single stream of incoming bytes, so messages must be
+                # received in full before they can be handled in parallel.
+                if header.is_extended and await self.ext_message(connection, header):
+                    continue
+                payload = await connection.recv_exactly(header.payload_len)
+                create_task(self.std_message_safe(header, payload))
+            except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
+                self.logger.error('connection closed remotely')
+                raise ConnectionResetError('connection closed remotely') from None
+            except ForceDisconnectError as e:
+                self.logger.error(f'fatal protocol error: {e}')
+                raise
+            except ProtocolError as e:
+                self.logger.error(f'protocol error: {e}')
+            except Exception:
+                self.logger.exception(f'unexpected error handling {header} message')
+                raise
 
-        if header.is_extended and await self.handle_large_message(connection, header):
-            return
+    async def std_message_safe(self, header, payload):
+        try:
+            await self.std_message(header, payload)
+        except ForceDisconnectError as e:
+            self.logger.error(f'fatal protocol error: {e}')
+            await self.group.cancel_remaining()
+        except ProtocolError as e:
+            self.logger.error(f'protocol error: {e}')
 
-        command = header.command()
-        payload = await connection.recv_exactly(header.payload_len)
-        handler = getattr(self, f'on_{command}', None)
-        if not handler:
-            if command not in self.unhandled_commands:
-                self.unhandled_commands.add(command)
-                self.logger.warning(f'ignoring unhandled {command} message')
-            return
-
+    async def std_message(self, header, payload):
+        # Note - this routine also handles "short" ext messages
         if not header.is_extended and header.payload_checksum(payload) != header.checksum:
             # Maybe force disconnect if we get too many bad checksums in a short time
             error = ProtocolError if self.handshake_complete.is_set() else ForceDisconnectError
             raise error(f'bad checksum for {header} command')
 
-        await handler(Payload(payload, command))
+        # FIXME: race condition.   FIXME: ext messages.
+        if not self.handshake_complete.is_set():
+            if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
+                raise ForceDisconnectError(f'{header} command received before handshake finished')
 
-    async def handle_large_message(self, connection, header):
+        command = header.command()
+        handler = getattr(self, f'on_{command}', None)
+        if handler:
+            await handler(Payload(payload, command))
+        elif command not in self.unhandled_commands:
+            self.unhandled_commands.add(command)
+            self.logger.warning(f'ignoring unhandled {command} messages')
+
+    async def ext_message(self, connection, header):
         if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
-            raise ForceDisconnectError('large message received but invalid')
+            raise ForceDisconnectError('ext message received but invalid')
 
         # If the payload is small read it all in - just as for standard messages
         if header.payload_len < self.streaming_min_size:
             return False
 
-        command = header.command()
         size = header.payload_len
-        handler = getattr(self, f'on_{command}_large', None)
-        if not handler:
-            self.logger.warning(f'ignoring large {command} with payload of {size:,d} bytes')
+        command = f'{header.command()}_large'
+        handler = getattr(self, f'on_{command}', None)
+        if handler:
+            await handler(connection, size)
+        else:
+            if command not in self.unhandled_commands:
+                self.unhandled_commands.add(command)
+                self.logger.warning(f'ignoring unhandled extended {header.command()} messages')
             async for _chunk in connection.recv_chunks(size):
                 pass
-        else:
-            await handler(connection, size)
         return True
 
     async def services(self):
@@ -1045,6 +1057,7 @@ class Session:
             try:
                 inserted_count = await headers_obj.insert_headers(headers)
             except MissingHeader:
+                inserted_count = 0
                 self.logger.warning(f'ignoring {count:,d} non-connecting headers')
             except HeaderException as e:
                 raise ProtocolError(f'headers message: {e}') from None
@@ -1078,8 +1091,8 @@ class Session:
         if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
         self.log_service_details(self.remote_service, 'received version message:')
-        self.can_send_large_messages = (self.remote_service.protocol_version
-                                        >= LARGE_MESSAGES_PROTOCOL_VERSION)
+        self.can_send_ext_messages = (self.remote_service.protocol_version
+                                      >= LARGE_MESSAGES_PROTOCOL_VERSION)
 
     async def on_verack(self, payload):
         if not self.version_sent:
