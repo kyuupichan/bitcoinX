@@ -323,13 +323,12 @@ def random_nonce():
             return nonce
 
 
-def read_version_payload(service, payload):
+def read_version(service, read):
     '''Read a version payload and update member variables of service (except address).  Return
      a tuple (our_address, our_services, nonce) in the payload.
 
      This is not a constructor because there is no reliable source for the address.
     '''
-    read = BytesIO(payload).read
     service.protocol_version = read_le_uint32(read)
     service.services = read_le_uint64(read)
     service.timestamp = read_le_int64(read)
@@ -351,9 +350,6 @@ def read_version_payload(service, payload):
         service.assoc_id = read_varbytes(read)
     except PackingError:
         service.assoc_id = None
-
-    if read(1) != b'':
-        logging.warning('extra bytes at end of version payload')
 
     return (our_address, our_services, nonce)
 
@@ -393,36 +389,22 @@ def pack_headers_payload(headers: Sequence[SimpleHeader]):
     return pack_list(headers, lambda header: header.raw + zero)
 
 
-def unpack_headers_payload(payload):
+def read_headers(read):
     def read_one(read):
         raw_header = read(80)
         # A stupid tx count which the reference client sets to zero...
         read_varint(read)
         return SimpleHeader(raw_header)
 
-    read = BytesIO(payload).read
-    try:
-        result = read_list(read, read_one)
-    except PackingError:
-        raise ProtocolError('truncated headers payload')
-    if read(1) != b'':
-        logging.warning('extra bytes at end of headers payload')
-    return result
+    return read_list(read, read_one)
 
 
 def pack_addr_payload(services):
     return pack_list(services, BitcoinService.pack_with_timestamp)
 
 
-def unpack_addr_payload(payload):
-    read = BytesIO(payload).read
-    try:
-        result = read_list(read, ServicePacking.read_with_timestamp)
-    except PackingError:
-        raise ProtocolError('truncated addr payload')
-    if read(1) != b'':
-        logging.warning('extra bytes at end of addr payload')
-    return result
+def read_addrs(read):
+    return read_list(read, ServicePacking.read_with_timestamp)
 
 
 class BlockLocator:
@@ -700,6 +682,7 @@ class Session:
     done with separate Session objects.
     '''
     MAX_HEADERS = 2000
+    PING_INTERVAL = 120
 
     def __init__(self, node, remote_service, connection):
         self.node = node
@@ -987,6 +970,17 @@ class Session:
         assert len(headers) <= self.MAX_HEADERS
         await self.send_message(MessageHeader.HEADERS, pack_headers_payload(headers))
 
+    def unpack_payload(self, payload, reader, command):
+        read = BytesIO(payload).read
+        try:
+            result = reader(read)
+        except PackingError:
+            exc = ForceDisconnectError if command == 'version' else ProtocolError
+            raise exc(f'corrupt {command} message') from None
+        if read(1) != b'':
+            self.logger.warning(f'extra bytes at end of {command} payload')
+        return result
+
     # Callbacks when certain messages are received.
 
     async def on_headers(self, payload):
@@ -998,7 +992,7 @@ class Session:
         inserted_count = -1
         headers_obj = self.node.headers
         try:
-            headers = unpack_headers_payload(payload)
+            headers = self.unpack_payload(payload, read_headers, 'headers')
             count = len(headers)
             if count == 0:
                 self.logger.info(f'headers synchronized to height {self.their_tip.height}')
@@ -1048,10 +1042,8 @@ class Session:
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
         self.version_received.set()
-        try:
-            _, _, nonce = read_version_payload(self.remote_service, payload)
-        except PackingError:
-            raise ForceDisconnectError('corrupt version message')
+        _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service),
+                                          'version')
         if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
         self.log_service_details(self.remote_service, 'received version message:')
@@ -1104,4 +1096,6 @@ class Session:
         await self.send_message(MessageHeader.GETADDR, b'')
 
     async def on_addr(self, payload):
-        unpack_addr_payload(payload)
+        self.unpack_payload(payload, read_addrs, 'addr')
+
+    # TODO: send_addr
