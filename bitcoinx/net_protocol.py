@@ -311,6 +311,11 @@ class Protoconf:
 # Network Protocol
 #
 
+@dataclass
+class Payload:
+    payload: bytes
+    command: str
+
 
 def random_nonce():
     '''A nonce suitable for a PING or VERSION messages.'''
@@ -887,7 +892,7 @@ class Session:
             error = ProtocolError if self.handshake_complete.is_set() else ForceDisconnectError
             raise error(f'bad checksum for {header} command')
 
-        await handler(payload)
+        await handler(Payload(payload, command))
 
     async def handle_large_message(self, connection, header):
         if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
@@ -969,15 +974,15 @@ class Session:
         assert len(headers) <= self.MAX_HEADERS
         await self.send_message(MessageHeader.HEADERS, pack_headers_payload(headers))
 
-    def unpack_payload(self, payload, reader, command):
-        read = BytesIO(payload).read
+    def unpack_payload(self, payload, reader):
+        read = BytesIO(payload.payload).read
         try:
             result = reader(read)
         except PackingError:
-            exc = ForceDisconnectError if command == 'version' else ProtocolError
-            raise exc(f'corrupt {command} message') from None
+            exc = ForceDisconnectError if payload.command == 'version' else ProtocolError
+            raise exc(f'corrupt {payload.command} message') from None
         if read(1) != b'':
-            self.logger.warning(f'extra bytes at end of {command} payload')
+            self.logger.warning(f'extra bytes at end of {payload.command} payload')
         return result
 
     # Callbacks when certain messages are received.
@@ -991,7 +996,7 @@ class Session:
         inserted_count = -1
         headers_obj = self.node.headers
         try:
-            headers = self.unpack_payload(payload, read_headers, 'headers')
+            headers = self.unpack_payload(payload, read_headers)
             count = len(headers)
             if count == 0:
                 self.logger.info(f'headers synchronized to height {self.their_tip.height}')
@@ -1020,7 +1025,7 @@ class Session:
             self.headers_received.count = inserted_count
 
     async def on_getheaders(self, payload):
-        locator = self.unpack_payload(payload, BlockLocator.read, 'getheaders')
+        locator = self.unpack_payload(payload, BlockLocator.read)
         headers = await locator.fetch_locator_headers(self.node.headers, self.MAX_HEADERS)
         # Ignore if there are no block hashes and the hash_stop block is missing
         if locator.block_hashes or headers:
@@ -1029,20 +1034,13 @@ class Session:
             self.logger.info('ignoring getheaders for unknown block '
                              f'{hash_to_hex_str(locator.hash_stop)}')
 
-    async def on_inv(self, items):
-        '''Called when an inv message is received advertising availability of various objects.'''
-
-    async def on_tx(self, raw):
-        '''Called when a tx is received.'''
-
     async def on_version(self, payload):
         '''Called when a version message is received.   remote_service has been updated as
         they report it (except the address is unchanged).'''
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
         self.version_received.set()
-        _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service),
-                                          'version')
+        _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service))
         if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
         self.log_service_details(self.remote_service, 'received version message:')
@@ -1054,7 +1052,7 @@ class Session:
             raise ForceDisconnectError('verack message received before version message sent')
         if self.handshake_complete.is_set():
             raise ProtocolError('duplicate verack message')
-        self.unpack_payload(payload, read_nothing, 'verack')
+        self.unpack_payload(payload, read_nothing)
         self.handshake_complete.set()
 
     async def on_protoconf(self, payload):
@@ -1062,7 +1060,7 @@ class Session:
         if self.their_protoconf:
             raise ProtocolError('duplicate protoconf message received')
         self.their_protoconf = self.unpack_payload(
-            payload, partial(Protoconf.read, logger=self.logger), 'protoconf')
+            payload, partial(Protoconf.read, logger=self.logger))
 
     async def send_protoconf(self):
         if self.protoconf_sent:
@@ -1075,7 +1073,7 @@ class Session:
         if self.they_prefer_headers:
             raise ProtocolError('duplicate sendheaders message')
         self.they_prefer_headers = True
-        self.unpack_payload(payload, read_nothing, 'sendheaders')
+        self.unpack_payload(payload, read_nothing)
 
     async def send_sendheaders(self):
         if self.sendheaders_sent:
@@ -1086,13 +1084,13 @@ class Session:
             await self.send_message(MessageHeader.SENDHEADERS, b'')
 
     async def on_getaddr(self, payload):
-        self.unpack_payload(payload, read_nothing, 'getaddr')
+        self.unpack_payload(payload, read_nothing)
         await self.send_message(MessageHeader.ADDR, pack_addr_payload(await self.services()))
 
     async def send_getaddr(self):
         await self.send_message(MessageHeader.GETADDR, b'')
 
     async def on_addr(self, payload):
-        self.unpack_payload(payload, read_addrs, 'addr')
+        self.unpack_payload(payload, read_addrs)
 
     # TODO: send_addr

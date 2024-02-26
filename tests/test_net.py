@@ -1185,7 +1185,7 @@ class TestSession:
                 self.zombie_payload = b''.join(parts)
 
             async def on_zombie(self, payload):
-                self.zombie_payload2 = payload
+                self.zombie_payload2 = payload.payload
 
         class ClientSession(Session):
             async def on_handshake_complete(self):
@@ -1234,7 +1234,7 @@ class TestSession:
                     await self.headers_received.wait()
 
             async def on_headers(self, payload):
-                simple_headers = self.unpack_payload(payload, read_headers, 'headers')
+                simple_headers = self.unpack_payload(payload, read_headers)
                 assert simple_headers == self.expected_headers
                 self.headers_received.set()
 
