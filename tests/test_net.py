@@ -1146,6 +1146,32 @@ class TestSession:
                 await finished_event.wait()
                 await session.close()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('slow', ('version', 'verack'))
+    async def test_handshake_timeout(self, client_node, listening_node, slow):
+        '''Test the handshake is only complete AFTER verack is received when verack is sent
+        first.'''
+        class ListeningSession(Session):
+            async def send_version(self):
+                if slow == 'version':
+                    await pause(ClientSession.HANDSHAKE_TIMEOUT * 2)
+                await super().send_version()
+
+            async def send_verack(self):
+                if slow == 'verack':
+                    await pause(ClientSession.HANDSHAKE_TIMEOUT * 2)
+                await super().send_verack()
+
+        class ClientSession(Session):
+            HANDSHAKE_TIMEOUT=0.1
+
+        async with listening_node.listen(session_cls=ListeningSession):
+            with pytest.raises(TimeoutError):
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ClientSession) as session:
+                    await pause(session.HANDSHAKE_TIMEOUT * 1.5)
+            await pause()
+
     #
     # PROTOCONF message tests
     #

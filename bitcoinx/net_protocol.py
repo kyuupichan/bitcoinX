@@ -699,6 +699,10 @@ class Session:
     PING_INTERVAL = 120
     # If a ping takes longer than this to receive a pong, terminate the connection
     PING_CUTOFF = 120
+    # If the handshake hasn't completed after this amount of time, disconnect
+    HANDSHAKE_TIMEOUT = 10
+    # Give up on an outgoing connection if it isn't established after this amount of time
+    CONNECTION_TIMEOUT = 10
 
     def __init__(self, node, remote_service, connection, perform_handshake=True,
                  send_protoconf=True, we_prefer_headers=True, protoconf=None):
@@ -750,7 +754,7 @@ class Session:
         if self.connection is None:
             address = self.remote_service.address
             reader, writer = await open_connection(str(address.host), address.port)
-            async with timeout_after(10.0):
+            async with timeout_after(self.CONNECTION_TIMEOUT):
                 self.connection = Connection(reader, writer)
         self.group = TaskGroup()
         await self.setup_session()
@@ -800,6 +804,10 @@ class Session:
                 await self.ping_sent.wait()
                 self.ping_sent.clear()
 
+    async def check_handshake_timeout(self):
+        async with timeout_after(self.HANDSHAKE_TIMEOUT):
+            await self.handshake_complete.wait()
+
     async def setup_connection(self, connection):
         # Every connection needs these
         self.group.create_task(self.recv_messages_loop(connection))
@@ -809,6 +817,7 @@ class Session:
         # Every session needs these
         self.group.create_task(self.ping_loop())
         self.group.create_task(self.check_pongs_loop())
+        self.group.create_task(self.check_handshake_timeout())
 
         # Setup the handshake unless customised
         if self._perform_handshake:
@@ -846,9 +855,8 @@ class Session:
             await self.version_received.wait()
             await self.send_version()
 
-        # Send verack.  The handhsake is complete once verack is received
+        # Send verack.
         await self.send_verack()
-        await self.handshake_complete.wait()
 
     def connection_for_command(self, _command):
         return self.connection
@@ -908,7 +916,10 @@ class Session:
                 if header.is_extended and await self.ext_message(connection, header):
                     continue
                 payload = await connection.recv_exactly(header.payload_len)
-                create_task(self.std_message_safe(header, payload))
+                if self.handshake_complete.is_set():
+                    create_task(self.std_message_safe(header, payload))
+                else:
+                    await self.std_message_safe(header, payload)
             except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
                 self.logger.error('connection closed remotely')
                 raise ConnectionResetError('connection closed remotely') from None
