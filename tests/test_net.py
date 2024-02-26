@@ -897,6 +897,22 @@ class TestSession:
         assert in_caplog(caplog, 'fatal protocol error: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize('force_extended', (False, True))
+    async def test_bad_magic_later(self, client_node, listening_node, caplog, force_extended):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service) as session:
+                        await pause()
+                        client_node.network = BitcoinTestnet
+                        await session.send_message(MessageHeader.SENDHEADERS, b'',
+                                                   force_extended=force_extended)
+                        await pause()
+                        await session.close()
+
+        assert in_caplog(caplog, 'fatal protocol error: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
+
+    @pytest.mark.asyncio
     async def test_bad_checksum(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
@@ -1150,8 +1166,7 @@ class TestSession:
                 assert listener_session.their_protoconf is None
                 self.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
                 payload = self.our_protoconf.payload()
-                await self.send_ext_message(MessageHeader.PROTOCONF, len(payload),
-                                            achunks(payload, 4))
+                await self.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
                 await pause()
                 assert listener_session.their_protoconf == self.our_protoconf
                 await self.close()
@@ -1167,12 +1182,10 @@ class TestSession:
                 payload = Protoconf.default().payload()
                 # We should not accept sending a large message
                 with pytest.raises(RuntimeError):
-                    await self.send_ext_message(MessageHeader.PROTOCONF, len(payload),
-                                                achunks(payload, 4))
+                    await self.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
                 # Override the check
                 self.can_send_ext_messages = True
-                await self.send_ext_message(MessageHeader.PROTOCONF, len(payload),
-                                            achunks(payload, 4))
+                await self.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
 
         with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
@@ -1198,11 +1211,9 @@ class TestSession:
             async def on_handshake_complete(self):
                 listener_session = await listening_session(listening_node)
                 listener_session.streaming_min_size = 200
-                await self.send_ext_message(_command('zombie'), len(payload),
-                                            achunks(payload, 100))
+                await self.send_message(_command('zombie'), (achunks(payload, 100), len(payload)))
                 await self.send_message(_command('zombie'), payload)
-                await self.send_ext_message(_command('ghoul'), len(payload),
-                                            achunks(payload, 100))
+                await self.send_message(_command('ghoul'), (achunks(payload, 100), len(payload)))
                 await pause()
                 assert listener_session.zombie_payload == payload
                 assert listener_session.zombie_payload2 == payload

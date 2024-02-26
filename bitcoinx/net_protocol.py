@@ -766,16 +766,13 @@ class Session:
         send = self.connection.send
         while True:
             header, payload = await connection.outgoing_messages.get()
-            if len(header) == MessageHeader.STD_HEADER_SIZE:
-                if len(payload) + len(header) <= 536:
-                    await send(header + payload)
-                else:
-                    await send(header)
-                    await send(payload)
-            else:
-                await send(header)
-                async for part in payload:
+            await send(header)
+            if isinstance(payload, tuple):
+                payload_async_gen, _payload_len = payload
+                async for part in payload_async_gen:
                     await send(part)
+            else:
+                await send(payload)
 
     async def ping_loop(self):
         while True:
@@ -852,10 +849,28 @@ class Session:
     # Sending messages
     #
 
-    async def send_message(self, command, payload):
-        '''Send a command and its payload.'''
+    async def send_message(self, command, payload, *, force_extended=False):
+        '''Send a command and its payload.  If force_extended is True, it is sent as an extended
+        message, perhaps to save both parties doing the checksum.
+
+        Alternatively, payload can be a (payload_func, payload_len) pair.  In which case
+        an extended message is sent, even if force_extended is False.  payload_func is
+        used as an asynchronous generator to send the payload in chunks.  Currently, no
+        sanity check is done that the payload we send is actually of the claimed length.
+        '''
         connection = self.connection_for_command(command)
-        header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
+        if force_extended or isinstance(payload, tuple):
+            if not self.can_send_ext_messages:
+                raise RuntimeError('extended messages cannot be sent')
+            if isinstance(payload, tuple):
+                if command in MessageHeader.HANDSHAKE_COMMANDS:
+                    raise RuntimeError('extended version/verack messages cannot be sent')
+                _payload_func, payload_len = payload
+            else:
+                payload_len = len(payload)
+            header = MessageHeader.ext_bytes(self.node.network.magic, command, payload_len)
+        else:
+            header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
 
         # Ensure that handhsake messages are prioritised.  The outgoing message queue
         # doesn't start being consumed until the handshake is complete.
@@ -863,14 +878,6 @@ class Session:
             await connection.send(header + payload)
         else:
             await connection.outgoing_messages.put((header, payload))
-
-    async def send_ext_message(self, command, payload_len, payload_func):
-        '''Send a command as an extended message with its payload.'''
-        if not self.can_send_ext_messages:
-            raise RuntimeError('extended messages cannot be sent')
-        connection = self.connection_for_command(command)
-        header = MessageHeader.ext_bytes(self.node.network.magic, command, payload_len)
-        await connection.outgoing_messages.put((header, payload_func))
 
     #
     # Receiving messages
