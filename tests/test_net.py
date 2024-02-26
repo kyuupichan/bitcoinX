@@ -846,7 +846,8 @@ async def achunks(payload, size):
 
 
 async def pause(secs=None):
-    secs = 0.05 if platform.system() == 'Windows' else 0.01
+    if secs is None:
+        secs = 0.05 if platform.system() == 'Windows' else 0.01
     await asyncio.sleep(secs)
 
 
@@ -1133,14 +1134,16 @@ class TestSession:
                 await session.close()
 
     @pytest.mark.asyncio
-    async def test_ext_message_rejections(self, client_node, listening_node, caplog):
+    async def test_cannot_send_ext_message(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service,
                                                    send_protoconf=False) as session:
+                        await session.handshake_complete.wait()
                         payload = Protoconf.default().payload()
+                        assert not session.can_send_ext_messages
                         # We should not accept sending a large message
                         with pytest.raises(RuntimeError):
                             await session.send_message(MessageHeader.PROTOCONF, payload,
@@ -1180,6 +1183,21 @@ class TestSession:
                     await session.close()
 
         assert in_caplog(caplog, 'ignoring unhandled extended ghoul messages')
+
+    @pytest.mark.asyncio
+    async def test_whole_session_extended(self, client_node, listening_node):
+        '''Test sending every message as extended, even the version message.'''
+        class ClientSession(Session):
+            async def send_message(self, command, payload, *, force_extended=False):
+                await super().send_message(command, payload, force_extended=True)
+
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           session_cls=ClientSession) as session:
+                await pause(0.1)
+                assert session.they_prefer_headers
+                await session.close()
+
 
     #
     # GETHEADERS / HEADERS message tests

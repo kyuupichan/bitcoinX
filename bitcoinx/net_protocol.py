@@ -720,11 +720,12 @@ class Session:
         self.headers_synced = False
         self.their_protoconf = None
         self.nonce = self.node.random_nonce()
-        self.can_send_ext_messages = False
         self.their_tip = node.headers.genesis_header
         self.sendheaders_sent = False
         self.they_prefer_headers = False
         self.pings = {}
+        # Be optimistic, at least until we receive a version message
+        self.can_send_ext_messages = True
 
         # Setup
         self.protoconf = protoconf or Protoconf.default()
@@ -1099,9 +1100,9 @@ class Session:
         _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service))
         if self.node.is_our_nonce(nonce):
             raise ForceDisconnectError('connected to ourself')
-        self.log_service_details(self.remote_service, 'received version message:')
         self.can_send_ext_messages = (self.remote_service.protocol_version
                                       >= LARGE_MESSAGES_PROTOCOL_VERSION)
+        self.log_service_details(self.remote_service, 'received version message:')
 
     async def send_version(self):
         await self.send_message(MessageHeader.VERSION, await self.version_payload())
