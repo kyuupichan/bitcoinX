@@ -1048,7 +1048,7 @@ class TestSession:
         assert in_caplog(caplog, 'connection closed remotely')
 
     #
-    # VERACK / handhske tests
+    # VERACK / handshake tests
     #
 
     @pytest.mark.asyncio
@@ -1082,6 +1082,62 @@ class TestSession:
                     pass
 
         assert in_caplog(caplog, 'extra bytes at end of verack payload')
+
+    @pytest.mark.asyncio
+    async def test_hc_verack_received_first(self, client_node, listening_node):
+        '''Test the handshake is only complete AFTER verack is sent when verack is received
+        first.'''
+        class ClientSession(Session):
+            async def on_verack(self, payload):
+                await super().on_verack(payload)
+                received_event.set()
+
+            async def send_verack(self):
+                try:
+                    await received_event.wait()
+                    assert not self.handshake_complete.is_set()
+                    await super().send_verack()
+                    assert self.handshake_complete.is_set()
+                finally:
+                    finished_event.set()
+
+        received_event = asyncio.Event()
+        finished_event = asyncio.Event()
+
+        # Test verack received before handshake is complete when verack is received
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           session_cls=ClientSession) as session:
+                await finished_event.wait()
+                await session.close()
+
+    @pytest.mark.asyncio
+    async def test_hc_verack_sent_first(self, client_node, listening_node):
+        '''Test the handshake is only complete AFTER verack is received when verack is sent
+        first.'''
+        class ClientSession(Session):
+            async def on_verack(self, payload):
+                try:
+                    await sent_event.wait()
+                    assert not self.handshake_complete.is_set()
+                    await super().on_verack(payload)
+                    assert self.handshake_complete.is_set()
+                finally:
+                    finished_event.set()
+
+            async def send_verack(self):
+                await super().send_verack()
+                sent_event.set()
+
+        sent_event = asyncio.Event()
+        finished_event = asyncio.Event()
+
+        # Test verack received before handshake is complete when verack is received
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           session_cls=ClientSession) as session:
+                await finished_event.wait()
+                await session.close()
 
     #
     # PROTOCONF message tests

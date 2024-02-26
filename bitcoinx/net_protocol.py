@@ -712,6 +712,8 @@ class Session:
         # FIXME: move some things to BitcoinService
         # State
         self.version_sent = False
+        self.verack_sent = False
+        self.verack_received = False
         self.protoconf_sent = False
         self.version_received = Event()
         self.handshake_complete = Event()
@@ -935,7 +937,6 @@ class Session:
             error = ProtocolError if self.handshake_complete.is_set() else ForceDisconnectError
             raise error(f'bad checksum for {header} command')
 
-        # FIXME: race condition.   FIXME: ext messages.
         if not self.handshake_complete.is_set():
             if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
                 raise ForceDisconnectError(f'{header} command received before handshake finished')
@@ -1111,13 +1112,18 @@ class Session:
     async def on_verack(self, payload):
         if not self.version_sent:
             raise ForceDisconnectError('verack message received before version message sent')
-        if self.handshake_complete.is_set():
+        if self.verack_received:
             raise ProtocolError('duplicate verack message')
+        self.verack_received = True
+        if self.verack_sent:
+            self.handshake_complete.set()
         self.unpack_payload(payload, read_nothing)
-        self.handshake_complete.set()
 
     async def send_verack(self):
         await self.send_message(MessageHeader.VERACK, b'')
+        self.verack_sent = True
+        if self.verack_received:
+            self.handshake_complete.set()
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
