@@ -186,6 +186,30 @@ class TestHeaders:
         network = Bitcoin
         run_test_with_headers(test, network)
 
+    def test_insert_headers_commits(self):
+        async def test(headers):
+            mainnet_headers = first_mainnet_headers(6)
+            await headers.insert_headers(mainnet_headers)
+            assert await headers.height() == 5
+            await headers.conn.rollback()
+            assert await headers.height() == 5
+
+        run_test_with_headers(test)
+
+    def test_insert_headers_commits_successes(self):
+        async def test(headers):
+            mainnet_headers = first_mainnet_headers(6)
+            mainnet_headers.append(create_random_header(mainnet_headers[-1]))
+            try:
+                await headers.insert_headers(mainnet_headers)
+            except InsufficientPoW:
+                pass
+            assert await headers.height() == 5
+            await headers.conn.rollback()
+            assert await headers.height() == 5
+
+        run_test_with_headers(test)
+
     def test_insert_headers_bad(self):
         async def test(headers):
             branch = create_random_branch(headers.genesis_header, 4)

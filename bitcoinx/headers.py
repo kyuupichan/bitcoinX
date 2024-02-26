@@ -277,30 +277,36 @@ class Headers:
         execute = self.conn.execute
         required_bits = self.network.required_bits
         count = 0
-        for header in simple_headers:
-            cursor = await execute(prev_header_sql, (header.prev_hash, ))
-            row = await cursor.fetchone()
-            if not row:
-                if header.hash == self.genesis_header.hash:
-                    continue
-                raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
-            prev_hdr_id, chain_id, height, chain_work = row
 
-            if check_work:
-                header.height = height + 1
-                header.chain_id = chain_id
-                bits = await required_bits(self, header)
-                if header.bits != bits:
-                    raise IncorrectBits(header, bits)
-                if header.hash_value() > header.target():
-                    raise InsufficientPoW(header)
+        try:
+            for header in simple_headers:
+                cursor = await execute(prev_header_sql, (header.prev_hash, ))
+                row = await cursor.fetchone()
+                if not row:
+                    if header.hash == self.genesis_header.hash:
+                        continue
+                    raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
+                prev_hdr_id, chain_id, height, chain_work = row
 
-            chain_work = int_to_le_bytes(le_bytes_to_int(chain_work) + bits_to_work(header.bits))
-            cursor = await execute(insert_header_sql,
-                                   (prev_hdr_id, chain_work, header.hash, header.merkle_root,
-                                    header.version, header.timestamp, header.bits, header.nonce,
-                                    header.prev_hash))
-            count += cursor.rowcount
+                if check_work:
+                    header.height = height + 1
+                    header.chain_id = chain_id
+                    bits = await required_bits(self, header)
+                    if header.bits != bits:
+                        raise IncorrectBits(header, bits)
+                    if header.hash_value() > header.target():
+                        raise InsufficientPoW(header)
+
+                chain_work = int_to_le_bytes(le_bytes_to_int(chain_work)
+                                             + bits_to_work(header.bits))
+                cursor = await execute(insert_header_sql,
+                                       (prev_hdr_id, chain_work, header.hash, header.merkle_root,
+                                        header.version, header.timestamp, header.bits,
+                                        header.nonce, header.prev_hash))
+                count += cursor.rowcount
+        finally:
+            await self.conn.commit()
+
         return count
 
     async def _query_headers(self, where_clause, params, is_multi):
