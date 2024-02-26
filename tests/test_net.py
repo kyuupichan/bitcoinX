@@ -975,12 +975,19 @@ class TestSession:
     async def test_duplicate_version(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   perform_handshake=False) as session:
+                async with client_node.connect(listening_node.service,
+                                               perform_handshake=False) as session:
+                    await session.send_version()
+                    with caplog.at_level(logging.WARNING):
                         await session.send_version()
-                        await session.send_version()
-                        await pause()
+                    assert in_caplog(caplog, 'version message already sent')
+                    await pause()
+                    assert not in_caplog(caplog, 'duplicate version message')
+
+                    session.version_sent = False
+                    await session.send_version()
+                    await pause()
+                    await session.close()
 
         assert in_caplog(caplog, 'protocol error: duplicate version message')
 

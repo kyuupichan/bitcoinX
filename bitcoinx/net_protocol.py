@@ -1106,6 +1106,9 @@ class Session:
         self.log_service_details(self.remote_service, 'received version message:')
 
     async def send_version(self):
+        if self.version_sent:
+            self.logger.warning('version message already sent')
+            return
         await self.send_message(MessageHeader.VERSION, await self.version_payload())
         self.version_sent = True
 
