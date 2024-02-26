@@ -24,7 +24,7 @@ from bitcoinx.net_protocol import (
     ServicePacking, BlockLocator, version_payload, read_version, _command,
     pack_headers_payload, read_headers, read_addrs, services_from_seeds,
 )
-from bitcoinx.aiolib import timeout_after, ignore_after
+from bitcoinx.aiolib import timeout_after, ignore_after, TaskGroup
 
 from .utils import (
     run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers, in_caplog,
@@ -810,6 +810,13 @@ def listening_node(listening_headers):
         assert all(not session.is_outgoing for session in node.sessions)
 
 
+@pytest.fixture
+def listening_node2(listening_headers):
+    service = BitcoinService(address=NetAddress(listen_host, 5657))
+    node = Node(service, listening_headers)
+    yield node
+
+
 async def listening_session(listening_node):
     await pause()
     for session in listening_node.sessions:
@@ -1436,6 +1443,34 @@ class TestSession:
                     await session.close()
 
         assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')
+
+    #
+    # sync_headers() logic tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_sync_headers_lock(self, client_node, listening_node, listening_node2):
+        class ListenerSession(Session):
+            async def on_getheaders(self, payload):
+                nonlocal requests
+                requests += 1
+                await asyncio.sleep(0.04)
+                await self.close()
+
+        async def create_client(lnode):
+            async with client_node.connect(lnode.service) as session:
+                async with ignore_after(0.02):
+                    await session.sync_headers()
+                await session.close()
+
+        requests = 0
+        async with listening_node.listen(session_cls=ListenerSession):
+            async with listening_node2.listen(session_cls=ListenerSession):
+                async with TaskGroup() as group:
+                    group.create_task(create_client(listening_node))
+                    group.create_task(create_client(listening_node2))
+
+        assert requests == 1
 
     @pytest.mark.asyncio
     async def test_sync_headers(self, client_node, listening_node):
