@@ -602,8 +602,8 @@ class Node:
         self.sessions.remove(session)
 
     def listen(self, **kwargs):
-        '''Listen for incoming connections, and for each incoming connection call session_cls (a
-        callable) and then await its member function maintain_connection().
+        '''Listen for incoming connections, and for each incoming connection create a session to
+        manage it.
         '''
         async def on_client_connection(reader, writer):
             session = None
@@ -676,7 +676,9 @@ class Listener:
 
     async def __aexit__(self, _et, _exc, _tb):
         self.server.close()
-        await self.server.wait_closed()
+        # Python bug in 3.12 causes this to hang sometimes, sigh.
+        async with ignore_after(0.1):
+            await self.server.wait_closed()
         if sys.version_info < (3, 11):
             await asyncio.sleep(0.001)
 
@@ -698,31 +700,38 @@ class Session:
     # If a ping takes longer than this to receive a pong, terminate the connection
     PING_CUTOFF = 120
 
-    def __init__(self, node, remote_service, connection):
+    def __init__(self, node, remote_service, connection, perform_handshake=True,
+                 send_protoconf=True, we_prefer_headers=True, protoconf=None):
         self.node = node
         self.remote_service = remote_service
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = connection is None
-        self.protoconf = Protoconf.default()
         self.streaming_min_size = 10_000_000
 
+        # FIXME: move some things to BitcoinService
         # State
         self.version_sent = False
+        self.protoconf_sent = False
         self.version_received = Event()
         self.handshake_complete = Event()
         self.headers_received = Event()
         self.ping_sent = Event()
         self.headers_synced = False
-        self.protoconf_sent = False
         self.their_protoconf = None
         self.nonce = self.node.random_nonce()
         self.can_send_ext_messages = False
         self.their_tip = node.headers.genesis_header
         self.sendheaders_sent = False
-        self.we_prefer_headers = True
         self.they_prefer_headers = False
         self.pings = {}
+
+        # Setup
+        self.protoconf = protoconf or Protoconf.default()
+        self._send_protoconf = send_protoconf
+        self._perform_handshake = perform_handshake
+        # If True, a sendheaders message is sent
+        self.we_prefer_headers = we_prefer_headers
 
         # Session management
         self.group = None
@@ -734,14 +743,15 @@ class Session:
         self.unhandled_commands = set()
 
     async def __aenter__(self):
+        # FIXME: make this robust
         if self.connection is None:
             address = self.remote_service.address
             reader, writer = await open_connection(str(address.host), address.port)
             async with timeout_after(10.0):
                 self.connection = Connection(reader, writer)
-        self.node.register_session(self)
         self.group = TaskGroup()
-        self.group.create_task(self.maintain_connection(self.connection))
+        await self.setup_session()
+        self.node.register_session(self)
         return self
 
     async def __aexit__(self, _et, exc, _tb):
@@ -759,10 +769,7 @@ class Session:
             await self.group.cancel_remaining()
 
     async def send_messages_loop(self, connection):
-        '''Handle sending the queue of messages.  This sends all messages except the initial
-        version / verack handshake.
-        '''
-        await self.handshake_complete.wait()
+        '''Handle sending the queue of messages.'''
         send = self.connection.send
         while True:
             header, payload = await connection.outgoing_messages.get()
@@ -790,17 +797,26 @@ class Session:
                 await self.ping_sent.wait()
                 self.ping_sent.clear()
 
-    async def maintain_connection(self, connection):
-        '''Maintains a connection.'''
-        async def perform_handshake_and_callback():
-            await self.perform_handshake()
-            await self.on_handshake_complete()
-
+    async def setup_connection(self, connection):
+        # Every connection needs these
         self.group.create_task(self.recv_messages_loop(connection))
         self.group.create_task(self.send_messages_loop(connection))
+
+    async def setup_session(self):
+        # Every session needs these
         self.group.create_task(self.ping_loop())
         self.group.create_task(self.check_pongs_loop())
-        self.group.create_task(perform_handshake_and_callback())
+
+        # Setup the handshake unless customised
+        if self._perform_handshake:
+            self.group.create_task(self.perform_handshake())
+        if self._send_protoconf:
+            self.group.create_task(self.send_protoconf())
+        if self.we_prefer_headers:
+            self.group.create_task(self.send_sendheaders())
+
+        # Setup connection-related tasks
+        await self.setup_connection(self.connection)
 
     def log_service_details(self, serv, headline):
         self.logger.info(headline)
@@ -815,32 +831,21 @@ class Session:
         self.log_service_details(our_service, 'sending version message:')
         return version_payload(our_service, self.remote_service.address, self.nonce)
 
-    async def send_version_message(self):
-        await self.send_message(MessageHeader.VERSION, await self.version_payload())
-        self.version_sent = True
-
-    async def send_verack_message(self):
-        await self.send_message(MessageHeader.VERACK, b'')
-
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
         if self.is_outgoing:
-            await self.send_version_message()
+            await self.send_version()
             # Outoing connections wait now
             await self.version_received.wait()
         else:
             # Incoming connections wait for version message first
             await self.version_received.wait()
-            await self.send_version_message()
+            await self.send_version()
 
         # Send verack.  The handhsake is complete once verack is received
-        await self.send_verack_message()
+        await self.send_verack()
         await self.handshake_complete.wait()
-
-    async def on_handshake_complete(self):
-        self.group.create_task(self.send_protoconf())
-        self.group.create_task(self.send_sendheaders())
 
     def connection_for_command(self, _command):
         return self.connection
@@ -863,8 +868,6 @@ class Session:
             if not self.can_send_ext_messages:
                 raise RuntimeError('extended messages cannot be sent')
             if isinstance(payload, tuple):
-                if command in MessageHeader.HANDSHAKE_COMMANDS:
-                    raise RuntimeError('extended version/verack messages cannot be sent')
                 _payload_func, payload_len = payload
             else:
                 payload_len = len(payload)
@@ -872,12 +875,11 @@ class Session:
         else:
             header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
 
-        # Ensure that handhsake messages are prioritised.  The outgoing message queue
-        # doesn't start being consumed until the handshake is complete.
-        if command in MessageHeader.HANDSHAKE_COMMANDS:
-            await connection.send(header + payload)
-        else:
-            await connection.outgoing_messages.put((header, payload))
+        # Ensure that all other messages wait for the handshake to complete.
+        if command not in MessageHeader.HANDSHAKE_COMMANDS:
+            await self.handshake_complete.wait()
+
+        await connection.outgoing_messages.put((header, payload))
 
     #
     # Receiving messages
@@ -1101,6 +1103,10 @@ class Session:
         self.can_send_ext_messages = (self.remote_service.protocol_version
                                       >= LARGE_MESSAGES_PROTOCOL_VERSION)
 
+    async def send_version(self):
+        await self.send_message(MessageHeader.VERSION, await self.version_payload())
+        self.version_sent = True
+
     async def on_verack(self, payload):
         if not self.version_sent:
             raise ForceDisconnectError('verack message received before version message sent')
@@ -1108,6 +1114,9 @@ class Session:
             raise ProtocolError('duplicate verack message')
         self.unpack_payload(payload, read_nothing)
         self.handshake_complete.set()
+
+    async def send_verack(self):
+        await self.send_message(MessageHeader.VERACK, b'')
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
@@ -1135,6 +1144,7 @@ class Session:
             return
         if self.remote_service.understands_sendheaders():
             self.sendheaders_sent = True
+            self.we_prefer_headers = True
             await self.send_message(MessageHeader.SENDHEADERS, b'')
 
     async def on_getaddr(self, payload):

@@ -305,7 +305,7 @@ class Deadline:
             return True
 
         # Did an outer timeout trigger?
-        if exc_type is CancelledError and task._timeout_setter:
+        if exc_type is CancelledError and getattr(task, '_timeout_setter', None):
             if hasattr(task, 'uncancel'):
                 task.uncancel()
             raise TimeoutCancellationError
