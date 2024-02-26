@@ -635,9 +635,9 @@ class TestNetworkProtocol:
     def test_getheaders_payload_short(self):
         locator = BlockLocator(700, [urandom(32)], urandom(31))
         payload = locator.to_payload()
-        with pytest.raises(ProtocolError) as e:
+        with pytest.raises(PackingError) as e:
             BlockLocator.read(BytesIO(payload).read)
-        assert str(e.value) == 'truncated getheaders payload'
+        assert str(e.value) == 'could not read 32 bytes'
 
     def test_pack_getheaders_payload(self):
         def pack_hash(h):
@@ -1558,3 +1558,70 @@ class TestSession:
                     await session.close()
 
         assert in_caplog(caplog, 'extra bytes at end of getaddr payload')
+
+    #
+    # PING / PONG message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_ping_interval(self, client_node, listening_node):
+        class ClientSession(Session):
+            PING_INTERVAL = 0.01
+
+        class ListenerSession(Session):
+            async def on_ping(self, payload):
+                await super().on_ping(payload)
+                nonlocal pings_received
+                pings_received += 1
+
+        pings_received = 0
+        async with listening_node.listen(session_cls=ListenerSession):
+            async with client_node.connect(listening_node.service) as session:
+                await asyncio.sleep(0.04)
+                await session.close()
+
+            assert pings_received == 1
+            pings_received = 0
+
+            async with client_node.connect(listening_node.service,
+                                           session_cls=ClientSession) as session:
+                await asyncio.sleep(0.04)
+                await session.close()
+
+        assert pings_received >= 2
+
+    @pytest.mark.asyncio
+    async def test_ping_cutoff(self, client_node, listening_node, caplog):
+        class ClientSession(Session):
+            async def on_ping(self, payload):
+                await asyncio.sleep(0.05)
+                await super().on_ping(payload)
+
+        class ListenerSession(Session):
+            PING_CUTOFF = 0.02
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                async with client_node.connect(listening_node.service) as session:
+                    await asyncio.sleep(0.04)
+                    await session.close()
+
+                assert not in_caplog(caplog, 'ping timeout')
+
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   session_cls=ClientSession) as session:
+                        pass
+
+                assert in_caplog(caplog, 'ping timeout after 0.02s')
+
+    @pytest.mark.asyncio
+    async def test_unexpected_pong(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    await session.send_pong(urandom(8))
+                    await pause()
+                    await session.close()
+
+            assert in_caplog(caplog, 'unexpected pong')

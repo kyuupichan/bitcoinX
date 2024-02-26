@@ -195,7 +195,7 @@ class ServicePacking:
     @classmethod
     def read(cls, read):
         '''Reads 26 bytes from a raw byte stream, returns a (NetAddress, services) pair.'''
-        return cls.unpack(read(cls.struct.size))
+        return cls.unpack(read_exactly(read, cls.struct.size))
 
     @classmethod
     def read_with_timestamp(cls, read):
@@ -324,6 +324,17 @@ def random_nonce():
         nonce = os.urandom(8)
         if nonce != ZERO_NONCE:
             return nonce
+
+
+def read_exactly(read, size):
+    result = read(size)
+    if len(result) != size:
+        raise PackingError(f'could not read {size} bytes')
+    return result
+
+
+def read_nonce(read):
+    return read_exactly(read, 8)
 
 
 def read_version(service, read):
@@ -465,10 +476,7 @@ class BlockLocator:
 
         version = read_le_uint32(read)
         locator = read_list(read, read_one)
-        hash_stop = read(32)
-        if len(hash_stop) != 32:
-            raise ProtocolError('truncated getheaders payload')
-
+        hash_stop = read_exactly(read, 32)
         return cls(version, locator, hash_stop)
 
     async def fetch_locator_headers(self, headers, limit):
@@ -685,8 +693,13 @@ class Session:
     If a client wishes to maintain several associations with the same address, it must be
     done with separate Session objects.
     '''
+
+    # Maximum number of headers to send and receive in a headers message
     MAX_HEADERS = 2000
+    # Time between sent pings
     PING_INTERVAL = 120
+    # If a ping takes longer than this to receive a pong, terminate the connection
+    PING_CUTOFF = 120
 
     def __init__(self, node, remote_service, connection):
         self.node = node
@@ -702,6 +715,7 @@ class Session:
         self.version_received = Event()
         self.handshake_complete = Event()
         self.headers_received = Event()
+        self.ping_sent = Event()
         self.headers_synced = False
         self.protoconf_sent = False
         self.their_protoconf = None
@@ -711,10 +725,12 @@ class Session:
         self.sendheaders_sent = False
         self.we_prefer_headers = True
         self.they_prefer_headers = False
+        self.pings = {}
         self.group = None
 
         # Logging
-        self.logger = prefixed_logger(str(node.network), str(remote_service.address))
+        OI = 'O' if self.is_outgoing else 'I'
+        self.logger = prefixed_logger(f'{node.network}:{OI}', str(remote_service.address))
         self.debug = self.logger.isEnabledFor(logging.DEBUG)
         self.unhandled_commands = set()
 
@@ -781,6 +797,22 @@ class Session:
                 self.logger.exception(f'unexpected error handling {header} message')
                 raise
 
+    async def ping_loop(self):
+        while True:
+            await self.send_ping()
+            await asyncio.sleep(self.PING_INTERVAL)
+
+    async def check_pongs_loop(self):
+        while True:
+            remaining = None
+            if self.pings:
+                remaining = min(self.pings.values()) + self.PING_CUTOFF - time.time()
+                if remaining <= 0:
+                    raise ForceDisconnectError(f'ping timeout after {self.PING_CUTOFF}s')
+            async with ignore_after(remaining):
+                await self.ping_sent.wait()
+                self.ping_sent.clear()
+
     async def maintain_connection(self, connection):
         '''Maintains a connection.'''
         async def perform_handshake_and_callback():
@@ -789,6 +821,8 @@ class Session:
 
         self.group.create_task(self.recv_messages_loop(connection))
         self.group.create_task(self.send_messages_loop(connection))
+        self.group.create_task(self.ping_loop())
+        self.group.create_task(self.check_pongs_loop())
         self.group.create_task(perform_handshake_and_callback())
 
     def log_service_details(self, serv, headline):
@@ -1094,3 +1128,23 @@ class Session:
         self.unpack_payload(payload, read_addrs)
 
     # TODO: send_addr
+
+    async def on_ping(self, payload):
+        nonce = self.unpack_payload(payload, read_nonce)
+        await self.send_pong(nonce)
+
+    async def send_ping(self):
+        nonce = random_nonce()
+        await self.send_message(MessageHeader.PING, nonce)
+        self.pings[nonce] = time.time()
+        self.ping_sent.set()
+
+    async def on_pong(self, payload):
+        nonce = self.unpack_payload(payload, read_nonce)
+        sent_time = self.pings.pop(nonce, None)
+        if sent_time is None:
+            self.logger.warning('unexpected pong')
+        # FIXME: record ping time somewhere
+
+    async def send_pong(self, nonce):
+        await self.send_message(MessageHeader.PONG, nonce)
