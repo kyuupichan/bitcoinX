@@ -292,10 +292,8 @@ class Protoconf:
         return cls(5_000_000, [b'Default'])
 
     @classmethod
-    def from_payload(cls, payload, logger=None):
+    def read(cls, read, logger=None):
         logger = logger or logging
-        read = BytesIO(payload).read
-
         field_count = read_varint(read)
         if field_count < 2:
             raise ProtocolError('bad field count {field_count} in protoconf message')
@@ -384,6 +382,10 @@ def version_payload(service, remote_service, nonce):
     ))
 
 
+def read_nothing(_read):
+    pass
+
+
 def pack_headers_payload(headers: Sequence[SimpleHeader]):
     zero = pack_varint(0)
     return pack_list(headers, lambda header: header.raw + zero)
@@ -452,18 +454,15 @@ class BlockLocator:
         return b''.join(parts())
 
     @classmethod
-    def from_payload(cls, payload):
+    def read(cls, read):
         def read_one(read):
             return read(32)
 
-        read = BytesIO(payload).read
         version = read_le_uint32(read)
         locator = read_list(read, read_one)
         hash_stop = read(32)
         if len(hash_stop) != 32:
             raise ProtocolError('truncated getheaders payload')
-        if read(1) != b'':
-            logging.warning('extra bytes at end of getheaders payload')
 
         return cls(version, locator, hash_stop)
 
@@ -1021,7 +1020,7 @@ class Session:
             self.headers_received.count = inserted_count
 
     async def on_getheaders(self, payload):
-        locator = BlockLocator.from_payload(payload)
+        locator = self.unpack_payload(payload, BlockLocator.read, 'getheaders')
         headers = await locator.fetch_locator_headers(self.node.headers, self.MAX_HEADERS)
         # Ignore if there are no block hashes and the hash_stop block is missing
         if locator.block_hashes or headers:
@@ -1055,15 +1054,15 @@ class Session:
             raise ForceDisconnectError('verack message received before version message sent')
         if self.handshake_complete.is_set():
             raise ProtocolError('duplicate verack message')
-        if payload:
-            self.logger.warning('verack message has payload')
+        self.unpack_payload(payload, read_nothing, 'verack')
         self.handshake_complete.set()
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
         if self.their_protoconf:
             raise ProtocolError('duplicate protoconf message received')
-        self.their_protoconf = Protoconf.from_payload(payload, self.logger)
+        self.their_protoconf = self.unpack_payload(
+            payload, partial(Protoconf.read, logger=self.logger), 'protoconf')
 
     async def send_protoconf(self):
         if self.protoconf_sent:
@@ -1076,8 +1075,7 @@ class Session:
         if self.they_prefer_headers:
             raise ProtocolError('duplicate sendheaders message')
         self.they_prefer_headers = True
-        if payload:
-            self.logger.warning('sendheaders message has payload')
+        self.unpack_payload(payload, read_nothing, 'sendheaders')
 
     async def send_sendheaders(self):
         if self.sendheaders_sent:
@@ -1088,8 +1086,7 @@ class Session:
             await self.send_message(MessageHeader.SENDHEADERS, b'')
 
     async def on_getaddr(self, payload):
-        if payload:
-            self.logger.warning('getaddr message has payload')
+        self.unpack_payload(payload, read_nothing, 'getaddr')
         await self.send_message(MessageHeader.ADDR, pack_addr_payload(await self.services()))
 
     async def send_getaddr(self):

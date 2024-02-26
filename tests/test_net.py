@@ -492,7 +492,7 @@ class TestProtoconf:
 
     @pytest.mark.parametrize('max_payload, policies, result', protoconf_tests)
     def test_from_payload(self, max_payload, policies, result):
-        pc = Protoconf.from_payload(bytes.fromhex(result))
+        pc = Protoconf.read(BytesIO(bytes.fromhex(result)).read)
         assert pc.max_payload == max_payload
         assert pc.stream_policies == policies
 
@@ -501,18 +501,18 @@ class TestProtoconf:
         raw = bytearray(Protoconf(2_000_000, [b'Default']).payload())
         raw[0] = N
         with pytest.raises(ProtocolError):
-            Protoconf.from_payload(raw)
+            Protoconf.read(BytesIO(raw).read)
 
     def test_bad_max_payload(self):
         raw = Protoconf(Protoconf.LEGACY_MAX_PAYLOAD - 1, [b'Default']).payload()
         with pytest.raises(ProtocolError):
-            Protoconf.from_payload(raw)
+            Protoconf.read(BytesIO(raw).read)
 
     def test_logging(self, caplog):
         raw = bytearray(Protoconf(2_000_000, [b'Default']).payload())
         raw[0] = 3
         with caplog.at_level('WARNING'):
-            Protoconf.from_payload(raw)
+            Protoconf.read(BytesIO(raw).read)
         assert 'unexpected field count' in caplog.text
 
 
@@ -630,22 +630,14 @@ class TestNetworkProtocol:
         hash_stop = urandom(32) if hash_stop else None
         locator = BlockLocator(version, [urandom(32) for _ in range(count)], hash_stop)
         payload = locator.to_payload()
-        assert BlockLocator.from_payload(payload) == locator
+        assert BlockLocator.read(BytesIO(payload).read) == locator
 
     def test_getheaders_payload_short(self):
         locator = BlockLocator(700, [urandom(32)], urandom(31))
         payload = locator.to_payload()
         with pytest.raises(ProtocolError) as e:
-            BlockLocator.from_payload(payload)
+            BlockLocator.read(BytesIO(payload).read)
         assert str(e.value) == 'truncated getheaders payload'
-
-    def test_getheaders_payload_long(self, caplog):
-        locator = BlockLocator(700, [urandom(32) for _ in range(3)], urandom(32))
-        payload = locator.to_payload() + b'0'
-        with caplog.at_level(logging.WARNING):
-            assert locator == BlockLocator.from_payload(payload)
-
-        assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
 
     def test_pack_getheaders_payload(self):
         def pack_hash(h):
@@ -1080,7 +1072,7 @@ class TestSession:
                 async with client_node.connect(listening_node.service, session_cls=ClientSession):
                     pass
 
-        assert in_caplog(caplog, 'verack message has payload')
+        assert in_caplog(caplog, 'extra bytes at end of verack payload')
 
     @pytest.mark.asyncio
     async def test_handshake_prioritized(self, client_node, listening_node, caplog):
@@ -1536,7 +1528,7 @@ class TestSession:
                     await pause()
                     await session.close()
 
-        assert in_caplog(caplog, 'sendheaders message has payload')
+        assert in_caplog(caplog, 'extra bytes at end of sendheaders payload')
 
     #
     # ADDR / GETADDR message tests
@@ -1565,4 +1557,4 @@ class TestSession:
                     await pause()
                     await session.close()
 
-        assert in_caplog(caplog, 'getaddr message has payload')
+        assert in_caplog(caplog, 'extra bytes at end of getaddr payload')
