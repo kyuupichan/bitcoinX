@@ -822,6 +822,7 @@ async def listening_session(listening_node):
     for session in listening_node.sessions:
         if not session.is_outgoing:
             return session
+    raise RuntimeError('no listening sessions')
 
 
 @pytest_asyncio.fixture
@@ -882,7 +883,6 @@ class TestSession:
                 assert listen_session.remote_service.address.host == listen_host
                 assert not listen_session.is_outgoing
                 assert listen_session.protoconf == Protoconf.default()
-
                 await session.close()
 
     @pytest.mark.asyncio

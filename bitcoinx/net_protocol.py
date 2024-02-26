@@ -601,51 +601,51 @@ class Node:
     def unregister_session(self, session):
         self.sessions.remove(session)
 
-    async def _on_client_connection(self, reader, writer, *, session_cls=None):
-        session = None
-        try:
-            host, port = writer.transport.get_extra_info('peername')
-            service = BitcoinService(address=NetAddress(host, port))
-            connection = Connection(reader, writer)
-            async with self.session(service, connection, session_cls=session_cls) as session:
-                pass
-        except Exception as e:
-            if session:
-                session.logger.exception(f'fatal error: {e}')
-            else:
-                self.logger.exception(f'error from {host}:{port}: {e}')
-
-    def listen(self, *, session_cls=None):
+    def listen(self, **kwargs):
         '''Listen for incoming connections, and for each incoming connection call session_cls (a
         callable) and then await its member function maintain_connection().
         '''
+        async def on_client_connection(reader, writer):
+            session = None
+            try:
+                host, port = writer.transport.get_extra_info('peername')
+                service = BitcoinService(address=NetAddress(host, port))
+                connection = Connection(reader, writer)
+                async with self.session(service, connection, **kwargs) as session:
+                    pass
+            except Exception as e:
+                if session:
+                    session.logger.exception(f'fatal error: {e}')
+                else:
+                    self.logger.exception(f'error from {host}:{port}: {e}')
+
         host = str(self.service.address.host)
         port = self.service.address.port
-        on_client_connection = partial(self._on_client_connection, session_cls=session_cls)
         return Listener(asyncio.start_server(on_client_connection, host, port))
 
-    def session(self, remote_service, connection, *, session_cls=None):
-        return (session_cls or Session)(self, remote_service, connection)
+    def session(self, remote_service, connection, **kwargs):
+        session_cls = kwargs.pop('session_cls', Session)
+        return session_cls(self, remote_service, connection, **kwargs)
 
-    def connect(self, remote_service, *, session_cls=None):
+    def connect(self, remote_service, **kwargs):
         '''A client session, that when used as an async context manager, establishes an outgoing
         connection to remote_service (a BitcoinService instance).
         '''
-        return self.session(remote_service, None, session_cls=session_cls)
+        return self.session(remote_service, None, **kwargs)
 
     async def remote_service(self):
         if self.remote_services:
             return self.remote_services.pop()
         return None
 
-    async def outgoing_session(self, on_session, *, session_cls=None):
+    async def outgoing_session(self, on_session, **kwargs):
         while True:
             service = await self.remote_service()
             if not service:
                 return
             session = None
             try:
-                async with self.connect(service, session_cls=session_cls) as session:
+                async with self.connect(service, **kwargs) as session:
                     done = await on_session(session)
                     await session.close()
                     if done:
@@ -656,12 +656,12 @@ class Node:
                 else:
                     self.logger.debug(f'failed to connect to {service.address}: {e}')
 
-    async def establish_outgoing_sessions(self, on_session, limit, session_cls=None):
+    async def establish_outgoing_sessions(self, on_session, limit, **kwargs):
         if not self.remote_services:
             self.remote_services = await services_from_seeds(self.network)
         async with TaskGroup() as group:
             for _ in range(limit):
-                group.create_task(self.outgoing_session(on_session, session_cls=session_cls))
+                group.create_task(self.outgoing_session(on_session, **kwargs))
 
 
 class Listener:
@@ -674,7 +674,7 @@ class Listener:
     async def __aenter__(self):
         self.server = await self.start_server
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, _et, _exc, _tb):
         self.server.close()
         await self.server.wait_closed()
         if sys.version_info < (3, 11):
