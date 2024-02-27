@@ -480,7 +480,7 @@ protoconf_tests = [
 ]
 
 
-class TestProtoconf:
+class TestProtoconfClass:
 
     @pytest.mark.parametrize('max_payload', (Protoconf.LEGACY_MAX_PAYLOAD, 10_000_000))
     def test_max_inv_elements(self, max_payload):
