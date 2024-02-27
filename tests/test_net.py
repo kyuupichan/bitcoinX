@@ -1004,20 +1004,42 @@ class TestHandshake:
         assert in_caplog(caplog, 'verack message received before version message sent')
 
     @pytest.mark.asyncio
-    async def test_send_other_first(self, client_node, listening_node, caplog):
+    @pytest.mark.parametrize('extended', (True, False, "streaming"))
+    @pytest.mark.parametrize('first', (False, True))
+    async def test_other_message_before_handshake_complete(self, client_node, listening_node,
+                                                           caplog, extended, first):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service,
                                                    perform_handshake=False) as session:
-                        # Don't use send_message to force the first message
-                        command = MessageHeader.SENDHEADERS
-                        payload = b''
-                        header = MessageHeader.std_bytes(session.node.network.magic,
-                                                         command, payload)
-                        await session.connection.outgoing_messages.put((header, payload))
+                        async def sendheaders():
+                            # Don't use send_message to force the first message
+                            command = MessageHeader.SENDHEADERS
+                            payload = b''
+                            if extended == 'streaming':
+                                # lie about the length
+                                header = MessageHeader.ext_bytes(session.node.network.magic,
+                                                                 command, 1_000_000_000)
+                                payload = (achunks(payload, 100), len(payload))
+                            elif extended:
+                                header = MessageHeader.ext_bytes(session.node.network.magic,
+                                                                 command, len(payload))
+                            else:
+                                header = MessageHeader.std_bytes(session.node.network.magic,
+                                                                 command, payload)
+                            await session.connection.outgoing_messages.put((header, payload))
 
-        assert in_caplog(caplog, 'sendheaders command received before handshake finished')
+                        if first:
+                            await sendheaders()
+                        else:
+                            await session.send_version()
+                            await sendheaders()
+                        await pause()
+                        await session.close()
+
+                assert in_caplog(caplog,
+                                 'sendheaders command received before handshake finished', 2)
 
     @pytest.mark.asyncio
     async def test_send_corrupt_version_message(self, client_node, listening_node, caplog):
@@ -1167,6 +1189,28 @@ class TestHandshake:
                                                session_cls=ClientSession) as session:
                     await pause(session.HANDSHAKE_TIMEOUT * 1.5)
             await pause()
+
+    @pytest.mark.asyncio
+    async def test_parallel_handling(self, client_node, listening_node, caplog):
+        # Test commands are handled in parallel
+        class ListenerSession(Session):
+            async def on_parallel(self, payload):
+                times.append(time.time())
+                await asyncio.sleep(delay)
+
+        times = []
+        delay = 1.0
+        async with listening_node.listen(session_cls=ListenerSession):
+            async with client_node.connect(listening_node.service) as session:
+                async with TaskGroup() as group:
+                    await group.create_task(session.send_message(_command('parallel'), b''))
+                    await group.create_task(session.send_message(_command('parallel'), b''))
+                    await pause()
+                    await group.cancel_remaining()
+                await session.close()
+
+        is_parallel = abs(times[0] - times[1]) < delay / 2
+        assert is_parallel
 
 
 class TestExtendedMessages:
@@ -1380,28 +1424,6 @@ class TestPing:
                     await session.close()
 
             assert in_caplog(caplog, 'unexpected pong')
-
-    @pytest.mark.asyncio
-    async def test_parallel_handling(self, client_node, listening_node, caplog):
-        # Test commands are handled in parallel
-        class ListenerSession(Session):
-            async def on_parallel(self, payload):
-                times.append(time.time())
-                await asyncio.sleep(delay)
-
-        times = []
-        delay = 1.0
-        async with listening_node.listen(session_cls=ListenerSession):
-            async with client_node.connect(listening_node.service) as session:
-                async with TaskGroup() as group:
-                    await group.create_task(session.send_message(_command('parallel'), b''))
-                    await group.create_task(session.send_message(_command('parallel'), b''))
-                    await pause()
-                    await group.cancel_remaining()
-                await session.close()
-
-        is_parallel = abs(times[0] - times[1]) < delay / 2
-        assert is_parallel
 
 
 class TestSendHeaders:

@@ -946,6 +946,11 @@ class Session:
                     raise ForceDisconnectError(f'bad magic 0x{header.magic.hex()} '
                                                f'expected 0x{magic.hex()}')
 
+                if not self.handshake_complete.is_set():
+                    if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
+                        raise ForceDisconnectError(f'{header} command received before '
+                                                   'handshake finished')
+
                 # Each connection is a single stream of incoming bytes, so messages must be
                 # received in full before they can be handled in parallel.
                 if header.is_extended and await self.ext_message(connection, header):
@@ -982,10 +987,6 @@ class Session:
             # Maybe force disconnect if we get too many bad checksums in a short time
             error = ProtocolError if self.handshake_complete.is_set() else ForceDisconnectError
             raise error(f'bad checksum for {header} command')
-
-        if not self.handshake_complete.is_set():
-            if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
-                raise ForceDisconnectError(f'{header} command received before handshake finished')
 
         command = header.command()
         handler = getattr(self, f'on_{command}', None)
