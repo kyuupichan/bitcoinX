@@ -1012,7 +1012,6 @@ class TestSession:
                         # Don't use send_message to force the first message
                         command = MessageHeader.SENDHEADERS
                         payload = b''
-                        connection = session.connection_for_command(command)
                         header = MessageHeader.std_bytes(session.node.network.magic,
                                                          command, payload)
                         await session.connection.outgoing_messages.put((header, payload))
@@ -1069,8 +1068,7 @@ class TestSession:
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               session_cls=ClientSession) as session:
+                async with client_node.connect(listening_node.service, session_cls=ClientSession):
                     pass
 
         assert in_caplog(caplog, 'protocol error: duplicate verack message')
@@ -1163,7 +1161,7 @@ class TestSession:
                 await super().send_verack()
 
         class ClientSession(Session):
-            HANDSHAKE_TIMEOUT=0.1
+            HANDSHAKE_TIMEOUT = 0.1
 
         async with listening_node.listen(session_cls=ListeningSession):
             with pytest.raises(TimeoutError):
@@ -1286,297 +1284,6 @@ class TestSession:
                 await pause(0.1)
                 assert session.they_prefer_headers
                 await session.close()
-
-
-    #
-    # GETHEADERS / HEADERS message tests
-    #
-
-    @pytest.mark.asyncio
-    async def test_hash_stop_only(self, client_node, listening_node, caplog):
-        class ClientSession(Session):
-            async def on_headers(self, payload):
-                simple_headers = self.unpack_payload(payload, read_headers)
-                assert simple_headers == self.expected_headers
-                self.headers_received.set()
-
-        simples = first_mainnet_headers(10)
-        await listening_node.headers.insert_headers(simples[:5])
-
-        with caplog.at_level(logging.INFO):
-            async with listening_node.listen():
-                with pytest.raises(TimeoutError):
-                    async with client_node.connect(listening_node.service,
-                                                   session_cls=ClientSession) as session:
-                        # One known to the listener
-                        session.expected_headers = [simples[2]]
-                        locator = BlockLocator(1, [], simples[2].hash)
-                        await session.get_headers(locator)
-                        assert not session.headers_received.is_set()
-                        await session.headers_received.wait()
-
-                        # One not known to the listener; it should ignore the request
-                        session.expected_headers = []
-                        locator = BlockLocator(1, [], simples[5].hash)
-                        await session.get_headers(locator)
-                        assert not session.headers_received.is_set()
-                        # Should timeout as nothing should be sent
-                        async with timeout_after(0.05):
-                            await session.headers_received.wait()
-
-        assert in_caplog(caplog, 'ignoring getheaders for unknown block 000000009b7262315db')
-
-    @pytest.mark.asyncio
-    async def test_getheaders_extend_chain(self, client_node, listening_node, caplog):
-        # This tests all cases around correctly-functioning client and listener where they
-        # are on different branches, branches A and B.  The listener is on branch A to
-        # height 9 as the longest, and the client on branch B.  The listener knows all of
-        # branch B except the tip.  Branch B is shorter than A.
-        simples = first_mainnet_headers(20)
-        await listening_node.headers.insert_headers(simples[:10])
-
-        client_branch = simples[:3]
-        client_branch.extend(create_random_branch(client_branch[-1], 5))
-        await client_node.headers.insert_headers(client_branch, check_work=False)
-        await listening_node.headers.insert_headers(client_branch[:-2], check_work=False)
-        client_chain = await client_node.headers.longest_chain()
-        assert client_chain.tip.hash == client_branch[-1].hash
-
-        with caplog.at_level(logging.INFO):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.get_headers()
-                    assert not session.headers_received.is_set()
-                    await session.headers_received.wait()
-                    assert session.headers_received.count == 7
-
-                    client_chain = await client_node.headers.longest_chain()
-                    listening_chain = await listening_node.headers.longest_chain()
-                    assert client_chain.tip == listening_chain.tip
-
-                    # Now extend the listener chain, but test that hash_stop is honoured
-                    # when the client provides it (how exactly the client knows the hash
-                    # is another question....)
-                    await listening_node.headers.insert_headers(simples[10:])
-                    listening_chain = await listening_node.headers.longest_chain()
-                    assert client_chain.tip != listening_chain.tip
-
-                    to_height = 15
-                    hash_stop = simples[to_height].hash
-                    locator = await session.block_locator()
-                    locator.hash_stop = hash_stop
-                    await session.get_headers(locator)
-                    assert not session.headers_received.is_set()
-                    await session.headers_received.wait()
-                    assert session.headers_received.count == 6
-
-                    client_chain = await client_node.headers.longest_chain()
-                    assert client_chain.tip.height == to_height
-                    header = await listening_node.headers.header_at_height(listening_chain,
-                                                                           to_height)
-                    assert header == client_chain.tip
-                    assert not in_caplog(caplog, 'headers synchronized')
-
-                    # The hash stop doesn't work now as we start after the tip...
-                    locator = await session.block_locator()
-                    locator.hash_stop = hash_stop
-                    await session.get_headers(locator)
-                    assert not session.headers_received.is_set()
-                    await session.headers_received.wait()
-                    assert session.headers_received.count == 4
-                    client_chain = await client_node.headers.longest_chain()
-                    assert client_chain.tip == listening_chain.tip
-
-                    assert not in_caplog(caplog, 'headers synchronized')
-
-                    await session.get_headers()
-                    assert not session.headers_received.is_set()
-                    await session.headers_received.wait()
-                    assert session.headers_received.count == -1
-                    await session.close()
-
-        assert in_caplog(caplog, 'headers synchronized to height 19')
-
-    @pytest.mark.asyncio
-    async def test_getheaders_shorter(self, client_node, listening_node, caplog):
-        # This tests all cases around correctly-functioning client and listener where they
-        # are on different branches, branches A and B.  The listener is on branch A to
-        # height 9, and the client on branch B which is longer.  The listener knows some of
-        # branch B.
-        simples = first_mainnet_headers(10)
-        await listening_node.headers.insert_headers(simples)
-
-        client_branch = simples[:3]
-        client_branch.extend(create_random_branch(client_branch[-1], 10))
-        await client_node.headers.insert_headers(client_branch, check_work=False)
-        await listening_node.headers.insert_headers(client_branch[:-5], check_work=False)
-        client_chain = await client_node.headers.longest_chain()
-        assert client_chain.tip.hash == client_branch[-1].hash
-
-        with caplog.at_level(logging.INFO):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.get_headers()
-                    assert not session.headers_received.is_set()
-                    await session.headers_received.wait()
-                    assert not in_caplog(caplog, 'headers synchronized to height 9')
-                    await session.get_headers()
-                    assert not session.headers_received.is_set()
-                    await session.headers_received.wait()
-                    assert in_caplog(caplog, 'headers synchronized to height 9')
-                    await session.close()
-
-        client_chain = await client_node.headers.longest_chain()
-        listening_chain = await listening_node.headers.longest_chain()
-
-        # Check neither chain has grown
-        assert client_chain.tip.hash == client_branch[-1].hash
-        assert listening_chain.tip.hash == simples[-1].hash
-
-    @pytest.mark.asyncio
-    async def test_unchained_headers(self, client_node, listening_node, caplog):
-        class ListenerSession(Session):
-            async def on_verack(self, payload):
-                await super().on_verack(payload)
-                branch = create_random_branch(Bitcoin.genesis_header, 5)
-                branch.extend(create_random_branch(Bitcoin.genesis_header, 1))
-                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
-                await pause()
-                await self.close()
-
-        with caplog.at_level(logging.ERROR):
-            async with listening_node.listen(session_cls=ListenerSession):
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service):
-                        pass
-
-        assert in_caplog(caplog, 'headers message with headers that do not form a chain')
-
-    @pytest.mark.asyncio
-    async def test_separated_headers(self, client_node, listening_node, caplog):
-        class ListenerSession(Session):
-            async def on_verack(self, payload):
-                await super().on_verack(payload)
-                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(simples[2:]))
-                await pause()
-                await self.close()
-
-        simples = first_mainnet_headers(10)
-        await listening_node.headers.insert_headers(simples)
-
-        with caplog.at_level(logging.WARNING):
-            async with listening_node.listen(session_cls=ListenerSession):
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service):
-                        pass
-
-        assert in_caplog(caplog, 'ignoring 8 non-connecting headers')
-
-    @pytest.mark.asyncio
-    async def test_bad_pow_headers(self, client_node, listening_node, caplog):
-        branch = create_random_branch(Bitcoin.genesis_header, 2)
-        with caplog.at_level(logging.ERROR):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
-                    await pause()
-                    await session.close()
-
-        print_caplog(caplog)
-        assert in_caplog(caplog, 'hash value exceeds its target')
-
-    @pytest.mark.asyncio
-    async def test_excess_headers_payload(self, client_node, listening_node, caplog):
-        simples = first_mainnet_headers(2)
-        await listening_node.headers.insert_headers(simples)
-
-        with caplog.at_level(logging.WARNING):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.send_message(MessageHeader.HEADERS,
-                                               pack_headers_payload(simples) + b'1')
-                    await pause()
-                    await session.close()
-
-        assert in_caplog(caplog, 'extra bytes at end of headers payload')
-
-    @pytest.mark.asyncio
-    async def test_too_many_headers(self, client_node, listening_node, caplog):
-        branch = create_random_branch(Bitcoin.genesis_header, 10)
-        await listening_node.headers.insert_headers(branch, check_work=False)
-
-        with caplog.at_level(logging.ERROR):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    session.MAX_HEADERS = 5
-                    await session.get_headers()
-                    await session.headers_received.wait()
-                    await session.close()
-
-        assert in_caplog(caplog, 'headers message with 10 headers but limit is 5')
-
-    #
-    # sync_headers() logic tests
-    #
-
-    @pytest.mark.asyncio
-    async def test_sync_headers_lock(self, client_node, listening_node, listening_node2):
-        class ListenerSession(Session):
-            async def on_getheaders(self, payload):
-                nonlocal requests
-                requests += 1
-                await asyncio.sleep(0.04)
-                await self.close()
-
-        async def create_client(lnode):
-            async with client_node.connect(lnode.service) as session:
-                async with ignore_after(0.02):
-                    await session.sync_headers()
-                await session.close()
-
-        requests = 0
-        async with listening_node.listen(session_cls=ListenerSession):
-            async with listening_node2.listen(session_cls=ListenerSession):
-                async with TaskGroup() as group:
-                    group.create_task(create_client(listening_node))
-                    group.create_task(create_client(listening_node2))
-
-        assert requests == 1
-
-    @pytest.mark.asyncio
-    async def test_sync_headers(self, client_node, listening_node):
-        # Test that the client syncs with the listening node, even when it's on a branch
-        # whose length is greater than the atomic send limit, and the listener occasionally
-        # sends a disconnected header
-        class ListenerSession(Session):
-            COUNT = 0
-            MAX_HEADERS = 10
-
-            async def on_getheaders(self, payload):
-                await super().on_getheaders(payload)
-                if self.COUNT % 3 == 0:
-                    chain = await self.node.headers.longest_chain()
-                    height = 93 + self.COUNT // 3
-                    header = await self.node.headers.header_at_height(chain, height)
-                    await self.send_headers([header])
-                self.COUNT += 1
-
-        # Client is on a branch of length 25 from genesis
-        branch = create_random_branch(Bitcoin.genesis_header, 25)
-        assert await client_node.headers.insert_headers(branch, check_work=False) == 25
-
-        # Listening node has the first 101 mainnet heaaders, to height 100
-        height = 100
-        headers = first_mainnet_headers(height + 1)
-        assert await listening_node.headers.insert_headers(headers) == height
-
-        async with listening_node.listen(session_cls=ListenerSession):
-            async with client_node.connect(listening_node.service) as session:
-                assert await session.sync_headers()
-                assert not await session.sync_headers()
-                await session.close()
-
-        assert await client_node.headers.height() == height
 
     #
     # SENDHEADERS message tests
@@ -1753,3 +1460,341 @@ class TestSession:
 
         is_parallel = abs(times[0] - times[1]) < delay / 2
         assert is_parallel
+
+
+class TestGetHeaders:
+
+    #
+    # GETHEADERS / HEADERS message tests
+    #
+
+    @pytest.mark.asyncio
+    async def test_waits_for_prior(self, client_node, listening_node, caplog):
+        # Test that concurrent getheaders requests wait on the prior one to complete
+        class ListenerSession(Session):
+            MAX_HEADERS = 25
+
+            async def on_getheaders(self, payload):
+                nonlocal secs
+                await pause(secs)
+                secs = 0
+                await super().on_getheaders(payload)
+
+        headers = first_mainnet_headers(ListenerSession.MAX_HEADERS * 2 + 1)[1:]
+        await listening_node.headers.insert_headers(headers)
+        secs = 0.2
+
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                async with client_node.connect(listening_node.service) as session:
+                    request1 = await session.get_headers()
+                    request2 = None
+                    async with ignore_after(secs / 2):
+                        request2 = await session.get_headers()
+                    assert request2 is None
+                    request2 = await session.get_headers()
+                    await request2.wait()
+                    assert request1.count == ListenerSession.MAX_HEADERS
+                    assert request2.count == ListenerSession.MAX_HEADERS
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_hash_stop_only(self, client_node, listening_node, caplog):
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples[:5])
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    session.GETHEADERS_TIMEOUT = 0.1
+
+                    # One known to the listener but doesn't join
+                    locator = BlockLocator(1, [], simples[2].hash)
+                    request = await session.get_headers(locator)
+                    assert session.getheaders_request is request
+                    await request.wait()
+                    assert not session.getheaders_request
+                    assert request.headers == [simples[2]]
+                    assert request.count == 0
+
+                    # One known to the listener but doesn't join
+                    locator = BlockLocator(1, [], simples[1].hash)
+                    request = await session.get_headers(locator)
+                    assert session.getheaders_request is request
+                    await request.wait()
+                    assert not session.getheaders_request
+                    assert request.headers == [simples[1]]
+                    assert request.count == 1
+
+                    # One not known to the listener; it should ignore the request
+                    locator = BlockLocator(1, [], simples[5].hash)
+                    request = await session.get_headers(locator)
+                    assert session.getheaders_request is request
+                    await request.wait()
+                    assert request.count == -1
+                    assert not request.headers
+
+                    await session.close()
+
+        assert in_caplog(caplog, 'ignoring getheaders for unknown block 000000009b7262315db')
+
+    @pytest.mark.asyncio
+    async def test_extend_chain(self, client_node, listening_node, caplog):
+        # This tests all cases around correctly-functioning client and listener where they
+        # are on different branches, listener on branch A and client on branch B.  They
+        # are common for the first 3 mainnet headers, but the client forks to its own
+        # branch to height 8, but the listener has mainnet to height 9 as the longest.
+        # The listener knows all of branch B except the tip.
+        simples = first_mainnet_headers(20)
+        await listening_node.headers.insert_headers(simples[:10])
+
+        client_branch = simples[:3]
+        client_branch.extend(create_random_branch(client_branch[-1], 5))
+        await client_node.headers.insert_headers(client_branch, check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:-1], check_work=False)
+        client_chain = await client_node.headers.longest_chain()
+        assert client_chain.tip.hash == client_branch[-1].hash
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    request = await session.get_headers()
+                    await request.wait()
+                    assert request.count == 7
+
+                    client_chain = await client_node.headers.longest_chain()
+                    listening_chain = await listening_node.headers.longest_chain()
+                    assert client_chain.tip == listening_chain.tip
+
+                    # Now extend the listener chain to height 19.  Test that hash_stop is
+                    # honoured when the client provides it (how exactly the client knows
+                    # the hash is another question....)
+                    await listening_node.headers.insert_headers(simples[10:])
+                    listening_chain = await listening_node.headers.longest_chain()
+                    assert client_chain.tip != listening_chain.tip
+
+                    to_height = 15
+                    hash_stop = simples[to_height].hash
+                    locator = await session.block_locator()
+                    locator.hash_stop = hash_stop
+                    request = await session.get_headers(locator)
+                    await request.wait()
+                    assert request.count == 6
+
+                    client_chain = await client_node.headers.longest_chain()
+                    assert client_chain.tip.height == to_height
+                    header = await listening_node.headers.header_at_height(listening_chain,
+                                                                           to_height)
+                    assert header == client_chain.tip
+                    assert not in_caplog(caplog, 'headers synchronized')
+
+                    # The hash stop doesn't work now as we start after the tip...
+                    locator = await session.block_locator()
+                    locator.hash_stop = hash_stop
+                    request = await session.get_headers(locator)
+                    await request.wait()
+                    assert request.count == 4
+                    client_chain = await client_node.headers.longest_chain()
+                    assert client_chain.tip == listening_chain.tip
+
+                    assert not in_caplog(caplog, 'headers synchronized')
+
+                    request = await session.get_headers()
+                    await request.wait()
+                    assert request.count == 0
+                    assert in_caplog(caplog, 'headers synchronized to height 19')
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_shorter(self, client_node, listening_node, caplog):
+        # This tests all cases around correctly-functioning client and listener where they
+        # are on different branches, branches A and B.  The listener is on branch A to
+        # height 9, and the client on branch B which is longer.  The listener knows some of
+        # branch B.
+        simples = first_mainnet_headers(10)
+        await listening_node.headers.insert_headers(simples)
+
+        client_branch = simples[:3]
+        client_branch.extend(create_random_branch(client_branch[-1], 10))
+        await client_node.headers.insert_headers(client_branch, check_work=False)
+        await listening_node.headers.insert_headers(client_branch[:-5], check_work=False)
+        client_chain = await client_node.headers.longest_chain()
+        assert client_chain.tip.hash == client_branch[-1].hash
+
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    request = await session.get_headers()
+                    await request.wait()
+                    assert not in_caplog(caplog, 'headers synchronized to height 9')
+                    request = await session.get_headers()
+                    await request.wait()
+                    assert in_caplog(caplog, 'headers synchronized to height 9')
+
+                    # Check neither chain has grown
+                    client_chain = await client_node.headers.longest_chain()
+                    listening_chain = await listening_node.headers.longest_chain()
+                    assert client_chain.tip.hash == client_branch[-1].hash
+                    assert listening_chain.tip.hash == simples[-1].hash
+
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_not_a_chain(self, client_node, listening_node, caplog):
+        '''The remote session sends, unrequested, 6 headers that do not form a chain.'''
+        class ListenerSession(Session):
+            async def on_getheaders(self, payload):
+                branch = create_random_branch(Bitcoin.genesis_header, 5)
+                branch.extend(create_random_branch(Bitcoin.genesis_header, 1))
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                async with client_node.connect(listening_node.service) as session:
+                    session.GETHEADERS_TIMEOUT = 0.1
+                    request = await session.get_headers()
+                    await request.wait()
+                    # Check the response was logged and not viewed as a response to our
+                    # request
+                    assert in_caplog(caplog, 'received headers that do not form a chain')
+                    assert request.count == -1
+                    assert not request.headers
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_separated(self, client_node, listening_node, caplog):
+        class ListenerSession(Session):
+            async def on_getheaders(self, payload):
+                # Headers do not connect to genesis
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(simples[2:]))
+
+        simples = first_mainnet_headers(10)
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                async with client_node.connect(listening_node.service) as session:
+                    session.GETHEADERS_TIMEOUT = 0.1
+                    request = await session.get_headers()
+                    await request.wait()
+                    # Check the response was logged and not viewed as a response to our
+                    # request
+                    assert in_caplog(caplog, 'ignoring 8 non-connecting headers')
+                    assert request.count == -1
+                    assert not request.headers
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_bad_pow(self, client_node, listening_node, caplog):
+        class ListenerSession(Session):
+            async def on_getheaders(self, payload):
+                await self.send_message(MessageHeader.HEADERS, pack_headers_payload(branch))
+
+        print_caplog(caplog)
+        branch = create_random_branch(Bitcoin.genesis_header, 2)
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListenerSession):
+                async with client_node.connect(listening_node.service) as session:
+                    request = await session.get_headers()
+                    await request.wait()
+                    # Check the response was logged AND viewed as a response to our request
+                    assert in_caplog(caplog, 'hash value exceeds its target')
+                    assert request.count == 0
+                    assert request.headers == branch
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_request_too_long(self, client_node, listening_node, caplog):
+        class ListenerSession(Session):
+            async def on_getheaders(self, payload):
+                await self.send_message(MessageHeader.HEADERS,
+                                        pack_headers_payload(headers) + b'1')
+
+        headers = first_mainnet_headers(3)[1:]
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListenerSession):
+                async with client_node.connect(listening_node.service) as session:
+                    request = await session.get_headers()
+                    await request.wait()
+                    assert in_caplog(caplog, 'extra bytes at end of headers payload')
+                    assert request.count == 2
+                    assert request.headers == headers
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_too_many_sent(self, client_node, listening_node, caplog):
+        headers = first_mainnet_headers(10)[1:]
+        await listening_node.headers.insert_headers(headers)
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    session.MAX_HEADERS = 5
+                    request = await session.get_headers()
+                    await request.wait()
+                    # Check it is diagnosed AND recognised as a response to our request
+                    assert in_caplog(caplog, 'headers message with 9 headers but limit is 5')
+                    assert request.headers == headers
+                    assert request.count == 0
+                    await session.close()
+
+
+class TestSyncHeaders:
+
+    @pytest.mark.asyncio
+    async def test_lock(self, client_node, listening_node, listening_node2):
+        class ListenerSession(Session):
+            async def on_getheaders(self, payload):
+                nonlocal requests
+                requests += 1
+                await asyncio.sleep(0.04)
+                await self.close()
+
+        async def create_client(lnode):
+            async with client_node.connect(lnode.service) as session:
+
+                async with ignore_after(0.02):
+                    await session.sync_headers()
+                await session.close()
+
+        requests = 0
+        async with listening_node.listen(session_cls=ListenerSession):
+            async with listening_node2.listen(session_cls=ListenerSession):
+                async with TaskGroup() as group:
+                    group.create_task(create_client(listening_node))
+                    group.create_task(create_client(listening_node2))
+
+        assert requests == 1
+
+    @pytest.mark.asyncio
+    async def test_works(self, client_node, listening_node):
+        # Test that the client syncs with the listening node, even when it's on a branch
+        # whose length is greater than the atomic send limit, and the listener occasionally
+        # sends a disconnected header
+        class ListenerSession(Session):
+            COUNT = 0
+            MAX_HEADERS = 10
+
+            async def on_getheaders(self, payload):
+                await super().on_getheaders(payload)
+                if self.COUNT % 3 == 0:
+                    chain = await self.node.headers.longest_chain()
+                    height = 95 + self.COUNT // 3
+                    header = await self.node.headers.header_at_height(chain, height)
+                    await self.send_headers([header])
+                self.COUNT += 1
+
+        # Client is on a branch of length 25 from genesis
+        branch = create_random_branch(Bitcoin.genesis_header, 25)
+        assert await client_node.headers.insert_headers(branch, check_work=False) == 25
+
+        # Listening node has the first 101 mainnet heaaders, to height 100
+        height = 100
+        headers = first_mainnet_headers(height + 1)
+        assert await listening_node.headers.insert_headers(headers) == height
+
+        async with listening_node.listen(session_cls=ListenerSession):
+            async with client_node.connect(listening_node.service) as session:
+                assert await session.sync_headers()
+                assert not await session.sync_headers()
+                await session.close()
+
+        assert await client_node.headers.height() == height
