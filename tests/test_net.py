@@ -837,7 +837,7 @@ async def client_headers():
 def client_node(client_headers):
     node = Node(BitcoinService(), client_headers)
     yield node
-    # assert not node.sessions
+    assert not node.sessions
 
 
 async def achunks(payload, size):
@@ -867,6 +867,7 @@ class TestNode:
 
 
 class TestSession:
+    '''Generic session handling tests.'''
 
     @pytest.mark.asyncio
     async def test_simple_connect(self, client_node, listening_node):
@@ -944,9 +945,9 @@ class TestSession:
 
         assert in_caplog(caplog, 'ignoring unhandled zombie message')
 
-    #
-    # VERSION message tests
-    #
+
+class TestHandshake:
+    '''Covers VERSION, VERACK messages and the general handshake process.'''
 
     @pytest.mark.asyncio
     async def test_listener_waits_for_version_message(self, client_node, listening_node):
@@ -1053,10 +1054,6 @@ class TestSession:
         assert in_caplog(caplog, 'protocol error: connected to ourself')
         assert in_caplog(caplog, 'connection closed remotely')
 
-    #
-    # VERACK / handshake tests
-    #
-
     @pytest.mark.asyncio
     async def test_duplicate_verack(self, client_node, listening_node, caplog):
         class ClientSession(Session):
@@ -1143,6 +1140,7 @@ class TestSession:
                                            session_cls=ClientSession) as session:
                 await finished_event.wait()
                 await session.close()
+            await pause()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('slow', ('version', 'verack'))
@@ -1170,9 +1168,123 @@ class TestSession:
                     await pause(session.HANDSHAKE_TIMEOUT * 1.5)
             await pause()
 
+
+class TestExtendedMessages:
+
     #
-    # PROTOCONF message tests
+    # EXTMSG message tests
     #
+
+    @pytest.mark.asyncio
+    async def test_send_ext_message(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           send_protoconf=False) as session:
+                listener_session = await listening_session(listening_node)
+                assert listener_session.their_protoconf is None
+                session.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
+                payload = session.our_protoconf.payload()
+                await session.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
+                await pause()
+                assert listener_session.their_protoconf == session.our_protoconf
+                await session.close()
+
+    @pytest.mark.asyncio
+    async def test_cannot_send(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            listening_node.service.protocol_version = 70_015
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   send_protoconf=False) as session:
+                        await session.handshake_complete.wait()
+                        payload = Protoconf.default().payload()
+                        assert not session.can_send_ext_messages
+                        # We should not accept sending a large message
+                        with pytest.raises(RuntimeError):
+                            await session.send_message(MessageHeader.PROTOCONF, payload,
+                                                       force_extended=True)
+                        # Override the check
+                        session.can_send_ext_messages = True
+                        await session.send_message(MessageHeader.PROTOCONF, payload,
+                                                   force_extended=True)
+                        pass
+
+        assert in_caplog(caplog, 'ext message received but invalid', count=2)
+
+    @pytest.mark.asyncio
+    async def test_send_streaming(self, client_node, listening_node, caplog):
+        class ListeningSession(Session):
+            async def on_zombie_large(self, connection, size):
+                parts = [chunk async for chunk in connection.recv_chunks(size)]
+                self.zombie_payload = b''.join(parts)
+
+            async def on_zombie(self, payload):
+                self.zombie_payload2 = payload.payload
+
+        payload = urandom(2000)
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen(session_cls=ListeningSession):
+                async with client_node.connect(listening_node.service) as session:
+                    listener_session = await listening_session(listening_node)
+                    listener_session.streaming_min_size = 200
+                    await session.send_message(_command('zombie'),
+                                               (achunks(payload, 100), len(payload)))
+                    await session.send_message(_command('zombie'), payload)
+                    await session.send_message(_command('ghoul'),
+                                               (achunks(payload, 100), len(payload)))
+                    await pause()
+                    assert listener_session.zombie_payload == payload
+                    assert listener_session.zombie_payload2 == payload
+                    await session.close()
+
+        assert in_caplog(caplog, 'ignoring unhandled extended ghoul messages')
+
+    @pytest.mark.asyncio
+    async def test_whole_session(self, client_node, listening_node):
+        '''Test sending every message as extended, even the version message.'''
+        class ClientSession(Session):
+            async def send_message(self, command, payload, *, force_extended=False):
+                await super().send_message(command, payload, force_extended=True)
+
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           session_cls=ClientSession) as session:
+                await pause(0.1)
+                assert session.they_prefer_headers
+                await session.close()
+
+
+class TestGetAddr:
+    '''ADDR and GETADDR tests.'''
+
+    @pytest.mark.asyncio
+    async def test_getaddr_roundtrip(self, client_node, listening_node):
+        async def on_addr(payload):
+            on_addr_event.set()
+
+        on_addr_event = asyncio.Event()
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as session:
+                session.on_addr = on_addr
+                await session.send_getaddr()
+                async with timeout_after(0.1):
+                    await on_addr_event.wait()
+                await session.close()
+
+    @pytest.mark.asyncio
+    async def test_getaddr_payload(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    await session.send_message(MessageHeader.GETADDR, b'0')
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of getaddr payload')
+
+
+class TestProtoconf:
 
     @pytest.mark.asyncio
     async def test_protoconf_understood(self, client_node, listening_node):
@@ -1202,179 +1314,9 @@ class TestSession:
 
         assert in_caplog(caplog, 'duplicate protoconf') is force
 
-    #
-    # EXTMSG message tests
-    #
 
-    @pytest.mark.asyncio
-    async def test_send_protoconf_as_ext_message(self, client_node, listening_node):
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service,
-                                           send_protoconf=False) as session:
-                listener_session = await listening_session(listening_node)
-                assert listener_session.their_protoconf is None
-                session.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
-                payload = session.our_protoconf.payload()
-                await session.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
-                await pause()
-                assert listener_session.their_protoconf == session.our_protoconf
-                await session.close()
-
-    @pytest.mark.asyncio
-    async def test_cannot_send_ext_message(self, client_node, listening_node, caplog):
-        with caplog.at_level(logging.ERROR):
-            listening_node.service.protocol_version = 70_015
-            async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   send_protoconf=False) as session:
-                        await session.handshake_complete.wait()
-                        payload = Protoconf.default().payload()
-                        assert not session.can_send_ext_messages
-                        # We should not accept sending a large message
-                        with pytest.raises(RuntimeError):
-                            await session.send_message(MessageHeader.PROTOCONF, payload,
-                                                       force_extended=True)
-                        # Override the check
-                        session.can_send_ext_messages = True
-                        await session.send_message(MessageHeader.PROTOCONF, payload,
-                                                   force_extended=True)
-                        pass
-
-        assert in_caplog(caplog, 'ext message received but invalid', count=2)
-
-    @pytest.mark.asyncio
-    async def test_send_streaming_message(self, client_node, listening_node, caplog):
-        class ListeningSession(Session):
-            async def on_zombie_large(self, connection, size):
-                parts = [chunk async for chunk in connection.recv_chunks(size)]
-                self.zombie_payload = b''.join(parts)
-
-            async def on_zombie(self, payload):
-                self.zombie_payload2 = payload.payload
-
-        payload = urandom(2000)
-        with caplog.at_level(logging.WARNING):
-            async with listening_node.listen(session_cls=ListeningSession):
-                async with client_node.connect(listening_node.service) as session:
-                    listener_session = await listening_session(listening_node)
-                    listener_session.streaming_min_size = 200
-                    await session.send_message(_command('zombie'),
-                                               (achunks(payload, 100), len(payload)))
-                    await session.send_message(_command('zombie'), payload)
-                    await session.send_message(_command('ghoul'),
-                                               (achunks(payload, 100), len(payload)))
-                    await pause()
-                    assert listener_session.zombie_payload == payload
-                    assert listener_session.zombie_payload2 == payload
-                    await session.close()
-
-        assert in_caplog(caplog, 'ignoring unhandled extended ghoul messages')
-
-    @pytest.mark.asyncio
-    async def test_whole_session_extended(self, client_node, listening_node):
-        '''Test sending every message as extended, even the version message.'''
-        class ClientSession(Session):
-            async def send_message(self, command, payload, *, force_extended=False):
-                await super().send_message(command, payload, force_extended=True)
-
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service,
-                                           session_cls=ClientSession) as session:
-                await pause(0.1)
-                assert session.they_prefer_headers
-                await session.close()
-
-    #
-    # SENDHEADERS message tests
-    #
-
-    @pytest.mark.asyncio
-    async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service) as session:
-                listener_session = await listening_session(listening_node)
-                assert session.they_prefer_headers
-                assert listener_session.they_prefer_headers
-                assert session.their_protoconf
-                assert listener_session.their_protoconf
-                await session.close()
-
-    @pytest.mark.asyncio
-    async def test_sendheaders_understood(self, client_node, listening_node):
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service) as session:
-                session.remote_service.protocol_version = 70_011
-                await session.send_sendheaders()
-                assert not session.sendheaders_sent
-                await session.close()
-            await pause()
-
-    @pytest.mark.asyncio
-    async def test_duplicate_sendheaders(self, client_node, listening_node, caplog):
-        with caplog.at_level(logging.ERROR):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    listener_session = await listening_session(listening_node)
-                    await session.send_sendheaders()
-                    await pause()
-                    assert listener_session.they_prefer_headers
-
-                    with caplog.at_level(logging.WARNING):
-                        await session.send_sendheaders()
-                    assert in_caplog(caplog, 'sendheaders message already sent')
-                    await pause()
-                    assert not in_caplog(caplog, 'protocol error: duplicate sendheaders message')
-
-                    session.sendheaders_sent = False
-                    await session.send_sendheaders()
-                    await pause()
-                    assert in_caplog(caplog, 'protocol error: duplicate sendheaders message')
-                    await session.close()
-
-    @pytest.mark.asyncio
-    async def test_sendheaders_payload(self, client_node, listening_node, caplog):
-        with caplog.at_level(logging.WARNING):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.send_message(MessageHeader.SENDHEADERS, b'0')
-                    await pause()
-                    await session.close()
-
-        assert in_caplog(caplog, 'extra bytes at end of sendheaders payload')
-
-    #
-    # ADDR / GETADDR message tests
-    #
-
-    @pytest.mark.asyncio
-    async def test_getaddr_roundtrip(self, client_node, listening_node):
-        async def on_addr(payload):
-            on_addr_event.set()
-
-        on_addr_event = asyncio.Event()
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service) as session:
-                session.on_addr = on_addr
-                await session.send_getaddr()
-                async with timeout_after(0.1):
-                    await on_addr_event.wait()
-                await session.close()
-
-    @pytest.mark.asyncio
-    async def test_getaddr_payload(self, client_node, listening_node, caplog):
-        with caplog.at_level(logging.WARNING):
-            async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.send_message(MessageHeader.GETADDR, b'0')
-                    await pause()
-                    await session.close()
-
-        assert in_caplog(caplog, 'extra bytes at end of getaddr payload')
-
-    #
-    # PING / PONG message tests
-    #
+class TestPing:
+    '''PING and PONG tests.'''
 
     @pytest.mark.asyncio
     async def test_ping_interval(self, client_node, listening_node):
@@ -1462,11 +1404,64 @@ class TestSession:
         assert is_parallel
 
 
-class TestGetHeaders:
+class TestSendHeaders:
 
-    #
-    # GETHEADERS / HEADERS message tests
-    #
+    @pytest.mark.asyncio
+    async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as session:
+                listener_session = await listening_session(listening_node)
+                assert session.they_prefer_headers
+                assert listener_session.they_prefer_headers
+                assert session.their_protoconf
+                assert listener_session.their_protoconf
+                await session.close()
+
+    @pytest.mark.asyncio
+    async def test_understood(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as session:
+                session.remote_service.protocol_version = 70_011
+                await session.send_sendheaders()
+                assert not session.sendheaders_sent
+                await session.close()
+            await pause()
+
+    @pytest.mark.asyncio
+    async def test_duplicate(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    listener_session = await listening_session(listening_node)
+                    await session.send_sendheaders()
+                    await pause()
+                    assert listener_session.they_prefer_headers
+
+                    with caplog.at_level(logging.WARNING):
+                        await session.send_sendheaders()
+                    assert in_caplog(caplog, 'sendheaders message already sent')
+                    await pause()
+                    assert not in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+
+                    session.sendheaders_sent = False
+                    await session.send_sendheaders()
+                    await pause()
+                    assert in_caplog(caplog, 'protocol error: duplicate sendheaders message')
+                    await session.close()
+
+    @pytest.mark.asyncio
+    async def test_payload(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as session:
+                    await session.send_message(MessageHeader.SENDHEADERS, b'0')
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of sendheaders payload')
+
+
+class TestGetHeaders:
 
     @pytest.mark.asyncio
     async def test_waits_for_prior(self, client_node, listening_node, caplog):
