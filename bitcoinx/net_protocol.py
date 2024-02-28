@@ -933,6 +933,9 @@ class Session:
     #
 
     async def handle_one_message(self, connection):
+        # Each connection is a single stream of incoming bytes, so messages must be
+        # received in full (i.e., header and payload) before they can be handled in
+        # parallel.
         header = await MessageHeader.from_stream(connection.recv_exactly)
         if self.debug:
             self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
@@ -947,16 +950,30 @@ class Session:
                 raise ProtocolError(f'{header} command received before handshake finished',
                                     is_fatal=True)
 
-        # Each connection is a single stream of incoming bytes, so messages must be
-        # received in full before they can be handled in parallel.
-        if header.is_extended and await self.ext_message(connection, header):
-            return
+        if header.is_extended:
+            if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
+                raise ProtocolError('ext message received but invalid', is_fatal=True)
+            if header.payload_len > self.streaming_min_size:
+                await self.handle_streaming_message(connection, header)
+                return
+            # If the payload is small read it all in - just as for standard messages
+
         payload = await connection.recv_exactly(header.payload_len)
-        coro = self.std_message(header, payload)
+        if not header.is_extended and header.payload_checksum(payload) != header.checksum:
+            # Maybe force disconnect if we get too many bad checksums in a short time
+            raise ProtocolError(f'bad checksum for {header} command',
+                                is_fatal=not self.handshake_complete.is_set())
+
+        handle_message = self.handle_message(header, payload)
+        # Messages must be processed serially until the handshake is complete.  One side
+        # can correctly consider the handshake complete, and the other not, when the other
+        # has not yet processed the verack message.  Serial processing ensures post-
+        # handshake messages are not rejected by the test above, and also that we do not
+        # process a verack message before its preceeding version message.
         if self.handshake_complete.is_set():
-            self.group.create_task(self.run_coro_safe(coro))
+            self.group.create_task(self.run_coro_safe(handle_message))
         else:
-            await coro
+            await handle_message
 
     async def recv_messages_loop(self, connection):
         '''Read messages from a stream and pass them to handlers for processing.'''
@@ -976,13 +993,8 @@ class Session:
             else:
                 self.logger.error(f'protocol error: {e}')
 
-    async def std_message(self, header, payload):
-        # Note - this routine also handles "short" ext messages
-        if not header.is_extended and header.payload_checksum(payload) != header.checksum:
-            # Maybe force disconnect if we get too many bad checksums in a short time
-            raise ProtocolError(f'bad checksum for {header} command',
-                                is_fatal=not self.handshake_complete.is_set())
-
+    async def handle_message(self, header, payload):
+        # This routine handles non-streaming messages, whether standard or extended
         command = header.command()
         handler = getattr(self, f'on_{command}', None)
         if handler:
@@ -991,16 +1003,9 @@ class Session:
             self.unhandled_commands.add(command)
             self.logger.warning(f'ignoring unhandled {command} messages')
 
-    async def ext_message(self, connection, header):
-        if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
-            raise ProtocolError('ext message received but invalid', is_fatal=True)
-
-        # If the payload is small read it all in - just as for standard messages
-        if header.payload_len < self.streaming_min_size:
-            return False
-
+    async def handle_streaming_message(self, connection, header):
         size = header.payload_len
-        command = f'{header.command()}_large'
+        command = f'{header.command()}_streaming'
         handler = getattr(self, f'on_{command}', None)
         if handler:
             await handler(connection, size)

@@ -1289,7 +1289,7 @@ class TestExtendedMessages:
     @pytest.mark.asyncio
     async def test_send_streaming(self, client_node, listening_node, caplog):
         class ListeningSession(Session):
-            async def on_zombie_large(self, connection, size):
+            async def on_zombie_streaming(self, connection, size):
                 parts = [chunk async for chunk in connection.recv_chunks(size)]
                 self.zombie_payload = b''.join(parts)
 
