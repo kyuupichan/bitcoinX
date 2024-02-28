@@ -557,8 +557,10 @@ class Connection:
             # CRE and CAE can happens on Windows...
             pass
 
-    async def send(self, data):
+    def send(self, data):
         self.writer.write(data)
+
+    async def drain(self):
         await self.writer.drain()
 
     async def recv_exactly(self, nbytes):
@@ -816,13 +818,14 @@ class Session:
         send = self.connection.send
         while True:
             header, payload = await connection.outgoing_messages.get()
-            await send(header)
+            send(header)
             if isinstance(payload, tuple):
                 payload_async_gen, _payload_len = payload
                 async for part in payload_async_gen:
-                    await send(part)
+                    send(part)
             else:
-                await send(payload)
+                send(payload)
+            await self.connection.drain()
 
     async def ping_loop(self):
         while True:
