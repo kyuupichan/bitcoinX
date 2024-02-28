@@ -987,7 +987,7 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen(session_cls=ListeningSession):
                 with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service) as session:
+                    async with client_node.connect(listening_node.service):
                         pass
 
         assert in_caplog(caplog, "fatal error: 'ListeningSession' object has no attribute")
@@ -1001,10 +1001,11 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen(session_cls=ListeningSession):
                 with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service) as session:
+                    async with client_node.connect(listening_node.service):
                         pass
 
         assert in_caplog(caplog, "fatal error: 'ListeningSession' object has no attribute")
+
 
 class TestHandshake:
     '''Covers VERSION, VERACK messages and the general handshake process.'''
