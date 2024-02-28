@@ -964,21 +964,17 @@ class Session:
             await self.run_coro_safe(self.handle_one_message(connection))
 
     async def run_coro_safe(self, coro):
-        '''aWait a coroutine and handle exceptions appropriately.'''
+        '''await a coroutine and handle some exceptions.  Let the others pass.'''
         try:
             await coro
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
-            self.logger.error('connection closed remotely')
-            raise ConnectionResetError from None
+            raise ConnectionResetError('connection closed remotely') from None
         except ProtocolError as e:
             if e.is_fatal:
                 self.logger.error(f'fatal protocol error: {e}')
                 await self.group.cancel_remaining()
             else:
                 self.logger.error(f'protocol error: {e}')
-        except Exception:
-            self.logger.exception('internal error')
-            raise
 
     async def std_message(self, header, payload):
         # Note - this routine also handles "short" ext messages

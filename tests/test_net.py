@@ -932,7 +932,7 @@ class TestSession:
 
     @pytest.mark.asyncio
     async def test_unhandled_command(self, client_node, listening_node, caplog):
-        with caplog.at_level(logging.DEBUG):
+        with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service) as session:
                     await session.send_message(_command('zombie'), b'')
@@ -941,6 +941,43 @@ class TestSession:
 
         assert in_caplog(caplog, 'ignoring unhandled zombie message')
 
+    @pytest.mark.asyncio
+    async def test_client_bug(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(AttributeError):
+                    async with client_node.connect(listening_node.service) as session:
+                        await session.non_existent_member()
+
+        assert in_caplog(caplog, 'fatal error: connection closed remotely')
+
+    @pytest.mark.asyncio
+    async def test_listener_bug_pre_handshake(self, client_node, listening_node, caplog):
+        class ListeningSession(Session):
+            async def on_version(self, payload):
+                await self.non_existent_member()
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListeningSession):
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service) as session:
+                        pass
+
+        assert in_caplog(caplog, "fatal error: 'ListeningSession' object has no attribute")
+
+    @pytest.mark.asyncio
+    async def test_listener_bug_post_handshake(self, client_node, listening_node, caplog):
+        class ListeningSession(Session):
+            async def on_protoconf(self, payload):
+                await self.non_existent_member()
+
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen(session_cls=ListeningSession):
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service) as session:
+                        pass
+
+        assert in_caplog(caplog, "fatal error: 'ListeningSession' object has no attribute")
 
 class TestHandshake:
     '''Covers VERSION, VERACK messages and the general handshake process.'''
@@ -997,7 +1034,8 @@ class TestHandshake:
                                                    perform_handshake=False) as session:
                         await session.send_verack()
 
-        assert in_caplog(caplog, 'verack message received before version message sent')
+        assert in_caplog(caplog, 'fatal protocol error: verack message received '
+                         'before version message sent')
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('extended', (True, False, "streaming"))
@@ -1069,7 +1107,6 @@ class TestHandshake:
                         pass
 
         assert in_caplog(caplog, 'protocol error: connected to ourself')
-        assert in_caplog(caplog, 'connection closed remotely')
 
     @pytest.mark.asyncio
     async def test_duplicate_verack(self, client_node, listening_node, caplog):
