@@ -189,7 +189,7 @@ def read_varbytes(read):
     n = read_varint(read)
     result = read(n)
     if len(result) != n:
-        raise PackingError(f'varbytes requires a buffer of {n:,d} bytes')
+        raise PackingError(f'varbytes could not read {n:,d} bytes')
     return result
 
 

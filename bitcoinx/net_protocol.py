@@ -358,7 +358,9 @@ def read_version(service, read):
     # Association ID is optional.  We set it to None if not provided.
     try:
         service.assoc_id = read_varbytes(read)
-    except PackingError:
+    except PackingError as e:
+        if not str(e).endswith('1 bytes'):
+            raise
         service.assoc_id = None
 
     return (our_address, our_services, nonce)

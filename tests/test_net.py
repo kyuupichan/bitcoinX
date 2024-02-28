@@ -866,6 +866,20 @@ class ExcessClientSession(Session):
         await super().send_message(command, payload, force_extended=force_extended)
 
 
+class CorruptClientSession(Session):
+
+    def __init__(self, *args, **kwargs):
+        self.excess_command = kwargs.pop('corrupt_command')
+        super().__init__(*args, **kwargs)
+        self.node.service.assoc_id = b'foo'  # Ensure not omitted in version payload
+
+    async def send_message(self, command, payload, *, force_extended=False):
+        if command == self.excess_command:
+            assert payload
+            payload = payload[:-1]
+        await super().send_message(command, payload, force_extended=force_extended)
+
+
 class TestNode:
 
     @pytest.mark.asyncio
@@ -1088,13 +1102,16 @@ class TestHandshake:
                 assert in_caplog(caplog, 'sendheaders command received before handshake finished')
 
     @pytest.mark.asyncio
-    async def test_send_corrupt_version(self, client_node, listening_node, caplog):
+    async def test_corrupt_version(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service,
-                                                   perform_handshake=False) as session:
-                        await session.send_message(MessageHeader.VERSION, bytes(10))
+                                                   session_cls=CorruptClientSession,
+                                                   corrupt_command=MessageHeader.VERSION,
+                                                   ) as session:
+                        await pause()
+                        await session.close()
 
         assert in_caplog(caplog, 'corrupt version message')
 
@@ -1414,6 +1431,21 @@ class TestProtoconf:
 
         assert in_caplog(caplog, 'extra bytes at end of protoconf payload')
 
+    @pytest.mark.asyncio
+    async def test_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=CorruptClientSession,
+                                               send_protoconf=False,
+                                               corrupt_command=MessageHeader.PROTOCONF,
+                                               ) as session:
+                    await session.send_protoconf()
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'corrupt protoconf message')
+
 
 class TestPing:
     '''PING and PONG tests.'''
@@ -1496,6 +1528,22 @@ class TestPing:
 
         command = excess_command.rstrip(b'\0').decode()
         assert in_caplog(caplog, f'{command} payload')
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('corrupt_command', (MessageHeader.PING, MessageHeader.PONG))
+    async def test_corrupt(self, client_node, listening_node, caplog, corrupt_command):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=CorruptClientSession,
+                                               corrupt_command=corrupt_command,
+                                               ) as session:
+                    await session.send_protoconf()
+                    await pause()
+                    await session.close()
+
+        command = corrupt_command.rstrip(b'\0').decode()
+        assert in_caplog(caplog, f'corrupt {command} message')
 
 
 class TestSendHeaders:
@@ -1807,6 +1855,20 @@ class TestGetHeaders:
         assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
 
     @pytest.mark.asyncio
+    async def test_corrupt_getheaders(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=CorruptClientSession,
+                                               corrupt_command=MessageHeader.GETHEADERS,
+                                               ) as session:
+                    await session.get_headers()
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'corrupt getheaders message')
+
+    @pytest.mark.asyncio
     async def test_excess_headers(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
@@ -1819,6 +1881,20 @@ class TestGetHeaders:
                     await session.close()
 
         assert in_caplog(caplog, 'extra bytes at end of headers payload')
+
+    @pytest.mark.asyncio
+    async def test_corrupt_headers(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=CorruptClientSession,
+                                               corrupt_command=MessageHeader.HEADERS,
+                                               ) as session:
+                    await session.send_headers([])
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'corrupt headers message')
 
     @pytest.mark.asyncio
     async def test_too_many_sent(self, client_node, listening_node, caplog):
