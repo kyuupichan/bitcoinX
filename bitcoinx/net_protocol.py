@@ -523,6 +523,7 @@ class GetheadersRequest:
         self.timeout_at = timeout_at
         self.answered = asyncio.Event()
         self.headers = []
+        self.time = time.time()
         # The number that were new, not the number received.  -1 indicates no response.
         self.count = -1
 
@@ -756,11 +757,10 @@ class Session:
         # FIXME: move some things to BitcoinService
         # State
         self.version_sent = False
-        self.verack_sent = False
-        self.verack_received = False
         self.protoconf_sent = False
+        self.verack_sent = Event()
+        self.verack_received = Event()     # Implies version_received
         self.version_received = Event()
-        self.handshake_complete = Event()
         self.ping_sent = Event()
         self.headers_synced = False
         self.their_protoconf = None
@@ -847,7 +847,7 @@ class Session:
 
     async def check_handshake_timeout(self):
         async with timeout_after(self.HANDSHAKE_TIMEOUT):
-            await self.handshake_complete.wait()
+            await self.verack_received.wait()
 
     async def setup_connection(self, connection):
         # Every connection needs these
@@ -927,9 +927,9 @@ class Session:
         else:
             header = MessageHeader.std_bytes(self.node.network.magic, command, payload)
 
-        # Ensure that all other messages wait for the handshake to complete.
+        # Ensure that all other messages wait for verack to be sent.
         if command not in MessageHeader.HANDSHAKE_COMMANDS:
-            await self.handshake_complete.wait()
+            await self.verack_sent.wait()
 
         await connection.outgoing_messages.put((header, payload))
 
@@ -950,11 +950,6 @@ class Session:
             raise ProtocolError(f'bad magic 0x{header.magic.hex()} expected 0x{magic.hex()}',
                                 is_fatal=True)
 
-        if not self.handshake_complete.is_set():
-            if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
-                raise ProtocolError(f'{header} command received before handshake finished',
-                                    is_fatal=True)
-
         if header.is_extended:
             if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
                 raise ProtocolError('ext message received but invalid', is_fatal=True)
@@ -965,25 +960,32 @@ class Session:
 
         payload = await connection.recv_exactly(header.payload_len)
         if not header.is_extended and header.payload_checksum(payload) != header.checksum:
-            # Maybe force disconnect if we get too many bad checksums in a short time
-            raise ProtocolError(f'bad checksum for {header} command',
-                                is_fatal=not self.handshake_complete.is_set())
+            # Ignore messages with a bad checksum, like bitcoind.  Maybe force disconnect
+            # if we get too many bad checksums in a short time
+            raise ProtocolError(f'bad checksum for {header} command')
 
-        handle_message = self.handle_message(header, payload)
-        # Messages must be processed serially until the handshake is complete.  One side
-        # can correctly consider the handshake complete, and the other not, when the other
-        # has not yet processed the verack message.  Serial processing ensures post-
-        # handshake messages are not rejected by the test above, and also that we do not
-        # process a verack message before its preceeding version message.
-        if self.handshake_complete.is_set():
-            self.group.create_task(self.run_coro_safe(handle_message))
-        else:
-            await handle_message
+        # Messages must be processed serially until verack is received, as from then on
+        # they can be processed in any order.
+        if self.verack_received.is_set():
+            self.group.create_task(self.handle_safe(header, payload))
+            return
+
+        if header.command_bytes == MessageHeader.VERSION:
+            pass
+        elif not self.version_received.is_set():
+            raise ProtocolError(f'{header} command received before version')
+        elif header.command_bytes not in (MessageHeader.VERACK, MessageHeader.AUTHCH,
+                                          MessageHeader.AUTHRESP):
+            raise ProtocolError(f'{header} command received before verack')
+        await self.handle_message(header, payload)
 
     async def recv_messages_loop(self, connection):
         '''Read messages from a stream and pass them to handlers for processing.'''
         while True:
             await self.run_coro_safe(self.handle_one_message(connection))
+
+    async def handle_safe(self, header, payload):
+        await self.run_coro_safe(self.handle_message(header, payload))
 
     async def run_coro_safe(self, coro):
         '''await a coroutine and handle some exceptions.  Let the others pass.'''
@@ -1059,9 +1061,9 @@ class Session:
                 break
             await self.getheaders_request.wait()
 
+        self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         timeout_at = asyncio.get_running_loop().time() + self.GETHEADERS_TIMEOUT
         self.getheaders_request = GetheadersRequest(locator, timeout_at)
-        self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         return self.getheaders_request
 
@@ -1116,6 +1118,7 @@ class Session:
         # An inserted count of -1 indicates either that zero headers were received, or
         # that the received headers broke the protocol.  Either case should stop
         # sync_headers().  Note that receiving a disconnected header leaves it at zero.
+        t = time.time()
         headers_obj = self.node.headers
         inserted_count = 0
         request = self.getheaders_request
@@ -1133,6 +1136,9 @@ class Session:
             # Only match the request if it looks like a valid response
             if request and not request.locator.is_response(headers):
                 request = None
+            if request:
+                elapsed = time.time() - request.time
+                self.logger.info(f'headers round trip time is {elapsed:3f}s')
 
             # This will fail if the headers do not connect.  It also validates PoW.
             try:
@@ -1144,7 +1150,8 @@ class Session:
                     request = None     # Do not consider this an answer
                 raise ProtocolError(str(e)) from None
             else:
-                self.logger.info(f'inserted {inserted_count:,d} headers, '
+                elapsed = time.time() - t
+                self.logger.info(f'inserted {inserted_count:,d} headers in {elapsed:3f}s; '
                                  f'our height is {await headers_obj.height()}')
                 new_tip = await headers_obj.header_from_hash(headers[-1].hash)
                 if new_tip.chain_work() > self.their_tip.chain_work():
@@ -1185,21 +1192,21 @@ class Session:
         self.version_sent = True
 
     async def on_verack(self, payload):
+        assert self.version_received.is_set()
         if not self.version_sent:
             raise ProtocolError('verack message received before version message sent',
                                 is_fatal=True)
-        if self.verack_received:
+        if self.verack_received.is_set():
             raise ProtocolError('duplicate verack message')
-        self.verack_received = True
-        if self.verack_sent:
-            self.handshake_complete.set()
+        self.verack_received.set()
         self.unpack_payload(payload, read_nothing)
 
     async def send_verack(self):
+        if self.verack_sent.is_set():
+            self.logger.warning('verack message already sent')
+            return
         await self.send_message(MessageHeader.VERACK, b'')
-        self.verack_sent = True
-        if self.verack_received:
-            self.handshake_complete.set()
+        self.verack_sent.set()
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''

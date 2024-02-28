@@ -928,7 +928,7 @@ class TestSession:
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service) as session:
-                        await session.handshake_complete.wait()
+                        await session.verack_sent.wait()
                         payload = b''
                         header = MessageHeader.std_bytes(BitcoinTestnet.magic,
                                                          MessageHeader.SENDHEADERS, payload)
@@ -943,8 +943,7 @@ class TestSession:
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service) as session:
-                    # So it is not a disconnection
-                    await session.handshake_complete.wait()
+                    await session.verack_sent.wait()
                     payload = b''
                     header = MessageHeader.std_bytes(client_node.network.magic,
                                                      MessageHeader.SENDHEADERS, payload)
@@ -1057,50 +1056,45 @@ class TestHandshake:
     async def test_send_verack_first(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   perform_handshake=False) as session:
-                        await session.send_verack()
+                async with client_node.connect(listening_node.service,
+                                               perform_handshake=False) as session:
+                    await session.send_verack()
+                    await pause()
+                    await session.close()
 
-        assert in_caplog(caplog, 'fatal protocol error: verack message received '
-                         'before version message sent')
+        assert in_caplog(caplog, 'protocol error: verack command received before version')
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize('extended', (True, False, "streaming"))
+    @pytest.mark.parametrize('extended', (True, False))
     @pytest.mark.parametrize('first', (False, True))
     async def test_other_message_before_handshake_complete(self, client_node, listening_node,
                                                            caplog, extended, first):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   perform_handshake=False) as session:
-                        async def sendheaders():
-                            # Don't use send_message to force the first message
-                            command = MessageHeader.SENDHEADERS
-                            payload = b''
-                            if extended == 'streaming':
-                                # lie about the length
-                                header = MessageHeader.ext_bytes(session.node.network.magic,
-                                                                 command, 1_000_000_000)
-                                payload = (achunks(payload, 100), len(payload))
-                            elif extended:
-                                header = MessageHeader.ext_bytes(session.node.network.magic,
-                                                                 command, len(payload))
-                            else:
-                                header = MessageHeader.std_bytes(session.node.network.magic,
-                                                                 command, payload)
-                            await session.connection.outgoing_messages.put((header, payload))
-
-                        if first:
-                            await sendheaders()
+                async with client_node.connect(listening_node.service,
+                                               perform_handshake=False) as session:
+                    async def sendheaders():
+                        # Don't use send_message to force the first message
+                        command = MessageHeader.SENDHEADERS
+                        payload = b''
+                        if extended:
+                            header = MessageHeader.ext_bytes(session.node.network.magic,
+                                                             command, len(payload))
                         else:
-                            await session.send_version()
-                            await sendheaders()
-                        await pause()
-                        await session.close()
+                            header = MessageHeader.std_bytes(session.node.network.magic,
+                                                             command, payload)
+                        await session.connection.outgoing_messages.put((header, payload))
 
-                assert in_caplog(caplog, 'sendheaders command received before handshake finished')
+                    if first:
+                        await sendheaders()
+                    else:
+                        await session.send_version()
+                        await sendheaders()
+                    await pause()
+                    await session.close()
+
+        print_caplog(caplog)
+        assert in_caplog(caplog, 'sendheaders command received before')
 
     @pytest.mark.asyncio
     async def test_corrupt_version(self, client_node, listening_node, caplog):
@@ -1124,7 +1118,7 @@ class TestHandshake:
                                                session_cls=ExcessClientSession,
                                                excess_command=MessageHeader.VERSION,
                                                ) as session:
-                    await session.handshake_complete.wait()
+                    await session.verack_sent.wait()
                     await session.close()
 
         assert in_caplog(caplog, 'extra bytes at end of version payload')
@@ -1144,6 +1138,13 @@ class TestHandshake:
         class ClientSession(Session):
             async def send_verack(self):
                 await super().send_verack()
+                with caplog.at_level(logging.WARNING):
+                    await super().send_verack()
+                assert in_caplog(caplog, 'verack message already sent')
+                await pause()
+                assert not in_caplog(caplog, 'duplicate verack message')
+
+                self.verack_sent.clear()
                 await super().send_verack()
                 await pause()
                 await self.close()
@@ -1163,66 +1164,10 @@ class TestHandshake:
                                                session_cls=ExcessClientSession,
                                                excess_command=MessageHeader.VERACK,
                                                ) as session:
-                    await session.handshake_complete.wait()
+                    await pause()
                     await session.close()
 
         assert in_caplog(caplog, 'extra bytes at end of verack payload')
-
-    @pytest.mark.asyncio
-    async def test_hc_verack_received_first(self, client_node, listening_node):
-        '''Test the handshake is only complete AFTER verack is sent when verack is received
-        first.'''
-        class ClientSession(Session):
-            async def on_verack(self, payload):
-                await super().on_verack(payload)
-                received_event.set()
-
-            async def send_verack(self):
-                try:
-                    await received_event.wait()
-                    assert not self.handshake_complete.is_set()
-                    await super().send_verack()
-                    assert self.handshake_complete.is_set()
-                finally:
-                    finished_event.set()
-
-        received_event = asyncio.Event()
-        finished_event = asyncio.Event()
-
-        # Test verack received before handshake is complete when verack is received
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service,
-                                           session_cls=ClientSession) as session:
-                await finished_event.wait()
-                await session.close()
-
-    @pytest.mark.asyncio
-    async def test_hc_verack_sent_first(self, client_node, listening_node):
-        '''Test the handshake is only complete AFTER verack is received when verack is sent
-        first.'''
-        class ClientSession(Session):
-            async def on_verack(self, payload):
-                try:
-                    await sent_event.wait()
-                    assert not self.handshake_complete.is_set()
-                    await super().on_verack(payload)
-                    assert self.handshake_complete.is_set()
-                finally:
-                    finished_event.set()
-
-            async def send_verack(self):
-                await super().send_verack()
-                sent_event.set()
-
-        sent_event = asyncio.Event()
-        finished_event = asyncio.Event()
-
-        # Test verack received before handshake is complete when verack is received
-        async with listening_node.listen():
-            async with client_node.connect(listening_node.service,
-                                           session_cls=ClientSession) as session:
-                await finished_event.wait()
-                await session.close()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('slow', ('version', 'verack'))
@@ -1300,7 +1245,7 @@ class TestExtendedMessages:
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service,
                                                    send_protoconf=False) as session:
-                        await session.handshake_complete.wait()
+                        await session.verack_sent.wait()
                         payload = Protoconf.default().payload()
                         assert not session.can_send_ext_messages
                         # We should not accept sending a large message
@@ -1523,12 +1468,13 @@ class TestPing:
                                                session_cls=ExcessClientSession,
                                                excess_command=excess_command,
                                                ) as session:
-                    await session.handshake_complete.wait()
+                    await session.verack_sent.wait()
+                    await session.verack_received.wait()
                     await pause()
                     await session.close()
 
         command = excess_command.rstrip(b'\0').decode()
-        assert in_caplog(caplog, f'{command} payload')
+        assert in_caplog(caplog, f'extra bytes at end of {command} payload')
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('corrupt_command', (MessageHeader.PING, MessageHeader.PONG))
@@ -1599,7 +1545,7 @@ class TestSendHeaders:
                                                session_cls=ExcessClientSession,
                                                excess_command=MessageHeader.SENDHEADERS,
                                                ) as session:
-                    await session.handshake_complete.wait()
+                    await session.verack_sent.wait()
                     await pause()
                     await session.close()
 
