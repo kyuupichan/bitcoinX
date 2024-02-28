@@ -2,7 +2,6 @@ import asyncio
 import copy
 import logging
 import platform
-import sys
 import time
 from io import BytesIO
 from ipaddress import IPv4Address, IPv6Address
@@ -804,10 +803,7 @@ def listening_node(listening_headers):
     service = BitcoinService(address=NetAddress(listen_host, 5656))
     node = Node(service, listening_headers)
     yield node
-    if sys.version_info >= (3, 12):
-        assert not node.sessions
-    else:
-        assert all(not session.is_outgoing for session in node.sessions)
+    assert not node.sessions
 
 
 @pytest.fixture
@@ -1161,7 +1157,6 @@ class TestHandshake:
                                            session_cls=ClientSession) as session:
                 await finished_event.wait()
                 await session.close()
-            await pause()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('slow', ('version', 'verack'))
@@ -1187,7 +1182,6 @@ class TestHandshake:
                 async with client_node.connect(listening_node.service,
                                                session_cls=ClientSession) as session:
                     await pause(session.HANDSHAKE_TIMEOUT * 1.5)
-            await pause()
 
     @pytest.mark.asyncio
     async def test_parallel_handling(self, client_node, listening_node, caplog):
@@ -1446,7 +1440,6 @@ class TestSendHeaders:
                 await session.send_sendheaders()
                 assert not session.sendheaders_sent
                 await session.close()
-            await pause()
 
     @pytest.mark.asyncio
     async def test_duplicate(self, client_node, listening_node, caplog):

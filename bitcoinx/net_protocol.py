@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 import socket
-import sys
 import time
 from asyncio import Event, Queue, open_connection
 from dataclasses import dataclass
@@ -654,7 +653,7 @@ class Node:
 
         host = str(self.service.address.host)
         port = self.service.address.port
-        return Listener(asyncio.start_server(on_client_connection, host, port))
+        return Listener(asyncio.start_server(on_client_connection, host, port), self.sessions)
 
     def session(self, remote_service, connection, **kwargs):
         session_cls = kwargs.pop('session_cls', Session)
@@ -700,8 +699,9 @@ class Node:
 class Listener:
     '''A helper for Node.listen() to ensure sessions are cleaned up properly.'''
 
-    def __init__(self, start_server):
+    def __init__(self, start_server, sessions):
         self.start_server = start_server
+        self.sessions = sessions
         self.server = None
 
     async def __aenter__(self):
@@ -712,8 +712,9 @@ class Listener:
         # Python bug in 3.12 causes this to hang sometimes, sigh.
         async with ignore_after(0.1):
             await self.server.wait_closed()
-        if sys.version_info < (3, 11):
-            await asyncio.sleep(0.001)
+        # Wait until incoming sessions finish
+        while any(not session.is_outgoing for session in self.sessions):
+            await asyncio.sleep(0)
 
 
 class Session:
@@ -976,7 +977,7 @@ class Session:
             else:
                 self.logger.error(f'protocol error: {e}')
         except Exception:
-            self.logger.exception(f'internal error')
+            self.logger.exception('internal error')
             raise
 
     async def std_message(self, header, payload):
@@ -1096,7 +1097,7 @@ class Session:
             result = reader(read)
         except PackingError:
             raise ProtocolError(f'corrupt {payload.command} message',
-                                is_fatal=payload.command=='version') from None
+                                is_fatal=payload.command == 'version') from None
         if read(1) != b'':
             self.logger.warning(f'extra bytes at end of {payload.command} payload')
         return result
