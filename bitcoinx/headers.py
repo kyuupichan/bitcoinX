@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import asqlite3
 
 from .base58 import base58_encode_check
-from .errors import InsufficientPoW, IncorrectBits, MissingHeader
+from .errors import InsufficientPoW, IncorrectBits, MissingHeader, HeadersNotSequential
 from .hashes import hash_to_hex_str, hash_to_value, double_sha256 as header_hash
 from .misc import le_bytes_to_int, int_to_le_bytes, cachedproperty, prefixed_logger
 from .packing import pack_byte, pack_header, unpack_le_uint32, unpack_le_int32
@@ -252,42 +252,48 @@ class Headers:
         self.genesis_header = await self.header_from_hash(gh.hash)
         self.logger.info('database tables created')
 
-    async def insert_headers(self, simple_headers, *, check_work=True):
+    async def insert_headers(self, headers, *, check_work=True):
         '''Insert headers into the Headers table, and returns the number of new headers actually
         added.
 
-        simple_headers is a sequence of SimpleHeader objects.  Proof of work is checked
-        if check_work is True.
+        headers is a sequence of SimpleHeader objects which must form a chain.  Proof of
+        work is checked if check_work is True.
         '''
-        prev_header_sql = self.fixup_sql(
-            'SELECT hdr_id, chain_id, height, chain_work FROM $S.Headers WHERE hash=?')
-        # Use a new chain ID if another header with the same prev_hdr_id exists
-        calc_chain_id = '''
-          iif(
-            EXISTS(SELECT 1 FROM $S.Headers WHERE height=H.height + 1
-                                                         AND prev_hdr_id=H.hdr_id),
-            (SELECT 1 + max(chain_id) FROM $S.Chains),
-            chain_id)'''
-        insert_header_sql = self.fixup_sql(f'''
-          INSERT OR IGNORE INTO $S.Headers(prev_hdr_id, height, chain_id,
-                chain_work, hash, merkle_root, version, timestamp, bits, nonce)
-            SELECT ?, height + 1, {calc_chain_id}, ?, ?, ?, ?, ?, ?, ?
-                FROM $S.Headers H WHERE hash=?''')
+        if not SimpleHeader.are_headers_chained(headers):
+            raise HeadersNotSequential('headers do not form a chain')
 
         execute = self.conn.execute
+        exists_sql = self.fixup_sql('SELECT hdr_id from $S.Headers WHERE hash=?;')
+
+        # Find the first header not in the DB
+        for n, header in enumerate(headers):
+            cursor = await execute(exists_sql, (header.hash, ))
+            if not await cursor.fetchone():
+                headers = headers[n:]
+                break
+        if not headers:
+            return 0
+
+        # If the headers connect they all have the same chain ID, which is that of the
+        # prior header if it is a tip, otherwise we need a new chain ID.
+        prior_header_sql = self.fixup_sql('''SELECT hdr_id, height, chain_work, chain_id,
+            iif(EXISTS(SELECT 1 FROM $S.HeadersView WHERE prev_hash=?),
+                (SELECT 1 + max(chain_id) FROM $S.Chains), chain_id)
+          FROM $S.Headers WHERE hash=?;''')
+        cursor = await execute(prior_header_sql, (headers[0].prev_hash, headers[0].prev_hash))
+        result = await cursor.fetchone()
+        if not result:
+            raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
+        prev_hdr_id, height, chain_work, chain_id, new_chain_id = result
+
+        insert_header_sql = self.fixup_sql('''
+          INSERT OR IGNORE INTO $S.Headers(prev_hdr_id, height, chain_id,
+                chain_work, hash, merkle_root, version, timestamp, bits, nonce)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);''')
+
         required_bits = self.network.required_bits
-        count = 0
-
         try:
-            for header in simple_headers:
-                cursor = await execute(prev_header_sql, (header.prev_hash, ))
-                row = await cursor.fetchone()
-                if not row:
-                    if header.hash == self.genesis_header.hash:
-                        continue
-                    raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
-                prev_hdr_id, chain_id, height, chain_work = row
-
+            for header in headers:
                 if check_work:
                     header.height = height + 1
                     header.chain_id = chain_id
@@ -297,17 +303,21 @@ class Headers:
                     if header.hash_value() > header.target():
                         raise InsufficientPoW(header)
 
+                height += 1
                 chain_work = int_to_le_bytes(le_bytes_to_int(chain_work)
                                              + bits_to_work(header.bits))
+                chain_id = new_chain_id
+
                 cursor = await execute(insert_header_sql,
-                                       (prev_hdr_id, chain_work, header.hash, header.merkle_root,
-                                        header.version, header.timestamp, header.bits,
-                                        header.nonce, header.prev_hash))
-                count += cursor.rowcount
+                                       (prev_hdr_id, height, chain_id, chain_work, header.hash,
+                                        header.merkle_root, header.version, header.timestamp,
+                                        header.bits, header.nonce))
+                assert cursor.lastrowid != prev_hdr_id
+                prev_hdr_id = cursor.lastrowid
         finally:
             await self.conn.commit()
 
-        return count
+        return len(headers)
 
     async def _query_headers(self, where_clause, params, is_multi):
         sql = f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, height,

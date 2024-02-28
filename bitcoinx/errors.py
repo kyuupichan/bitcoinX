@@ -9,7 +9,7 @@
 
 __all__ = (
     'Base58Error', 'DecryptionError',
-    'HeaderException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW',
+    'HeaderException', 'MissingHeader', 'IncorrectBits', 'InsufficientPoW', 'HeadersNotSequential',
     'ScriptError', 'TruncatedScriptError', 'InterpreterError',
     'StackSizeTooLarge', 'TooManyOps', 'MinimalEncodingError', 'CleanStackError',
     'ScriptTooLarge', 'MinimalIfError', 'DivisionByZero', 'NegativeShiftCount',
@@ -39,12 +39,18 @@ class HeaderException(Exception):
     '''Base class of exceptions raised in headers.py.'''
 
 
+class HeadersNotSequential(HeaderException):
+    '''Raised by insert_headers() when the headers do not form a chain.'''
+
+
 class MissingHeader(HeaderException):
-    '''Raised by Headers.connect() when the previous header is missing.'''
+    '''Raised when a header is missing.'''
 
 
 class IncorrectBits(HeaderException):
-    '''Raised when a header has bits other than those required by the protocol.'''
+    '''Raised by insert_headers() when a header has bits other than those required by the
+    protocol.
+    '''
 
     def __init__(self, header, required_bits):
         super().__init__(header, required_bits)
@@ -56,7 +62,7 @@ class IncorrectBits(HeaderException):
 
 
 class InsufficientPoW(HeaderException):
-    '''Raised when a header has less PoW than required by the protocol.'''
+    '''Raised by insert_headers() when a header has less PoW than required by the protocol.'''
 
     def __init__(self, header):
         super().__init__(header)

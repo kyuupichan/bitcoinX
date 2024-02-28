@@ -1690,8 +1690,9 @@ class TestGetHeaders:
 
         client_branch = simples[:3]
         client_branch.extend(create_random_branch(client_branch[-1], 5))
-        await client_node.headers.insert_headers(client_branch, check_work=False)
-        await listening_node.headers.insert_headers(client_branch[:-1], check_work=False)
+        assert await client_node.headers.insert_headers(client_branch, check_work=False) == 7
+        assert await listening_node.headers.insert_headers(client_branch[:-1],
+                                                           check_work=False) == 4
         client_chain = await client_node.headers.longest_chain()
         assert client_chain.tip.hash == client_branch[-1].hash
 

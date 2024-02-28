@@ -5,7 +5,7 @@ import asqlite3
 
 import pytest
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, MissingHeader, InsufficientPoW, IncorrectBits,
+    Bitcoin, BitcoinTestnet, MissingHeader, InsufficientPoW, IncorrectBits, HeadersNotSequential,
     bits_to_work, SimpleHeader, Header, all_networks, int_to_le_bytes,
 )
 
@@ -186,6 +186,11 @@ class TestHeaders:
         network = Bitcoin
         run_test_with_headers(test, network)
 
+    def test_insert_headers_empty(self):
+        async def test(headers):
+            assert await headers.insert_headers([]) == 0
+        run_test_with_headers(test, Bitcoin)
+
     def test_insert_headers_commits(self):
         async def test(headers):
             mainnet_headers = first_mainnet_headers(6)
@@ -210,32 +215,48 @@ class TestHeaders:
 
         run_test_with_headers(test)
 
-    def test_insert_headers_bad(self):
+    def test_insert_headers_not_a_chain(self):
         async def test(headers):
             branch = create_random_branch(headers.genesis_header, 4)
-            # muck up prev_hash
-            raw = bytearray(branch[2].raw)
-            raw[7] ^= 1
-            branch[2].raw = bytes(raw)
+            branch.append(branch[0])
+            with pytest.raises(HeadersNotSequential):
+                await headers.insert_headers(branch)
+
+        run_test_with_headers(test)
+
+    def test_insert_headers_not_connecting(self):
+        async def test(headers):
+            header = create_random_header(headers.genesis_header)
+            branch = create_random_branch(header, 4)
             with pytest.raises(MissingHeader):
-                await headers.insert_headers(branch, check_work=False)
+                await headers.insert_headers(branch)
 
         run_test_with_headers(test)
 
     def test_insert_existing_headers(self):
         async def test(headers):
-            N = 5
-            branch = create_random_branch(headers.genesis_header, N)
-            count = await headers.insert_headers(branch[:-1], check_work=False)
-            assert count == N - 1
+            simples = first_mainnet_headers(10)
+            count = await headers.insert_headers(simples[:5])
+            assert count == 4
             chain = await headers.longest_chain()
-            assert chain.tip.height == N - 1
-            count = await headers.insert_headers(branch, check_work=False)
-            assert count == 1
+            assert chain.tip.height == 4
+            count = await headers.insert_headers(simples[2:])
+            assert count == 5
             chain = await headers.longest_chain()
-            assert chain.tip.height == N
+            assert chain.tip.height == 9
 
         run_test_with_headers(test)
+
+    def test_insert_new_branch_checking_work(self):
+        async def test(headers):
+            branch = create_random_branch(network.genesis_header, 4)
+            simples = first_mainnet_headers(10)
+            count = await headers.insert_headers(branch, check_work=False)
+            count = await headers.insert_headers(simples)
+            assert count == 9
+
+        network = Bitcoin
+        run_test_with_headers(test, network)
 
     def test_header_from_hash(self):
         async def test(headers):
@@ -446,16 +467,17 @@ class TestHeaders:
             #         / H3 - H4    chain_1
             # genesis - H1 - H2    chain_0
             #              \ H6    chain_3
-            H1, H2 = create_random_branch(headers.genesis_header, 2)
-            H3, H4 = create_random_branch(headers.genesis_header, 2)
-            H5, = create_random_branch(H3, 1)
-            H6, = create_random_branch(H1, 1)
+            B1 = create_random_branch(headers.genesis_header, 2)
+            B2 = create_random_branch(headers.genesis_header, 2)
+            B3 = create_random_branch(B2[0], 1)
+            B4 = create_random_branch(B1[0], 1)
 
-            H = (H1, H2, H3, H4, H5, H6)
-            assert await headers.insert_headers(H, check_work=False) == len(H)
+            for B in (B1, B2, B3, B4):
+                assert await headers.insert_headers(B, check_work=False) == len(B)
 
             # This ensures chain_id is set
-            H1, H2, H3, H4, H5, H6 = [await headers.header_from_hash(h.hash) for h in H]
+            H1, H2, H3, H4, H5, H6 = [await headers.header_from_hash(h.hash)
+                                      for h in B1 + B2 + B3 + B4]
 
             chains = {chain.tip.hash: chain for chain in await headers.chains()}
             chain_0 = chains[H2.hash]
