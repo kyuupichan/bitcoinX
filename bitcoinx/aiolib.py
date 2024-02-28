@@ -289,7 +289,7 @@ class Deadline:
             task._deadlines.remove(self)
 
             # If we set the current timeout, it needs to be reset
-            if task._timeout_setter is self:
+            if task._timeout_setter is self or exc_value is None:
                 self.reset_timeout(task)
 
         if exc_type is TimeoutError:

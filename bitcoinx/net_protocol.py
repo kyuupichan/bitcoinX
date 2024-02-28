@@ -19,7 +19,7 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import Sequence
 
-from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after, ignore_at
+from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after, timeout_at
 from .errors import (
     ProtocolError, PackingError, HeaderException, MissingHeader, HeadersNotSequential,
 )
@@ -518,13 +518,15 @@ class BlockLocator:
 
 class GetheadersRequest:
 
-    def __init__(self, locator, timeout_at):
+    def __init__(self, locator, timeout, logger):
         self.locator = locator
-        self.timeout_at = timeout_at
+        self.logger = logger
+        self.timeout_at = asyncio.get_running_loop().time() + timeout
         self.answered = asyncio.Event()
         self.headers = []
         self.time = time.time()
-        # The number that were new, not the number received.  -1 indicates no response.
+        # The number of headers received that were new, not the number received.  -1
+        # indicates the response either timed out or no valid response was received.
         self.count = -1
 
     def on_response(self, headers, inserted_count):
@@ -532,14 +534,17 @@ class GetheadersRequest:
             self.headers = headers
             self.count = inserted_count
             self.answered.set()
+            return True
+        return False
 
     async def wait(self):
-        '''Wait for a get Returns -1 if nothing was received, or what was received was erroneous.
-        Returns 0 if a response with zero headers was received.  Otherwise returns the
-        number of headers received.'''
-        async with ignore_at(self.timeout_at):
-            await self.answered.wait()
-        self.answered.set()
+        '''Wait for the request to be responded to or time out.'''
+        try:
+            async with timeout_at(self.timeout_at):
+                await self.answered.wait()
+        except TimeoutError:
+            self.logger.info('getheaders request timed out')
+            self.answered.set()
 
 
 class Connection:
@@ -743,7 +748,7 @@ class Session:
     # Give up on an outgoing connection if it isn't established after this amount of time
     CONNECTION_TIMEOUT = 10
     # After this amount of time, a getheaders request is assumed abandoned.
-    GETHEADERS_TIMEOUT = 15
+    GETHEADERS_TIMEOUT = 30
 
     def __init__(self, node, remote_service, connection, perform_handshake=True,
                  send_protoconf=True, we_prefer_headers=True, protoconf=None):
@@ -1062,8 +1067,7 @@ class Session:
             await self.getheaders_request.wait()
 
         self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
-        timeout_at = asyncio.get_running_loop().time() + self.GETHEADERS_TIMEOUT
-        self.getheaders_request = GetheadersRequest(locator, timeout_at)
+        self.getheaders_request = GetheadersRequest(locator, self.GETHEADERS_TIMEOUT, self.logger)
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
         return self.getheaders_request
 
@@ -1127,7 +1131,6 @@ class Session:
             headers = self.unpack_payload(payload, read_headers)
             count = len(headers)
             if count == 0:
-                self.logger.info(f'headers synchronized to height {self.their_tip.height}')
                 return
             if count > self.MAX_HEADERS:
                 raise ProtocolError(f'headers message with {count:,d} headers but '
@@ -1153,13 +1156,25 @@ class Session:
                 elapsed = time.time() - t
                 self.logger.info(f'inserted {inserted_count:,d} headers in {elapsed:3f}s; '
                                  f'our height is {await headers_obj.height()}')
-                new_tip = await headers_obj.header_from_hash(headers[-1].hash)
-                if new_tip.chain_work() > self.their_tip.chain_work():
-                    self.their_tip = new_tip
         finally:
             if request:
-                request.on_response(headers, inserted_count)
                 self.getheaders_request = None
+                if request.on_response(headers, inserted_count):
+                    # Update our idea of their tip
+                    if count == 0:
+                        if request.locator.block_hashes:
+                            tip_hash = request.locator.block_hashes[0]
+                        else:
+                            tip_hash = None
+                    else:
+                        tip_hash = headers[-1].hash
+                    if tip_hash:
+                        new_tip = await headers_obj.header_from_hash(tip_hash)
+                        if new_tip.chain_work() > self.their_tip.chain_work():
+                            self.their_tip = new_tip
+                        if count == 0:
+                            self.logger.info('headers synchronized to height '
+                                             f'{self.their_tip.height}')
 
     async def on_getheaders(self, payload):
         locator = self.unpack_payload(payload, BlockLocator.read)
