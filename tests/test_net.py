@@ -1754,13 +1754,12 @@ class TestSyncHeaders:
             async def on_getheaders(self, payload):
                 nonlocal requests
                 requests += 1
-                await asyncio.sleep(0.04)
-                await self.close()
+                await asyncio.sleep(1.0)
 
         async def create_client(lnode):
             async with client_node.connect(lnode.service) as session:
 
-                async with ignore_after(0.02):
+                async with ignore_after(0.1):
                     await session.sync_headers()
                 await session.close()
 
