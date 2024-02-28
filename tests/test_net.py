@@ -853,6 +853,19 @@ async def test_services_from_seeds(network):
     await services_from_seeds(network)
 
 
+class ExcessClientSession(Session):
+
+    def __init__(self, *args, **kwargs):
+        self.excess_command = kwargs.pop('excess_command')
+        super().__init__(*args, **kwargs)
+        self.node.service.assoc_id = b'foo'  # Ensure not omitted in version payload
+
+    async def send_message(self, command, payload, *, force_extended=False):
+        if command == self.excess_command:
+            payload += b'x'
+        await super().send_message(command, payload, force_extended=force_extended)
+
+
 class TestNode:
 
     @pytest.mark.asyncio
@@ -1075,7 +1088,7 @@ class TestHandshake:
                 assert in_caplog(caplog, 'sendheaders command received before handshake finished')
 
     @pytest.mark.asyncio
-    async def test_send_corrupt_version_message(self, client_node, listening_node, caplog):
+    async def test_send_corrupt_version(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 with pytest.raises(ConnectionResetError):
@@ -1086,14 +1099,14 @@ class TestHandshake:
         assert in_caplog(caplog, 'corrupt version message')
 
     @pytest.mark.asyncio
-    async def test_send_long_version_message(self, client_node, listening_node, caplog):
+    async def test_excess_version(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service,
-                                               perform_handshake=False) as session:
-                    await session.send_message(MessageHeader.VERSION,
-                                               await session.version_payload() + bytes(2))
-                    await pause()
+                                               session_cls=ExcessClientSession,
+                                               excess_command=MessageHeader.VERSION,
+                                               ) as session:
+                    await session.handshake_complete.wait()
                     await session.close()
 
         assert in_caplog(caplog, 'extra bytes at end of version payload')
@@ -1125,17 +1138,15 @@ class TestHandshake:
         assert in_caplog(caplog, 'protocol error: duplicate verack message')
 
     @pytest.mark.asyncio
-    async def test_verack_payload(self, client_node, listening_node, caplog):
-        class ClientSession(Session):
-            async def send_verack(self):
-                await self.send_message(MessageHeader.VERACK, b'0')
-                await pause()
-                await self.close()
-
+    async def test_excess_verack(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service, session_cls=ClientSession):
-                    pass
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ExcessClientSession,
+                                               excess_command=MessageHeader.VERACK,
+                                               ) as session:
+                    await session.handshake_complete.wait()
+                    await session.close()
 
         assert in_caplog(caplog, 'extra bytes at end of verack payload')
 
@@ -1374,7 +1385,7 @@ class TestProtoconf:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('force', (True, False))
-    async def test_duplicate_protoconf(self, client_node, listening_node, caplog, force):
+    async def test_duplicate(self, client_node, listening_node, caplog, force):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service,
@@ -1387,6 +1398,21 @@ class TestProtoconf:
                     await session.close()
 
         assert in_caplog(caplog, 'duplicate protoconf') is force
+
+    @pytest.mark.asyncio
+    async def test_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ExcessClientSession,
+                                               send_protoconf=False,
+                                               excess_command=MessageHeader.PROTOCONF,
+                                               ) as session:
+                    await session.send_protoconf()
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of protoconf payload')
 
 
 class TestPing:
@@ -1455,6 +1481,22 @@ class TestPing:
 
             assert in_caplog(caplog, 'unexpected pong')
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('excess_command', (MessageHeader.PING, MessageHeader.PONG))
+    async def test_excess(self, client_node, listening_node, caplog, excess_command):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ExcessClientSession,
+                                               excess_command=excess_command,
+                                               ) as session:
+                    await session.handshake_complete.wait()
+                    await pause()
+                    await session.close()
+
+        command = excess_command.rstrip(b'\0').decode()
+        assert in_caplog(caplog, f'{command} payload')
+
 
 class TestSendHeaders:
 
@@ -1501,11 +1543,14 @@ class TestSendHeaders:
                     await session.close()
 
     @pytest.mark.asyncio
-    async def test_payload(self, client_node, listening_node, caplog):
+    async def test_excess(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service) as session:
-                    await session.send_message(MessageHeader.SENDHEADERS, b'0')
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ExcessClientSession,
+                                               excess_command=MessageHeader.SENDHEADERS,
+                                               ) as session:
+                    await session.handshake_complete.wait()
                     await pause()
                     await session.close()
 
@@ -1748,22 +1793,32 @@ class TestGetHeaders:
                     await session.close()
 
     @pytest.mark.asyncio
-    async def test_request_too_long(self, client_node, listening_node, caplog):
-        class ListenerSession(Session):
-            async def on_getheaders(self, payload):
-                await self.send_message(MessageHeader.HEADERS,
-                                        pack_headers_payload(headers) + b'1')
-
-        headers = first_mainnet_headers(3)[1:]
+    async def test_excess_getheaders(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
-            async with listening_node.listen(session_cls=ListenerSession):
-                async with client_node.connect(listening_node.service) as session:
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ExcessClientSession,
+                                               excess_command=MessageHeader.GETHEADERS,
+                                               ) as session:
                     request = await session.get_headers()
                     await request.wait()
-                    assert in_caplog(caplog, 'extra bytes at end of headers payload')
-                    assert request.count == 2
-                    assert request.headers == headers
                     await session.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of getheaders payload')
+
+    @pytest.mark.asyncio
+    async def test_excess_headers(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ExcessClientSession,
+                                               excess_command=MessageHeader.HEADERS,
+                                               ) as session:
+                    await session.send_headers([])
+                    await pause()
+                    await session.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of headers payload')
 
     @pytest.mark.asyncio
     async def test_too_many_sent(self, client_node, listening_node, caplog):
