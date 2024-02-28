@@ -21,7 +21,7 @@ from typing import Sequence
 
 from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after, ignore_at
 from .errors import (
-    ProtocolError, PackingError, HeaderException, MissingHeader
+    ProtocolError, PackingError, HeaderException, MissingHeader, HeadersNotSequential,
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
@@ -1130,10 +1130,6 @@ class Session:
                 raise ProtocolError(f'headers message with {count:,d} headers but '
                                     f'limit is {self.MAX_HEADERS:,d}')
 
-            if not SimpleHeader.are_headers_chained(headers):
-                request = None     # Do not consider this an answer
-                raise ProtocolError('received headers that do not form a chain')
-
             # Only match the request if it looks like a valid response
             if request and not request.locator.is_response(headers):
                 request = None
@@ -1144,7 +1140,9 @@ class Session:
             except MissingHeader:
                 self.logger.warning(f'ignoring {count:,d} non-connecting headers')
             except HeaderException as e:
-                raise ProtocolError(f'insert_headers: {e}') from None
+                if isinstance(e, HeadersNotSequential):
+                    request = None     # Do not consider this an answer
+                raise ProtocolError(str(e)) from None
             else:
                 self.logger.info(f'inserted {inserted_count:,d} headers, '
                                  f'our height is {await headers_obj.height()}')

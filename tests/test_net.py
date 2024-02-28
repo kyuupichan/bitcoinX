@@ -1797,7 +1797,7 @@ class TestGetHeaders:
                     await request.wait()
                     # Check the response was logged and not viewed as a response to our
                     # request
-                    assert in_caplog(caplog, 'received headers that do not form a chain')
+                    assert in_caplog(caplog, 'protocol error: headers do not form a chain')
                     assert request.count == -1
                     assert not request.headers
                     await session.close()
