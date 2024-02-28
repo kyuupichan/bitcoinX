@@ -19,8 +19,8 @@ __all__ = (
     'InvalidPublicKeyEncoding', 'InvalidPublicKeyCount', 'InvalidSignature', 'NullDummyError',
     'CheckSigVerifyFailed', 'CheckMultiSigVerifyFailed', 'UpgradeableNopError',
     'NumEqualVerifyFailed', 'InvalidSignatureCount', 'PushOnlyError', 'LockTimeError',
-    'StackMemoryUsageError', 'MerkleError', 'PackingError', 'ProtocolError', 'BadChecksumError',
-    'ForceDisconnectError',
+    'StackMemoryUsageError', 'MerkleError', 'PackingError', 'BadChecksumError',
+    'ProtocolError',
 )
 
 from struct import error as PackingError
@@ -84,11 +84,11 @@ class BadChecksumError(Exception):
 
 
 class ProtocolError(Exception):
-    '''Raise on detecting a network protcol error.'''
+    '''Raise on detecting a network protcol error.  If is_fatal then the connection is closed.'''
 
-
-class ForceDisconnectError(Exception):
-    '''Raise on an error that must force a disconnection.'''
+    def __init__(self, msg, *, is_fatal=False):
+        super().__init__(msg)
+        self.is_fatal = is_fatal
 
 
 #

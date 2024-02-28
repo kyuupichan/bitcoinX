@@ -22,7 +22,7 @@ from typing import Sequence
 
 from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after, ignore_at
 from .errors import (
-    ProtocolError, ForceDisconnectError, PackingError, HeaderException, MissingHeader
+    ProtocolError, PackingError, HeaderException, MissingHeader
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
@@ -834,7 +834,7 @@ class Session:
             if self.pings:
                 remaining = min(self.pings.values()) + self.PING_CUTOFF - time.time()
                 if remaining <= 0:
-                    raise ForceDisconnectError(f'ping timeout after {self.PING_CUTOFF}s')
+                    raise ProtocolError(f'ping timeout after {self.PING_CUTOFF}s', is_fatal=True)
             async with ignore_after(remaining):
                 await self.ping_sent.wait()
                 self.ping_sent.clear()
@@ -931,62 +931,60 @@ class Session:
     # Receiving messages
     #
 
+    async def handle_one_message(self, connection):
+        header = await MessageHeader.from_stream(connection.recv_exactly)
+        if self.debug:
+            self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
+
+        magic = self.node.network.magic
+        if header.magic != magic:
+            raise ProtocolError(f'bad magic 0x{header.magic.hex()} expected 0x{magic.hex()}',
+                                is_fatal=True)
+
+        if not self.handshake_complete.is_set():
+            if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
+                raise ProtocolError(f'{header} command received before handshake finished',
+                                    is_fatal=True)
+
+        # Each connection is a single stream of incoming bytes, so messages must be
+        # received in full before they can be handled in parallel.
+        if header.is_extended and await self.ext_message(connection, header):
+            return
+        payload = await connection.recv_exactly(header.payload_len)
+        coro = self.std_message(header, payload)
+        if self.handshake_complete.is_set():
+            self.group.create_task(self.run_coro_safe(coro))
+        else:
+            await coro
+
     async def recv_messages_loop(self, connection):
         '''Read messages from a stream and pass them to handlers for processing.'''
-        create_task = self.group.create_task
         while True:
-            header = 'incoming'
-            try:
-                header = await MessageHeader.from_stream(connection.recv_exactly)
-                if self.debug:
-                    self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
+            await self.run_coro_safe(self.handle_one_message(connection))
 
-                magic = self.node.network.magic
-                if header.magic != magic:
-                    raise ForceDisconnectError(f'bad magic 0x{header.magic.hex()} '
-                                               f'expected 0x{magic.hex()}')
-
-                if not self.handshake_complete.is_set():
-                    if header.command_bytes not in (MessageHeader.VERSION, MessageHeader.VERACK):
-                        raise ForceDisconnectError(f'{header} command received before '
-                                                   'handshake finished')
-
-                # Each connection is a single stream of incoming bytes, so messages must be
-                # received in full before they can be handled in parallel.
-                if header.is_extended and await self.ext_message(connection, header):
-                    continue
-                payload = await connection.recv_exactly(header.payload_len)
-                if self.handshake_complete.is_set():
-                    create_task(self.std_message_safe(header, payload))
-                else:
-                    await self.std_message_safe(header, payload)
-            except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
-                self.logger.error('connection closed remotely')
-                raise ConnectionResetError('connection closed remotely') from None
-            except ForceDisconnectError as e:
-                self.logger.error(f'fatal protocol error: {e}')
-                raise
-            except ProtocolError as e:
-                self.logger.error(f'protocol error: {e}')
-            except Exception:
-                self.logger.exception(f'unexpected error handling {header} message')
-                raise
-
-    async def std_message_safe(self, header, payload):
+    async def run_coro_safe(self, coro):
+        '''aWait a coroutine and handle exceptions appropriately.'''
         try:
-            await self.std_message(header, payload)
-        except ForceDisconnectError as e:
-            self.logger.error(f'fatal protocol error: {e}')
-            await self.group.cancel_remaining()
+            await coro
+        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
+            self.logger.error('connection closed remotely')
+            raise ConnectionResetError from None
         except ProtocolError as e:
-            self.logger.error(f'protocol error: {e}')
+            if e.is_fatal:
+                self.logger.error(f'fatal protocol error: {e}')
+                await self.group.cancel_remaining()
+            else:
+                self.logger.error(f'protocol error: {e}')
+        except Exception:
+            self.logger.exception(f'internal error')
+            raise
 
     async def std_message(self, header, payload):
         # Note - this routine also handles "short" ext messages
         if not header.is_extended and header.payload_checksum(payload) != header.checksum:
             # Maybe force disconnect if we get too many bad checksums in a short time
-            error = ProtocolError if self.handshake_complete.is_set() else ForceDisconnectError
-            raise error(f'bad checksum for {header} command')
+            raise ProtocolError(f'bad checksum for {header} command',
+                                is_fatal=not self.handshake_complete.is_set())
 
         command = header.command()
         handler = getattr(self, f'on_{command}', None)
@@ -998,7 +996,7 @@ class Session:
 
     async def ext_message(self, connection, header):
         if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
-            raise ForceDisconnectError('ext message received but invalid')
+            raise ProtocolError('ext message received but invalid', is_fatal=True)
 
         # If the payload is small read it all in - just as for standard messages
         if header.payload_len < self.streaming_min_size:
@@ -1097,8 +1095,8 @@ class Session:
         try:
             result = reader(read)
         except PackingError:
-            exc = ForceDisconnectError if payload.command == 'version' else ProtocolError
-            raise exc(f'corrupt {payload.command} message') from None
+            raise ProtocolError(f'corrupt {payload.command} message',
+                                is_fatal=payload.command=='version') from None
         if read(1) != b'':
             self.logger.warning(f'extra bytes at end of {payload.command} payload')
         return result
@@ -1169,7 +1167,7 @@ class Session:
         self.version_received.set()
         _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service))
         if self.node.is_our_nonce(nonce):
-            raise ForceDisconnectError('connected to ourself')
+            raise ProtocolError('connected to ourself', is_fatal=True)
         self.can_send_ext_messages = (self.remote_service.protocol_version
                                       >= LARGE_MESSAGES_PROTOCOL_VERSION)
         self.log_service_details(self.remote_service, 'received version message:')
@@ -1183,7 +1181,8 @@ class Session:
 
     async def on_verack(self, payload):
         if not self.version_sent:
-            raise ForceDisconnectError('verack message received before version message sent')
+            raise ProtocolError('verack message received before version message sent',
+                                is_fatal=True)
         if self.verack_received:
             raise ProtocolError('duplicate verack message')
         self.verack_received = True

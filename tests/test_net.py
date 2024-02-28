@@ -1038,8 +1038,7 @@ class TestHandshake:
                         await pause()
                         await session.close()
 
-                assert in_caplog(caplog,
-                                 'sendheaders command received before handshake finished', 2)
+                assert in_caplog(caplog, 'sendheaders command received before handshake finished')
 
     @pytest.mark.asyncio
     async def test_send_corrupt_version_message(self, client_node, listening_node, caplog):
@@ -1254,7 +1253,7 @@ class TestExtendedMessages:
                                                    force_extended=True)
                         pass
 
-        assert in_caplog(caplog, 'ext message received but invalid', count=2)
+        assert in_caplog(caplog, 'ext message received but invalid')
 
     @pytest.mark.asyncio
     async def test_send_streaming(self, client_node, listening_node, caplog):
