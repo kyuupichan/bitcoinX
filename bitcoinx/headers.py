@@ -6,6 +6,7 @@
 # and warranty status of this software.
 
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 import asqlite3
@@ -218,7 +219,11 @@ class Headers:
         self.network = network
         self.logger = prefixed_logger('Headers', str(network))
         self.genesis_header = None    # An instance of Header
-        self.pow_checker = PoWChecker(self)
+        self.pow_checker = PoWChecker(network)
+        # Map from chain_id to a map from height to header object
+        self.cache_by_chain = defaultdict(dict)
+        # Map from new chain ID to (prev_chain_id, new_id_first_height) pairs
+        self.chain_info = {}
 
     def fixup_sql(self, sql):
         return sql.replace('$S', self.schema)
@@ -229,8 +234,9 @@ class Headers:
         '''
         try:
             self.genesis_header = await self.header_from_hash(self.network.genesis_header.hash)
-            chains = await self.chains()
-            self.logger.info(f'found {len(chains)} chains best height {await self.height()}')
+            count = len(await self.chains())
+            s = '' if count == 1 else 's'
+            self.logger.info(f'found {count:,d} chain{s} to height {await self.height()}')
             return
         except asqlite3.OperationalError:
             pass
@@ -253,6 +259,54 @@ class Headers:
 
         self.genesis_header = await self.header_from_hash(gh.hash)
         self.logger.info('database tables created')
+
+    async def _db_header_at_height(self, chain_id, height):
+        where_clause = f'''height={height} AND chain_id=(
+            SELECT chain_id FROM (
+                SELECT ChainsView.chain_id, ChainsView.base_height
+                  FROM $S.ChainsView, $S.AncestorsView
+                  WHERE ChainsView.chain_id=AncestorsView.anc_chain_id
+                    AND {height} BETWEEN base_height AND tip_height
+                    AND AncestorsView.chain_id={chain_id}
+             ) ORDER BY base_height DESC LIMIT 1)'''
+        return await self._query_headers(where_clause, (), False)
+
+    async def header_at_height_cached(self, chain_id, height):
+        '''Return the header on chain_id at height, or None.'''
+        # See if an ancestor chain is more likely in the cache
+        while True:
+            entry = self.chain_info.get(chain_id)
+            if not entry:
+                break
+            prior_chain_id, first_height = entry
+            if height >= first_height:
+                break
+            chain_id = prior_chain_id
+
+        cache = self.cache_by_chain[chain_id]
+        header = cache.get(height)
+        if not header:
+            # Fall back to the DB
+            header = await self._db_header_at_height(chain_id, height)
+            if header is not None:
+                cache[height] = header
+        return header
+
+    async def header_at_height(self, chain, height):
+        '''Return the header on chain at height, or None.'''
+        return await self.header_at_height_cached(chain.chain_id, height)
+
+    def shrink(self, cache):
+        tip_height = max(cache)
+        old_height = tip_height - 150
+        old_heights = [height for height in cache if height < old_height]
+        fort_height = tip_height - tip_height % 2016
+        try:
+            old_heights.remove(fort_height)
+        except ValueError:
+            pass
+        for height in old_heights:
+            del cache[height]
 
     async def insert_headers(self, headers, *, check_work=True):
         '''Insert headers into the Headers table, and returns the number of new headers actually
@@ -288,10 +342,11 @@ class Headers:
             raise MissingHeader(f'no header with hash {hash_to_hex_str(header.prev_hash)}')
         prev_hdr_id, height, le_work, prev_chain_id, chain_id = result
 
-        # Inform the PoW checker of new chains so it doesn't query the DB for a chain ID
-        # that isn't in there yet...
+        # Tell the cache about new chains so that the pow checker doesn't make us query
+        # the DB for a chain ID we have not yet inserted...
         if prev_chain_id != chain_id:
-            self.pow_checker.register_chain_id(chain_id, prev_chain_id, height + 1)
+            # first_height is the height of the first block of the new chain.
+            self.chain_info[chain_id] = (prev_chain_id, height + 1)
 
         insert_header_sql = self.fixup_sql('''
           INSERT OR IGNORE INTO $S.Headers(prev_hdr_id, height, chain_id,
@@ -299,12 +354,18 @@ class Headers:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);''')
 
         try:
+            cache = self.cache_by_chain[chain_id]
             for header in headers:
                 height += 1
                 le_work = int_to_le_bytes(le_bytes_to_int(le_work) + bits_to_work(header.bits))
+
+                # Convert from SimpleHeader to a full Header.  The PowChecker needs a full
+                # Header; for the same reason it is what goes in the cache.  If it passes
+                # the PoW check, add the header to the cache
+                header = Header(header.raw, height, chain_id, le_work)
                 if check_work:
-                    # PoW checker needs a Header object, not a SimpleHeader
-                    await self.pow_checker.check(Header(header.raw, height, chain_id, le_work))
+                    await self.pow_checker.check(self, header)
+                cache[height] = header
 
                 cursor = await execute(insert_header_sql,
                                        (prev_hdr_id, height, chain_id, le_work, header.hash,
@@ -313,6 +374,8 @@ class Headers:
                 assert cursor.lastrowid != prev_hdr_id
                 prev_hdr_id = cursor.lastrowid
         finally:
+            if len(cache) >= 200:
+                self.shrink(cache)
             await self.conn.commit()
 
         return len(headers)
@@ -373,20 +436,11 @@ class Headers:
         '''Returns the height of the longest chain.'''
         return (await self.tip()).height
 
-    async def _header_at_height(self, chain_id, height):
-        where_clause = f'''height={height} AND chain_id=(
-            SELECT chain_id FROM (
-                SELECT ChainsView.chain_id, ChainsView.base_height
-                  FROM $S.ChainsView, $S.AncestorsView
-                  WHERE ChainsView.chain_id=AncestorsView.anc_chain_id
-                    AND {height} BETWEEN base_height AND tip_height
-                    AND AncestorsView.chain_id={chain_id}
-             ) ORDER BY base_height DESC LIMIT 1)'''
-        return await self._query_headers(where_clause, (), False)
-
-    async def header_at_height(self, chain, height):
-        '''Return the header on chain at height, or None.'''
-        return await self._header_at_height(chain.chain_id, height)
+    async def median_time_past_from_height(self, chain_id, height):
+        '''Return the median of the timestamps of the (up to) 11 prior headers.'''
+        timestamps = [(await self.header_at_height_cached(chain_id, height)).timestamp
+                      for height in range(max(0, height - 11), height)]
+        return sorted(timestamps)[len(timestamps) // 2]
 
     async def median_time_past(self, prev_hash):
         '''Return the MTP of a header that would be chained onto a header with hash prev_hash.

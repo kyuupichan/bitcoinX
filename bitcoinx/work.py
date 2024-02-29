@@ -9,7 +9,7 @@ __all__ = (
     'bits_to_target', 'target_to_bits', 'bits_to_work', 'grind_header',
 )
 
-from collections import defaultdict
+
 from functools import lru_cache
 
 from .errors import InsufficientPoW, IncorrectBits
@@ -66,76 +66,26 @@ def bits_to_work(bits):
 
 class PoWChecker:
 
-    def __init__(self, headers):
-        self.headers = headers
-        # Map from chain_id to a map from height to header object
-        self.cache_by_chain = defaultdict(dict)
-        self.network = self.headers.network
+    def __init__(self, network):
+        self.network = network
         self.required_bits = getattr(self, f'required_bits_{self.network.name}')
-        # Map from new chain ID to (prev_chain_id, new_id_first_height) pairs
-        self.chains = {}
 
-    def register_chain_id(self, chain_id, prev_chain_id, first_height):
-        # first_height is the height of the first block of the new chain.
-        self.chains[chain_id] = (prev_chain_id, first_height)
-
-    def chain_id_for_height(self, chain_id, height):
-        while True:
-            entry = self.chains.get(chain_id)
-            if not entry:
-                return chain_id
-            prior_chain_id, first_height = entry
-            if height >= first_height:
-                return chain_id
-            chain_id = prior_chain_id
-
-    async def check(self, header):
-        bits = await self.required_bits(header)
+    async def check(self, headers_obj, header):
+        bits = await self.required_bits(headers_obj, header)
         if header.bits != bits:
             raise IncorrectBits(header, bits)
         if header.hash_value() > header.target():
             raise InsufficientPoW(header)
-        # Add the header to the cache
-        cache = self.cache_by_chain[header.chain_id]
-        cache[header.height] = header
-        if len(cache) >= 200:
-            self.shrink(cache)
 
-    async def header_at_height(self, chain_id, height):
-        chain_id = self.chain_id_for_height(chain_id, height)
-        cache = self.cache_by_chain[chain_id]
-        header = cache.get(height)
-        if not header:
-            header = await self.headers._header_at_height(chain_id, height)
-            cache[height] = header
-        return header
-
-    async def median_time_past(self, chain_id, for_height):
-        timestamps = [(await self.header_at_height(chain_id, height)).timestamp
-                      for height in range(max(0, for_height - 11), for_height)]
-        return sorted(timestamps)[len(timestamps) // 2]
-
-    def shrink(self, cache):
-        tip_height = max(cache)
-        old_height = tip_height - 150
-        old_heights = [height for height in cache if height < old_height]
-        fort_height = tip_height - tip_height % 2016
-        try:
-            old_heights.remove(fort_height)
-        except ValueError:
-            pass
-        for height in old_heights:
-            del cache[height]
-
-    async def required_bits_fortnightly(self, header):
+    async def required_bits_fortnightly(self, headers_obj, header):
         '''Bitcoin's original DAA.'''
         if header.height == 0:
             return self.network.genesis_header.bits
 
-        prev = await self.header_at_height(header.chain_id, header.height - 1)
+        prev = await headers_obj.header_at_height_cached(header.chain_id, header.height - 1)
         if header.height % 2016:
             return prev.bits
-        prior = await self.header_at_height(header.chain_id, header.height - 2016)
+        prior = await headers_obj.header_at_height_cached(header.chain_id, header.height - 2016)
 
         # Off-by-one with prev.timestamp.  Constrain the actual time.
         period = prev.timestamp - prior.timestamp
@@ -146,14 +96,15 @@ class PoWChecker:
         new_target = (prior_target * adj_period) // target_period
         return target_to_bits(min(new_target, self.network.max_target))
 
-    async def required_bits_EDA(self, header):
+    async def required_bits_EDA(self, headers_obj, header):
         '''The less said the better.'''
-        bits = await self.required_bits_fortnightly(header)
+        bits = await self.required_bits_fortnightly(headers_obj, header)
         if header.height % 2016 == 0:
             return bits
 
-        mtp_diff = (await self.median_time_past(header.chain_id, header.height)
-                    - await self.median_time_past(header.chain_id, header.height - 6))
+        mtp = headers_obj.median_time_past_from_height
+        mtp_diff = (await mtp(header.chain_id, header.height)
+                    - await mtp(header.chain_id, header.height - 6))
         if mtp_diff < 12 * 3600:
             return bits
 
@@ -162,7 +113,7 @@ class PoWChecker:
         new_target += new_target >> 2
         return target_to_bits(min(new_target, self.network.max_target))
 
-    async def required_bits_DAA(self, header):
+    async def required_bits_DAA(self, headers_obj, header):
         '''BCH's shoddy difficulty adjustment algorithm.  He was warned, he shrugged.'''
         async def median_prior_header(chain_id, ref_height):
             '''Select the median of the 3 prior headers, for a curious definition of median.'''
@@ -170,7 +121,7 @@ class PoWChecker:
                 if prev3[m].timestamp > prev3[n].timestamp:
                     prev3[m], prev3[n] = prev3[n], prev3[m]
 
-            prev3 = [await self.header_at_height(chain_id, height)
+            prev3 = [await headers_obj.header_at_height_cached(chain_id, height)
                      for height in range(ref_height - 3, ref_height)]
             maybe_swap(0, 2)
             maybe_swap(0, 1)
@@ -187,42 +138,42 @@ class PoWChecker:
         new_target = (1 << 256) // Wn - 1
         return target_to_bits(min(new_target, self.network.max_target))
 
-    async def required_bits_mainnet(self, header):
+    async def required_bits_mainnet(self, headers_obj, header):
         # Unlike testnet, required_bits is not a function of the timestamp
         if header.height < 478558:
-            return await self.required_bits_fortnightly(header)
+            return await self.required_bits_fortnightly(headers_obj, header)
         elif header.height <= 504031:
-            return await self.required_bits_EDA(header)
+            return await self.required_bits_EDA(headers_obj, header)
         else:
-            return await self.required_bits_DAA(header)
+            return await self.required_bits_DAA(headers_obj, header)
 
-    async def required_bits_testnet_common(self, header, has_DAA_minpow):
+    async def required_bits_testnet_common(self, headers_obj, header, has_DAA_minpow):
         if header.height == 0:
             return self.network.genesis_header.bits
 
-        prior = await self.header_at_height(header.chain_id, header.height - 1)
+        prior = await headers_obj.header_at_height_cached(header.chain_id, header.height - 1)
         is_slow = (header.timestamp - prior.timestamp) > 20 * 60
 
         if header.height <= self.network.DAA_height:
             # Note: testnet did not use the EDA
             if header.height % 2016 == 0:
-                return await self.required_bits_fortnightly(header)
+                return await self.required_bits_fortnightly(headers_obj, header)
             if is_slow:
                 return self.network.genesis_header.bits
             height = header.height - header.height % 2016
-            return (await self.header_at_height(header.chain_id, height)).bits
+            return (await headers_obj.header_at_height_cached(header.chain_id, height)).bits
         else:
             if is_slow and has_DAA_minpow:
                 return self.network.genesis_header.bits
-            return await self.required_bits_DAA(header)
+            return await self.required_bits_DAA(headers_obj, header)
 
-    async def required_bits_testnet(self, header):
-        return await self.required_bits_testnet_common(header, True)
+    async def required_bits_testnet(self, headers_obj, header):
+        return await self.required_bits_testnet_common(headers_obj, header, True)
 
-    async def required_bits_STN(self, header):
-        return await self.required_bits_testnet_common(header, False)
+    async def required_bits_STN(self, headers_obj, header):
+        return await self.required_bits_testnet_common(headers_obj, header, False)
 
-    async def required_bits_regtest(self, _header):
+    async def required_bits_regtest(self, _headers_obj, _header):
         # Regtest has no retargeting.
         return self.network.genesis_header.bits
 
