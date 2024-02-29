@@ -88,7 +88,7 @@ class TestHeaders:
 
         with caplog.at_level(logging.INFO):
             run_test_with_headers(test, Bitcoin)
-        assert in_caplog(caplog, 'found headers to height ')
+        assert in_caplog(caplog, 'found 1 chain to height 0')
 
     @pytest.mark.parametrize('network', all_networks)
     def test_genesis_header(self, network):

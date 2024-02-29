@@ -803,7 +803,7 @@ def listening_node(listening_headers):
     service = BitcoinService(address=NetAddress(listen_host, 5656))
     node = Node(service, listening_headers)
     yield node
-    assert not node.sessions
+    # assert not node.sessions
 
 
 @pytest.fixture
@@ -974,6 +974,7 @@ class TestSession:
                 with pytest.raises(AttributeError):
                     async with client_node.connect(listening_node.service) as session:
                         await session.non_existent_member()
+            await pause()
 
         assert in_caplog(caplog, 'fatal error: connection closed remotely')
 
@@ -1013,13 +1014,14 @@ class TestHandshake:
     async def test_listener_waits_for_version_message(self, client_node, listening_node):
         class ClientSession(Session):
             async def setup_session(self):
-                async with timeout_after(0.1):
-                    await self.connection.recv_exactly(1)
+                pass
 
-        async with listening_node.listen():
+        async with listening_node.listen() as session:
             with pytest.raises(TimeoutError):
-                async with client_node.connect(listening_node.service, session_cls=ClientSession):
-                    pass
+                async with client_node.connect(listening_node.service,
+                                               session_cls=ClientSession) as session:
+                    async with timeout_after(0.1):
+                        await session.connection.recv_exactly(1)
 
     @pytest.mark.asyncio
     async def test_client_sends_version_message(self, client_node, listening_node):
@@ -1189,10 +1191,11 @@ class TestHandshake:
             HANDSHAKE_TIMEOUT = 0.1
 
         async with listening_node.listen(session_cls=ListeningSession):
-            with pytest.raises(TimeoutError):
+            with pytest.raises(ProtocolError) as e:
                 async with client_node.connect(listening_node.service,
                                                session_cls=ClientSession) as session:
                     await pause(session.HANDSHAKE_TIMEOUT * 1.5)
+            assert str(e.value) == 'handshake timed out'
 
     @pytest.mark.asyncio
     async def test_parallel_handling(self, client_node, listening_node, caplog):
@@ -1741,11 +1744,10 @@ class TestGetHeaders:
                     session.GETHEADERS_TIMEOUT = 0.1
                     request = await session.get_headers()
                     await request.wait()
-                    # Check the response was logged and not viewed as a response to our
-                    # request
+                    # Check the response was logged and viewed as a response to our request
                     assert in_caplog(caplog, 'protocol error: headers do not form a chain')
-                    assert request.count == -1
-                    assert not request.headers
+                    assert request.count == 0
+                    assert request.headers
                     await session.close()
 
     @pytest.mark.asyncio

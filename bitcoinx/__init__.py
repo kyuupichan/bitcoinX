@@ -13,6 +13,7 @@ from .misc import *
 from .mnemonic import *
 from .net import *
 from .net_protocol import *
+from .networks import *
 from .packing import *
 from .script import *
 from .signature import *
@@ -38,6 +39,7 @@ __all__ = sum((
     mnemonic.__all__,
     net.__all__,
     net_protocol.__all__,
+    networks.__all__,
     packing.__all__,
     script.__all__,
     signature.__all__,
