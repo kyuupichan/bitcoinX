@@ -19,9 +19,9 @@ from ipaddress import ip_address
 from struct import Struct
 from typing import Sequence
 
-from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after, timeout_at
+from .aiolib import TaskGroup, ExceptionGroup, ignore_after, timeout_after
 from .errors import (
-    ProtocolError, PackingError, HeaderException, MissingHeader, HeadersNotSequential,
+    ProtocolError, PackingError, HeaderException, MissingHeader,
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
@@ -447,7 +447,7 @@ class BlockLocator:
 
     def is_response(self, headers):
         if self.block_hashes:
-            return headers[0].prev_hash in self.block_hashes
+            return not headers or headers[0].prev_hash in self.block_hashes
         return len(headers) == 1 and headers[0].hash == self.hash_stop
 
     @classmethod
@@ -517,34 +517,31 @@ class BlockLocator:
 
 
 class GetheadersRequest:
+    '''An atomic request in the sense that either exactly one response is matched to it,
+    or it times out and then no response can match.'''
 
-    def __init__(self, locator, timeout, logger):
+    def __init__(self, locator):
         self.locator = locator
-        self.logger = logger
-        self.timeout_at = asyncio.get_running_loop().time() + timeout
-        self.answered = asyncio.Event()
+        self.event = asyncio.Event()
         self.headers = []
         self.time = time.time()
         # The number of headers received that were new, not the number received.  -1
-        # indicates the response either timed out or no valid response was received.
+        # indicates nothing has been received that looks like a response to this request.
         self.count = -1
 
     def on_response(self, headers, inserted_count):
-        if not self.answered.is_set():
-            self.headers = headers
-            self.count = inserted_count
-            self.answered.set()
-            return True
-        return False
+        assert self.count == -1
+        self.headers = headers
+        self.count = inserted_count
+        self.event.set()
+
+    def timeout(self):
+        assert self.count == -1
+        self.event.set()
 
     async def wait(self):
         '''Wait for the request to be responded to or time out.'''
-        try:
-            async with timeout_at(self.timeout_at):
-                await self.answered.wait()
-        except TimeoutError:
-            self.logger.info('getheaders request timed out')
-            self.answered.set()
+        await self.event.wait()
 
 
 class Connection:
@@ -1067,8 +1064,22 @@ class Session:
             await self.getheaders_request.wait()
 
         self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
-        self.getheaders_request = GetheadersRequest(locator, self.GETHEADERS_TIMEOUT, self.logger)
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
+
+        async def response_or_timeout(request, timeout):
+            try:
+                async with timeout_after(timeout):
+                    await request.wait()
+            except TimeoutError:
+                # Ensure the request is either answered or times out; it cannot do both
+                if self.getheaders_request:
+                    self.getheaders_request = None
+                    self.logger.info('getheaders request timed out')
+                    request.timeout()
+
+        self.getheaders_request = GetheadersRequest(locator)
+        self.group.create_task(response_or_timeout(self.getheaders_request,
+                                                   self.GETHEADERS_TIMEOUT))
         return self.getheaders_request
 
     async def _sync_headers(self, *, timeout=15.0):
@@ -1081,7 +1092,7 @@ class Session:
             async with ignore_after(timeout):
                 await request.wait()
                 # No headers received, or protocol error?
-                if request.count == 0:
+                if request.count <= 0:
                     break
                 no_progress -= 1
             current_work = self.their_tip.chain_work()
@@ -1119,62 +1130,47 @@ class Session:
     async def on_headers(self, payload):
         '''Handle getting a bunch of headers.'''
         # Note: we should expect unsolicited headers because of the sendheaders protocol
-        # An inserted count of -1 indicates either that zero headers were received, or
-        # that the received headers broke the protocol.  Either case should stop
-        # sync_headers().  Note that receiving a disconnected header leaves it at zero.
         t = time.time()
         headers_obj = self.node.headers
-        inserted_count = 0
+        headers = self.unpack_payload(payload, read_headers)
+
+        # Only match an outstanding request if it looks like a valid response
         request = self.getheaders_request
-        headers = []
+        if request and request.locator.is_response(headers):
+            # Clear the request so only one request can match it.
+            self.getheaders_request = None
+            elapsed = t - request.time
+            self.logger.info(f'headers round trip time is {elapsed:3f}s')
+        else:
+            request = None
+
+        inserted_count = 0
+        count = len(headers)
         try:
-            headers = self.unpack_payload(payload, read_headers)
-            count = len(headers)
-            if count == 0:
-                return
             if count > self.MAX_HEADERS:
                 raise ProtocolError(f'headers message with {count:,d} headers but '
                                     f'limit is {self.MAX_HEADERS:,d}')
+            if count == 0:
+                if request:
+                    self.logger.info(f'headers synchronized to height {self.their_tip.height}')
+                return
 
-            # Only match the request if it looks like a valid response
-            if request and not request.locator.is_response(headers):
-                request = None
-            if request:
-                elapsed = time.time() - request.time
-                self.logger.info(f'headers round trip time is {elapsed:3f}s')
-
-            # This will fail if the headers do not connect.  It also validates PoW.
             try:
+                # This will fail if the headers do not connect.  It also validates PoW.
                 inserted_count = await headers_obj.insert_headers(headers)
+                if inserted_count:
+                    self.their_tip = await headers_obj.header_from_hash(headers[-1].hash)
+                    elapsed = time.time() - t
+                    self.logger.info(f'inserted {inserted_count:,d} headers to height '
+                                     f'{self.their_tip.height} in {elapsed:3f}s; '
+                                     f'our height is {await headers_obj.height()}')
             except MissingHeader:
                 self.logger.warning(f'ignoring {count:,d} non-connecting headers')
             except HeaderException as e:
-                if isinstance(e, HeadersNotSequential):
-                    request = None     # Do not consider this an answer
                 raise ProtocolError(str(e)) from None
-            else:
-                elapsed = time.time() - t
-                self.logger.info(f'inserted {inserted_count:,d} headers in {elapsed:3f}s; '
-                                 f'our height is {await headers_obj.height()}')
         finally:
             if request:
-                self.getheaders_request = None
-                if request.on_response(headers, inserted_count):
-                    # Update our idea of their tip
-                    if count == 0:
-                        if request.locator.block_hashes:
-                            tip_hash = request.locator.block_hashes[0]
-                        else:
-                            tip_hash = None
-                    else:
-                        tip_hash = headers[-1].hash
-                    if tip_hash:
-                        new_tip = await headers_obj.header_from_hash(tip_hash)
-                        if new_tip.chain_work() > self.their_tip.chain_work():
-                            self.their_tip = new_tip
-                        if count == 0:
-                            self.logger.info('headers synchronized to height '
-                                             f'{self.their_tip.height}')
+                request.on_response(headers, inserted_count)
 
     async def on_getheaders(self, payload):
         locator = self.unpack_payload(payload, BlockLocator.read)
