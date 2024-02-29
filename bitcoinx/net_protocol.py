@@ -689,6 +689,8 @@ class Node:
                     await session.close()
                     if done:
                         return
+            except ConnectionResetError as e:
+                session.logger.info(str(e))
             except Exception as e:
                 if session:
                     session.logger.exception('connection lost')
@@ -848,8 +850,11 @@ class Session:
                 self.ping_sent.clear()
 
     async def check_handshake_timeout(self):
-        async with timeout_after(self.HANDSHAKE_TIMEOUT):
-            await self.verack_received.wait()
+        try:
+            async with timeout_after(self.HANDSHAKE_TIMEOUT):
+                await self.verack_received.wait()
+        except TimeoutError:
+            raise ProtocolError('handshake timed out', is_fatal=True)
 
     async def setup_connection(self, connection):
         # Every connection needs these
@@ -1082,19 +1087,18 @@ class Session:
                                                    self.GETHEADERS_TIMEOUT))
         return self.getheaders_request
 
-    async def _sync_headers(self, *, timeout=15.0):
+    async def _sync_headers(self):
         current_work = initial_work = self.their_tip.chain_work()
         no_progress = 0
         while no_progress < 3:
             prior_work = current_work
             request = await self.get_headers()
             no_progress += 1
-            async with ignore_after(timeout):
-                await request.wait()
-                # No headers received, or protocol error?
-                if request.count <= 0:
-                    break
-                no_progress -= 1
+            await request.wait()
+            # No headers received, or protocol error?
+            if request.count <= 0:
+                break
+            no_progress -= 1
             current_work = self.their_tip.chain_work()
             if current_work <= prior_work:
                 no_progress += 1
@@ -1102,13 +1106,13 @@ class Session:
                 no_progress = 0
         return current_work > initial_work
 
-    async def sync_headers(self, *, timeout=15.0):
+    async def sync_headers(self):
         '''Synchronoize headers.  Should normally be enough to reach the remote node's tip.
         Acquire a lock so that simultaneous attempts to sync headers with remote services
         are avoided.  Return True if progress was made.
         '''
         async with self.node.sync_headers_lock:
-            return await self._sync_headers(timeout=timeout)
+            return await self._sync_headers()
 
     async def send_headers(self, headers):
         assert len(headers) <= self.MAX_HEADERS

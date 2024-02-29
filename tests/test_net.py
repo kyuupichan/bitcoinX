@@ -1191,10 +1191,11 @@ class TestHandshake:
             HANDSHAKE_TIMEOUT = 0.1
 
         async with listening_node.listen(session_cls=ListeningSession):
-            with pytest.raises(TimeoutError):
+            with pytest.raises(ProtocolError) as e:
                 async with client_node.connect(listening_node.service,
                                                session_cls=ClientSession) as session:
                     await pause(session.HANDSHAKE_TIMEOUT * 1.5)
+            assert str(e.value) == 'handshake timed out'
 
     @pytest.mark.asyncio
     async def test_parallel_handling(self, client_node, listening_node, caplog):
