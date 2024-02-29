@@ -229,7 +229,8 @@ class Headers:
         '''
         try:
             self.genesis_header = await self.header_from_hash(self.network.genesis_header.hash)
-            self.logger.info(f'found headers to height {await self.height()}')
+            chains = await self.chains()
+            self.logger.info(f'found {len(chains)} chains best height {await self.height()}')
             return
         except asqlite3.OperationalError:
             pass

@@ -197,13 +197,6 @@ class PoWChecker:
             return await self.required_bits_DAA(header)
 
     async def required_bits_testnet_common(self, header, has_DAA_minpow):
-        async def prior_non_special_bits(genesis_bits):
-            for test_height in range(header.height - 1, -1, -1):
-                bits = (await self.header_at_height(header.chain_id, test_height)).bits
-                if test_height % 2016 == 0 or bits != genesis_bits:
-                    return bits
-            # impossible to fall through here
-
         if header.height == 0:
             return self.network.genesis_header.bits
 
@@ -216,7 +209,8 @@ class PoWChecker:
                 return await self.required_bits_fortnightly(header)
             if is_slow:
                 return self.network.genesis_header.bits
-            return await prior_non_special_bits(self.network.genesis_header.bits)
+            height = header.height - header.height % 2016
+            return (await self.header_at_height(header.chain_id, height)).bits
         else:
             if is_slow and has_DAA_minpow:
                 return self.network.genesis_header.bits
