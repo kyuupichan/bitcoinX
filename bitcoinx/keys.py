@@ -22,8 +22,8 @@ from .base58 import base58_encode_check, base58_decode_check, is_minikey
 from .consts import CURVE_ORDER
 from .errors import DecryptionError, InvalidSignature
 from .hashes import sha256, double_sha256, hash160 as calc_hash160
-from .headers import Network
 from .misc import be_bytes_to_int, int_to_be_bytes, CONTEXT, cachedproperty
+from .networks import Network
 from .packing import pack_byte, pack_signed_message
 from .signature import (
     sign_der, sign_recoverable, verify_der_signature, verify_recoverable_signature,

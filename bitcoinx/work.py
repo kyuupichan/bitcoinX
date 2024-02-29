@@ -6,7 +6,7 @@
 #
 
 __all__ = (
-    'bits_to_target', 'target_to_bits', 'bits_to_work', 'grind_header',
+    'bits_to_target', 'target_to_bits', 'bits_to_work', 'bits_to_difficulty', 'grind_header',
 )
 
 
@@ -57,6 +57,11 @@ def target_to_bits(target):
         size += 1
 
     return word | (size << 24)
+
+
+def bits_to_difficulty(bits):
+    from .networks import Bitcoin
+    return Bitcoin.max_target / bits_to_target(bits)
 
 
 @lru_cache()
