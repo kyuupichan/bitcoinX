@@ -179,8 +179,6 @@ async def override_headers(headers, raw_headers):
     if min(Headers) == 1155850:
         Headers[1155168] = Headers[1155850]
 
-    Headers_by_hash = {header.hash: header for header in Headers.values()}
-
     async def header_at_height(_chain_id, height):
         return Headers[height]
 
