@@ -107,9 +107,9 @@ class PoWChecker:
         if header.height % 2016 == 0:
             return bits
 
-        mtp = headers_obj.median_time_past_from_height
-        mtp_diff = (await mtp(header.chain_id, header.height)
-                    - await mtp(header.chain_id, header.height - 6))
+        mtp = headers_obj.median_time_past
+        mtp_diff = (await mtp(header.chain_id, header.height - 1)
+                    - await mtp(header.chain_id, header.height - 7))
         if mtp_diff < 12 * 3600:
             return bits
 

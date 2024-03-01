@@ -184,9 +184,8 @@ async def override_headers(headers, raw_headers):
     async def header_at_height(_chain_id, height):
         return Headers[height]
 
-    async def median_time_past(prev_hash):
-        height = Headers_by_hash[prev_hash].height + 1
-        timestamps = [Headers[height].timestamp for height in range(height - 11, height)]
+    async def median_time_past(chain_id, height):
+        timestamps = [Headers[height].timestamp for height in range(height - 10, height + 1)]
         return sorted(timestamps)[len(timestamps) // 2]
 
     headers.median_time_past = median_time_past

@@ -513,15 +513,16 @@ class TestHeaders:
                 mtp = sorted(past_timestamps)[len(past_timestamps) // 2]
                 check_mtps.append(mtp)
 
-            mtps = [await headers.median_time_past(prev_header.hash) for prev_header in cheaders]
+            mtps = [await headers.median_time_past(1, height) for height in range(len(cheaders))]
             assert mtps == check_mtps
 
         run_test_with_headers(test)
 
-    def test_median_time_past_missing(self):
+    @pytest.mark.parametrize('chain_id, height', ((1, -1), (1, 10), (0, 0)))
+    def test_median_time_past_missing(self, chain_id, height):
         async def test(headers):
             with pytest.raises(MissingHeader):
-                await headers.median_time_past(bytes(32))
+                await headers.median_time_past(chain_id, height)
 
         run_test_with_headers(test)
 

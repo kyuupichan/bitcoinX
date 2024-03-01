@@ -204,6 +204,14 @@ class Headers:
       INSERT INTO $S.Headers(prev_hdr_id, height, chain_id, chain_work, hash,
                                    merkle_root, version, timestamp, bits, nonce)
         VALUES (NULL, 0, 1, ?, ?, ?, ?, ?, ?, ?);'''
+    MTP_SQL = '''
+      WITH RECURSIVE Timestamps(ts, hdr_id) AS (
+        SELECT timestamp, prev_hdr_id FROM $S.Headers WHERE chain_id=? AND height=?
+        UNION ALL
+        SELECT timestamp, prev_hdr_id FROM $S.Headers, Timestamps
+           WHERE Headers.hdr_id=Timestamps.hdr_id LIMIT 11
+      )
+      SELECT ts FROM Timestamps ORDER BY ts;'''
 
     def __init__(self, conn, schema, network):
         self.conn = conn
@@ -216,6 +224,7 @@ class Headers:
         self.cache_by_chain = defaultdict(dict)
         # Map from new chain ID to (prev_chain_id, new_id_first_height) pairs
         self.chain_info = {}
+        self.mtp_sql = self.fixup_sql(self.MTP_SQL)
 
     def fixup_sql(self, sql):
         return sql.replace('$S', self.schema)
@@ -428,27 +437,18 @@ class Headers:
         '''Returns the height of the longest chain.'''
         return (await self.tip()).height
 
-    async def median_time_past_from_height(self, chain_id, height):
-        '''Return the median of the timestamps of the (up to) 11 prior headers.'''
-        timestamps = [(await self.header_at_height_cached(chain_id, height)).timestamp
-                      for height in range(max(0, height - 11), height)]
-        return sorted(timestamps)[len(timestamps) // 2]
+    async def median_time_past(self, chain_id, height):
+        '''Return the median of the timestamps of the specified header and its 10 prior headers
+        (if they exist).
 
-    async def median_time_past(self, prev_hash):
-        '''Return the MTP of a header that would be chained onto a header with hash prev_hash.
-        MTP is the median of the timestamps of the 11 blocks up to and including prev_hash.
+        If you want to find the median time past OF a given header you must pass one less
+        than its height to this function.
         '''
-        cursor = await self.conn.execute(self.fixup_sql(f'''
-          WITH RECURSIVE HdrIds(hdr_id) AS (
-            SELECT hdr_id FROM $S.Headers WHERE hash={blob_literal(prev_hash)}
-            UNION ALL
-            SELECT prev_hdr_id FROM $S.Headers, HdrIds where Headers.hdr_id=HdrIds.hdr_id LIMIT 11
-          )
-          SELECT timestamp FROM $S.Headers WHERE hdr_id IN HdrIds
-        '''))
-
-        timestamps = [row[0] async for row in cursor]
+        # Timings show that this sqlite query more than twice as fast as using the block
+        # cache.  It seems to be slightly faster to take the middle entry in Python.
+        cursor = await self.conn.execute(self.mtp_sql, (chain_id, height))
+        timestamps = await cursor.fetchall()   # These are already sorted
         if not timestamps:
-            raise MissingHeader(f'no header with hash {hash_to_hex_str(prev_hash)} found')
-
-        return sorted(timestamps)[len(timestamps) // 2]
+            raise MissingHeader(f'no header found at height {height:,d} on chain {chain_id}')
+        mtp, = timestamps[len(timestamps) // 2]
+        return mtp
