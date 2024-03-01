@@ -1064,7 +1064,23 @@ class TestHandshake:
                     await pause()
                     await session.close()
 
-        assert in_caplog(caplog, 'protocol error: verack command received before version')
+        assert in_caplog(caplog, 'protocol error: verack message received before version')
+
+    @pytest.mark.asyncio
+    async def test_send_verack_without_version(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   perform_handshake=False) as session:
+                        await session.send_version()
+                        # Don't wait for an incoming version message....
+                        await session.send_verack()
+                        await pause()
+                        await session.close()
+
+        assert in_caplog(caplog, 'fatal protocol error: verack message received before '
+                         'version message sent')
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize('extended', (True, False))
@@ -1096,7 +1112,7 @@ class TestHandshake:
                     await session.close()
 
         print_caplog(caplog)
-        assert in_caplog(caplog, 'sendheaders command received before')
+        assert in_caplog(caplog, 'sendheaders message received before')
 
     @pytest.mark.asyncio
     async def test_corrupt_version(self, client_node, listening_node, caplog):

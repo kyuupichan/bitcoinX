@@ -980,10 +980,9 @@ class Session:
         if header.command_bytes == MessageHeader.VERSION:
             pass
         elif not self.version_received.is_set():
-            raise ProtocolError(f'{header} command received before version')
-        elif header.command_bytes not in (MessageHeader.VERACK, MessageHeader.AUTHCH,
-                                          MessageHeader.AUTHRESP):
-            raise ProtocolError(f'{header} command received before verack')
+            raise ProtocolError(f'{header} message received before version')
+        elif header.command_bytes not in (MessageHeader.VERACK):
+            raise ProtocolError(f'{header} message received before verack')
         await self.handle_message(header, payload)
 
     async def recv_messages_loop(self, connection):

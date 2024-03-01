@@ -153,14 +153,14 @@ class Headers:
         nonce        INTEGER NOT NULL
       );'''
     CREATE_HEIGHT_INDEX = '''
-      CREATE INDEX $S.HeightIdx on Headers(height);'''
+      CREATE INDEX $S.HeightIdx ON Headers(height);'''
     CREATE_HEADERS_VIEW = '''
       CREATE VIEW $S.HeadersView(hdr_id, height, chain_id, chain_work, hash, version,
                                        prev_hash, merkle_root, timestamp, bits, nonce)
         AS SELECT hdr_id, height, chain_id, chain_work, hash, version, iif(
           prev_hdr_id ISNULL,
           zeroblob(32),
-          (SELECT hash from Headers where hdr_id=H.prev_hdr_id)
+          (SELECT hash FROM Headers WHERE hdr_id=H.prev_hdr_id)
         ), merkle_root, timestamp, bits, nonce
         FROM Headers H;'''
     CREATE_CHAINS_TABLE = '''
@@ -170,12 +170,16 @@ class Headers:
         base_hdr_id      INTEGER NOT NULL,
         tip_hdr_id       INTEGER NOT NULL
       );'''
+    CREATE_INVALID_HEADERS_TABLE = '''
+      CREATE TABLE $S.InvalidHeaders(
+        hdr_id INTEGER PRIMARY KEY REFERENCES Headers(hdr_id)
+      );'''
     CREATE_CHAINS_VIEW = '''
       CREATE VIEW $S.ChainsView(chain_id, parent_chain_id, base_hdr_id,
                                       tip_hdr_id, base_height, tip_height)
         AS SELECT chain_id, parent_chain_id, base_hdr_id, tip_hdr_id,
-            (SELECT height from Headers WHERE hdr_id=base_hdr_id),
-            (SELECT height from Headers WHERE hdr_id=tip_hdr_id)
+            (SELECT height FROM Headers WHERE hdr_id=base_hdr_id),
+            (SELECT height FROM Headers WHERE hdr_id=tip_hdr_id)
           FROM Chains;'''
     CREATE_ANCESTORS_VIEW = '''
       CREATE VIEW $S.AncestorsView(chain_id, anc_chain_id, branch_height)
@@ -187,13 +191,13 @@ class Headers:
               FROM ChainsView CV, Ancestors A
               WHERE CV.chain_id=A.anc_chain_id AND CV.parent_chain_id NOT NULL
           )
-        SELECT chain_id, anc_chain_id, branch_height from Ancestors;'''
+        SELECT chain_id, anc_chain_id, branch_height FROM Ancestors;'''
     INSERT_GENESIS = '''
       INSERT INTO $S.Headers(prev_hdr_id, height, chain_id, chain_work, hash,
                                    merkle_root, version, timestamp, bits, nonce)
         VALUES (NULL, 0, 1, ?, ?, ?, ?, ?, ?, ?);'''
     # queries for insert_chain()
-    HASH_EXISTS_SQL = 'SELECT hdr_id from $S.Headers WHERE hash=?;'
+    HASH_EXISTS_SQL = 'SELECT hdr_id FROM $S.Headers WHERE hash=?;'
     PREV_HEADER_SQL = '''
         SELECT hdr_id, height + 1, chain_work, chain_id,
             iif(EXISTS(SELECT 1 FROM $S.HeadersView WHERE prev_hash=?),
@@ -258,6 +262,7 @@ class Headers:
         async with self.conn:
             for sql in (self.CREATE_HEADERS_TABLE, self.CREATE_HEIGHT_INDEX,
                         self.CREATE_HEADERS_VIEW, self.CREATE_CHAINS_TABLE,
+                        self.CREATE_INVALID_HEADERS_TABLE,
                         # A view that adds base_height and tip_height, and one to easily
                         # obtain ancestor chains
                         self.CREATE_CHAINS_VIEW, self.CREATE_ANCESTORS_VIEW):

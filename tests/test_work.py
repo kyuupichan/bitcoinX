@@ -13,8 +13,8 @@ import pytest
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet, BitcoinRegtest,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
-    Header, header_hash, SimpleHeader,
-    bits_to_target, target_to_bits, grind_header, bits_to_work, int_to_le_bytes,
+    Header, header_hash, SimpleHeader, grind_header,
+    bits_to_target, target_to_bits, bits_to_difficulty, bits_to_work, int_to_le_bytes,
 )
 
 from .utils import read_file, data_dir_path
@@ -31,6 +31,8 @@ from .utils import read_file, data_dir_path
 def test_bits_to_target(bits, answer):
     assert bits_to_target(bits) == answer
     assert target_to_bits(answer) == bits
+    if answer:
+        assert bits_to_difficulty(bits) == Bitcoin.max_target / answer
 
 
 @pytest.mark.parametrize("bits", (
