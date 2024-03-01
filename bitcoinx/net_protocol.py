@@ -1156,14 +1156,16 @@ class Session:
                                     f'limit is {self.MAX_HEADERS:,d}')
             if count == 0:
                 if request:
+                    if not self.their_tip.height:
+                        self.their_tip = await headers_obj.tip()
                     self.logger.info(f'headers synchronized to height {self.their_tip.height}')
                 return
 
             try:
                 # This will fail if the headers do not connect.  It also validates PoW.
-                inserted_count = await headers_obj.insert_headers(headers)
+                inserted_count, tip = await headers_obj.insert_header_chain(headers)
                 if inserted_count:
-                    self.their_tip = await headers_obj.header_from_hash(headers[-1].hash)
+                    self.their_tip = tip
                     elapsed = time.time() - t
                     self.logger.info(f'inserted {inserted_count:,d} headers to height '
                                      f'{self.their_tip.height} in {elapsed:3f}s; '

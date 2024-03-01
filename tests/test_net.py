@@ -1570,7 +1570,7 @@ class TestGetHeaders:
                 await super().on_getheaders(payload)
 
         headers = first_mainnet_headers(ListenerSession.MAX_HEADERS * 2 + 1)[1:]
-        await listening_node.headers.insert_headers(headers)
+        await listening_node.headers.insert_header_chain(headers)
         secs = 0.2
 
         with caplog.at_level(logging.WARNING):
@@ -1590,7 +1590,7 @@ class TestGetHeaders:
     @pytest.mark.asyncio
     async def test_hash_stop_only(self, client_node, listening_node, caplog):
         simples = first_mainnet_headers(10)
-        await listening_node.headers.insert_headers(simples[:5])
+        await listening_node.headers.insert_header_chain(simples[:5])
 
         with caplog.at_level(logging.INFO):
             async with listening_node.listen():
@@ -1635,13 +1635,15 @@ class TestGetHeaders:
         # branch to height 8, but the listener has mainnet to height 9 as the longest.
         # The listener knows all of branch B except the tip.
         simples = first_mainnet_headers(20)
-        await listening_node.headers.insert_headers(simples[:10])
+        await listening_node.headers.insert_header_chain(simples[:10])
 
         client_branch = simples[:3]
         client_branch.extend(create_random_branch(client_branch[-1], 5))
-        assert await client_node.headers.insert_headers(client_branch, check_work=False) == 7
-        assert await listening_node.headers.insert_headers(client_branch[:-1],
-                                                           check_work=False) == 4
+        count, tip = await client_node.headers.insert_header_chain(client_branch, check_work=False)
+        assert count == 7
+        count, tip = await listening_node.headers.insert_header_chain(client_branch[:-1],
+                                                                      check_work=False)
+        assert count == 4
         client_chain = await client_node.headers.longest_chain()
         assert client_chain.tip.hash == client_branch[-1].hash
 
@@ -1659,7 +1661,7 @@ class TestGetHeaders:
                     # Now extend the listener chain to height 19.  Test that hash_stop is
                     # honoured when the client provides it (how exactly the client knows
                     # the hash is another question....)
-                    await listening_node.headers.insert_headers(simples[10:])
+                    await listening_node.headers.insert_header_chain(simples[10:])
                     listening_chain = await listening_node.headers.longest_chain()
                     assert client_chain.tip != listening_chain.tip
 
@@ -1702,12 +1704,12 @@ class TestGetHeaders:
         # height 9, and the client on branch B which is longer.  The listener knows some of
         # branch B.
         simples = first_mainnet_headers(10)
-        await listening_node.headers.insert_headers(simples)
+        await listening_node.headers.insert_header_chain(simples)
 
         client_branch = simples[:3]
         client_branch.extend(create_random_branch(client_branch[-1], 10))
-        await client_node.headers.insert_headers(client_branch, check_work=False)
-        await listening_node.headers.insert_headers(client_branch[:-5], check_work=False)
+        await client_node.headers.insert_header_chain(client_branch, check_work=False)
+        await listening_node.headers.insert_header_chain(client_branch[:-5], check_work=False)
         client_chain = await client_node.headers.longest_chain()
         assert client_chain.tip.hash == client_branch[-1].hash
 
@@ -1849,7 +1851,7 @@ class TestGetHeaders:
     @pytest.mark.asyncio
     async def test_too_many_sent(self, client_node, listening_node, caplog):
         headers = first_mainnet_headers(10)[1:]
-        await listening_node.headers.insert_headers(headers)
+        await listening_node.headers.insert_header_chain(headers)
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
@@ -1910,12 +1912,14 @@ class TestSyncHeaders:
 
         # Client is on a branch of length 25 from genesis
         branch = create_random_branch(Bitcoin.genesis_header, 25)
-        assert await client_node.headers.insert_headers(branch, check_work=False) == 25
+        count, tip = await client_node.headers.insert_header_chain(branch, check_work=False)
+        assert count == 25
 
         # Listening node has the first 101 mainnet heaaders, to height 100
         height = 100
         headers = first_mainnet_headers(height + 1)
-        assert await listening_node.headers.insert_headers(headers) == height
+        count, tip = await listening_node.headers.insert_header_chain(headers)
+        assert count == height
 
         async with listening_node.listen(session_cls=ListenerSession):
             async with client_node.connect(listening_node.service) as session:

@@ -161,10 +161,12 @@ class TestHeaders:
     @staticmethod
     async def insert_first_headers(headers, count):
         simple_headers = first_mainnet_headers(count)
-        assert await headers.insert_headers(simple_headers) == count - 1
+        inserted_count, tip = await headers.insert_header_chain(simple_headers)
+        assert inserted_count == count - 1
+        assert tip.hash == simple_headers[-1].hash
         return simple_headers
 
-    def test_insert_headers(self):
+    def test_insert_header_chain(self):
         async def test(headers):
             assert not headers.conn.in_transaction
             simple_headers = await self.insert_first_headers(headers, 10)
@@ -186,27 +188,27 @@ class TestHeaders:
         network = Bitcoin
         run_test_with_headers(test, network)
 
-    def test_insert_headers_empty(self):
+    def test_insert_header_chain_empty(self):
         async def test(headers):
-            assert await headers.insert_headers([]) == 0
+            assert await headers.insert_header_chain([]) == (0, None)
         run_test_with_headers(test, Bitcoin)
 
-    def test_insert_headers_commits(self):
+    def test_insert_header_chain_commits(self):
         async def test(headers):
             mainnet_headers = first_mainnet_headers(6)
-            await headers.insert_headers(mainnet_headers)
+            await headers.insert_header_chain(mainnet_headers)
             assert await headers.height() == 5
             await headers.conn.rollback()
             assert await headers.height() == 5
 
         run_test_with_headers(test)
 
-    def test_insert_headers_commits_successes(self):
+    def test_insert_header_chain_commits_successes(self):
         async def test(headers):
             mainnet_headers = first_mainnet_headers(6)
             mainnet_headers.append(create_random_header(mainnet_headers[-1]))
             try:
-                await headers.insert_headers(mainnet_headers)
+                await headers.insert_header_chain(mainnet_headers)
             except InsufficientPoW:
                 pass
             assert await headers.height() == 5
@@ -215,33 +217,35 @@ class TestHeaders:
 
         run_test_with_headers(test)
 
-    def test_insert_headers_not_a_chain(self):
+    def test_insert_header_chain_not_a_chain(self):
         async def test(headers):
             branch = create_random_branch(headers.genesis_header, 4)
             branch.append(branch[0])
             with pytest.raises(HeadersNotSequential):
-                await headers.insert_headers(branch)
+                await headers.insert_header_chain(branch)
 
         run_test_with_headers(test)
 
-    def test_insert_headers_not_connecting(self):
+    def test_insert_header_chain_not_connecting(self):
         async def test(headers):
             header = create_random_header(headers.genesis_header)
             branch = create_random_branch(header, 4)
             with pytest.raises(MissingHeader):
-                await headers.insert_headers(branch)
+                await headers.insert_header_chain(branch)
 
         run_test_with_headers(test)
 
     def test_insert_existing_headers(self):
         async def test(headers):
             simples = first_mainnet_headers(10)
-            count = await headers.insert_headers(simples[:5])
+            count, tip = await headers.insert_header_chain(simples[:5])
             assert count == 4
+            assert tip.hash == simples[4].hash
             chain = await headers.longest_chain()
-            assert chain.tip.height == 4
-            count = await headers.insert_headers(simples[2:])
+            assert chain.tip == tip
+            count, tip = await headers.insert_header_chain(simples[2:])
             assert count == 5
+            assert tip.hash == simples[-1].hash
             chain = await headers.longest_chain()
             assert chain.tip.height == 9
 
@@ -251,9 +255,23 @@ class TestHeaders:
         async def test(headers):
             branch = create_random_branch(network.genesis_header, 4)
             simples = first_mainnet_headers(10)
-            count = await headers.insert_headers(branch, check_work=False)
-            count = await headers.insert_headers(simples)
+            await headers.insert_header_chain(branch, check_work=False)
+            count, tip = await headers.insert_header_chain(simples)
             assert count == 9
+
+        network = Bitcoin
+        run_test_with_headers(test, network)
+
+    def test_insert_new_branch_checking_work_fail(self):
+        async def test(headers):
+            mainnet_headers = first_mainnet_headers(10)
+            await headers.insert_header_chain(mainnet_headers)
+            branch = create_random_branch(network.genesis_header, 4)
+            chain_info = headers.chain_info.copy()
+            with pytest.raises(InsufficientPoW):
+                await headers.insert_header_chain(branch)
+            # Check the new chain info item was removed
+            assert headers.chain_info == chain_info
 
         network = Bitcoin
         run_test_with_headers(test, network)
@@ -289,12 +307,14 @@ class TestHeaders:
     def test_headers_height_1(self):
         async def test(headers):
             header1 = create_random_header(headers.genesis_header)
-            assert await headers.insert_headers([header1], check_work=False) == 1
+            count, tip = await headers.insert_header_chain([header1], check_work=False)
+            assert count == 1
             header1 = await headers.header_from_hash(header1.hash)
             assert header1.chain_id == headers.genesis_header.chain_id
 
             header2 = create_random_header(headers.genesis_header)
-            assert await headers.insert_headers([header2], check_work=False) == 1
+            count, tip = await headers.insert_header_chain([header2], check_work=False)
+            assert count == 1
             header2 = await headers.header_from_hash(header2.hash)
             assert header2.chain_id != headers.genesis_header.chain_id
 
@@ -473,7 +493,9 @@ class TestHeaders:
             B4 = create_random_branch(B1[0], 1)
 
             for B in (B1, B2, B3, B4):
-                assert await headers.insert_headers(B, check_work=False) == len(B)
+                count, tip = await headers.insert_header_chain(B, check_work=False)
+                assert count == len(B)
+                assert tip.hash == B[-1].hash
 
             # This ensures chain_id is set
             H1, H2, H3, H4, H5, H6 = [await headers.header_from_hash(h.hash)
@@ -531,7 +553,7 @@ class TestHeaders:
             simples = first_mainnet_headers(2)
             header = SimpleHeader(b'0' + simples[1].raw[1:])
             with pytest.raises(InsufficientPoW) as e:
-                await headers.insert_headers([header])
+                await headers.insert_header_chain([header])
             assert str(e.value) == (
                 'header f300000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d61900000000'
                 '00982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff'
@@ -547,7 +569,7 @@ class TestHeaders:
             raw[72] ^= 0xf
             header = SimpleHeader(raw)
             with pytest.raises(IncorrectBits) as e:
-                await headers.insert_headers([header])
+                await headers.insert_header_chain([header])
             assert str(e.value) == 'header requires bits 486604799 but has 486604784'
 
         network = Bitcoin

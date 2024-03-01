@@ -192,7 +192,7 @@ class Headers:
       INSERT INTO $S.Headers(prev_hdr_id, height, chain_id, chain_work, hash,
                                    merkle_root, version, timestamp, bits, nonce)
         VALUES (NULL, 0, 1, ?, ?, ?, ?, ?, ?, ?);'''
-    # queries for insert_headers()
+    # queries for insert_chain()
     HASH_EXISTS_SQL = 'SELECT hdr_id from $S.Headers WHERE hash=?;'
     PREV_HEADER_SQL = '''
         SELECT hdr_id, height + 1, chain_work, chain_id,
@@ -320,19 +320,23 @@ class Headers:
         for height in old_heights:
             del cache[height]
 
-    async def insert_headers(self, headers, *, check_work=True):
-        '''Insert headers into the Headers table, and returns the number of new headers actually
-        added.
+    async def insert_header_chain(self, headers, *, check_work=True):
+        '''Insert a chain of SimpleHeader objects into the Headers table.  Headers already in the
+        table they are ignored.
 
-        headers is a sequence of SimpleHeader objects which must form a chain.  Proof of
-        work is checked if check_work is True.
+        If the headers do not form a chain, raise a HeadersNotSequential exception.  If
+        check_work is True then check proof of work before inserting each header, and
+        raise an IncorrectBits or InsufficientPoW exception on failure.  In such a case,
+        any valid headers already inserted remain.
+
+        Return a pair (inserted_count, tip).  If inserted_count is zero then tip is None,
+        otherwise it is the last header in the chain.
         '''
         if not SimpleHeader.are_headers_chained(headers):
             raise HeadersNotSequential('headers do not form a chain')
 
-        execute = self.conn.execute
-
         # Find the first header not in the DB; this will generally be the first one
+        execute = self.conn.execute
         for n, header in enumerate(headers):
             cursor = await execute(self.hash_exists_sql, (header.hash, ))
             if not await cursor.fetchone():
@@ -340,7 +344,7 @@ class Headers:
                     headers = headers[n:]
                 break
         if not headers:
-            return 0
+            return 0, None
 
         # If the headers connect they all have the same chain ID, which is that of the
         # prior header if it is a tip, otherwise we need a new chain ID.
@@ -355,7 +359,7 @@ class Headers:
         if create_new_chain:
             # Tell the cache about new chains so that the pow checker doesn't make us
             # query the DB for a chain ID we have not yet inserted.  It also makes header
-            # lookup for new chains more efficient.
+            # lookup for new chains more efficient by deferring to the parent.
             self.chain_info[chain_id] = (parent_chain_id, start_height)
 
         # We have some headers.  Our guarantee is that, on return, all headers (with valid
@@ -364,9 +368,8 @@ class Headers:
         # least one good header.
         count = 0
         cache = self.cache_by_chain[chain_id]
+        await execute('BEGIN TRANSACTION')
         try:
-            await execute('BEGIN TRANSACTION')
-
             for height, header in enumerate(headers, start=start_height):
                 le_work = int_to_le_bytes(le_bytes_to_int(le_work) + bits_to_work(header.bits))
 
@@ -380,7 +383,6 @@ class Headers:
                                        (tip_hdr_id, height, chain_id, le_work, header.hash,
                                         header.merkle_root, header.version, header.timestamp,
                                         header.bits, header.nonce))
-                assert cursor.lastrowid != tip_hdr_id
                 count += 1
                 cache[height] = header
                 tip_hdr_id = cursor.lastrowid
@@ -391,13 +393,13 @@ class Headers:
         finally:
             if count:
                 await execute(self.update_chain_tip_sql, (tip_hdr_id, chain_id))
-            elif create_new_chain:
-                del self.chain_info[chain_id]
             await self.conn.commit()
+            if create_new_chain:
+                del self.chain_info[chain_id]
             if len(cache) >= 200:
                 self.shrink(cache)
 
-        return count
+        return count, header
 
     async def _query_headers(self, where_clause, params, is_multi):
         sql = f'''SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, height,
