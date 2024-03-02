@@ -92,7 +92,6 @@ class TaskGroup:
         if not task.cancelled():
             exc = task.exception()
             if exc:
-                print(f'on done: {task} {exc}')
                 self._errors.append(exc)
 
     def _add_task(self, task):
@@ -129,7 +128,6 @@ class TaskGroup:
         '''
         if self._done or self._pending:
             await self._semaphore.acquire()
-            print('Semaphore released', self._done)
         if self._done:
             return self._done.popleft()
         return None
@@ -163,7 +161,6 @@ class TaskGroup:
             if exc is None:
                 while not self._errors:
                     task = await self.next_done()
-                    print('Task done:', task, self._errors)
                     if not task:
                         break
         except BaseException as e:
@@ -179,7 +176,6 @@ class TaskGroup:
 
     async def _cancel_tasks(self, tasks):
         '''Cancel the passed set of tasks.  Wait for them to complete.'''
-        print('Cancelling tasks:', tasks)
         for task in tasks:
             task.cancel()
 

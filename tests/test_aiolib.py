@@ -100,7 +100,7 @@ class TestTaskgroup:
 
         with pytest.raises(ExceptionGroup) as e:
             async with TaskGroup() as group:
-                group.create_task(raise_exc(0.2, v1))
+                group.create_task(raise_exc(0.1, v1))
                 group.create_task(raise_exc(0.01, v2))
 
         assert e.value.exceptions == (v2, )
@@ -194,10 +194,10 @@ class TestTimeout:
 
     @pytest.mark.asyncio
     async def test_nested_inner_expires_first(self):
-        async with timeout_after(0.01) as outer:
+        async with timeout_after(0.05) as outer:
             with pytest.raises(TimeoutError):
                 async with timeout_after(0.001) as inner:
-                    await sleep(0.02)
+                    await sleep(0.1)
         assert not outer.expired
         assert inner.expired
         assert_clean()
@@ -205,9 +205,9 @@ class TestTimeout:
     @pytest.mark.asyncio
     async def test_nested_inner_expires_first_and_uncaught(self):
         with pytest.raises(UncaughtTimeoutError):
-            async with timeout_after(0.01) as outer:
+            async with timeout_after(0.05) as outer:
                 async with timeout_after(0.001) as inner:
-                    await sleep(0.02)
+                    await sleep(0.1)
         assert not outer.expired
         assert inner.expired
         assert_clean()
@@ -363,9 +363,9 @@ class TestIgnore:
 
     @pytest.mark.asyncio
     async def test_nested_inner_expires_first(self):
-        async with ignore_after(0.01) as outer:
+        async with ignore_after(0.05) as outer:
             async with ignore_after(0.001) as inner:
-                await sleep(0.02)
+                await sleep(0.1)
         assert not outer.expired
         assert inner.expired
         assert_clean()
@@ -488,19 +488,19 @@ class TestMixedNested:
 
     @pytest.mark.asyncio
     async def test_nested_inner_expires_first(self):
-        async with timeout_after(0.01) as outer:
+        async with timeout_after(0.05) as outer:
             async with ignore_after(0.001) as inner:
-                await sleep(0.02)
+                await sleep(0.1)
         assert not outer.expired
         assert inner.expired
         assert_clean()
 
     @pytest.mark.asyncio
     async def test_nested_inner_expires_first_reversed(self):
-        async with ignore_after(0.01) as outer:
+        async with ignore_after(0.05) as outer:
             with pytest.raises(TimeoutError):
                 async with timeout_after(0.001) as inner:
-                    await sleep(0.02)
+                    await sleep(0.1)
         assert not outer.expired
         assert inner.expired
         assert_clean()
