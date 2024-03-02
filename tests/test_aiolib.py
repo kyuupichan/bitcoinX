@@ -100,8 +100,8 @@ class TestTaskgroup:
 
         with pytest.raises(ExceptionGroup) as e:
             async with TaskGroup() as group:
-                group.create_task(raise_exc(0.02, v1))
-                group.create_task(raise_exc(0.002, v2))
+                group.create_task(raise_exc(0.2, v1))
+                group.create_task(raise_exc(0.01, v2))
 
         assert e.value.exceptions == (v2, )
         assert group.joined
@@ -255,6 +255,9 @@ class TestTimeout:
             assert timeout._deadline > deadline
             deadline = timeout._deadline
         assert not timeout.expired
+
+        # Windows event loops seem to have coarse time measures
+        await sleep(0.001)
 
         with pytest.raises(TimeoutError):
             async with timeout:
@@ -410,6 +413,9 @@ class TestIgnore:
             assert timeout._deadline > deadline
             deadline = timeout._deadline
         assert not timeout.expired
+
+        # Windows event loops seem to have coarse time measures
+        await sleep(0.001)
 
         async with timeout:
             assert timeout._deadline > deadline
