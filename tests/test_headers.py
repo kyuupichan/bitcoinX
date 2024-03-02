@@ -396,8 +396,20 @@ class TestHeaders:
 
             chains = await headers.chains()
             full_chains = self.full_chains_of_tree(tree, genesis_header)
-            assert len(chains) == len(full_chains)
 
+            cursor = await headers.conn.execute('SELECT * FROM Second.Chains');
+            rows = await cursor.fetchall()
+            print('Chains:')
+            for chain_id, parent_chain_id, base_hdr_id, tip_hdr_id in rows:
+                print(f'Chain: {chain_id}->{parent_chain_id} {tip_hdr_id}->{base_hdr_id}')
+
+            cursor = await headers.conn.execute('SELECT * FROM Second.Segments ORDER BY chain_id');
+            rows = await cursor.fetchall()
+            for chain_id, anc_chain_id, first_hdr_id, first_height, last_hdr_id, last_height in rows:
+                print(f'Segment: {chain_id}/{anc_chain_id} {first_hdr_id}@{first_height} '
+                      f'         {last_hdr_id}@{last_height}')
+
+            assert len(chains) == len(full_chains)
             for chain in chains:
                 full_chain = full_chains[chain.tip.hash]
 

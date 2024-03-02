@@ -135,6 +135,50 @@ class Chain:
         return self.chain_id
 
 
+CREATE_CHAINS = '''
+  CREATE TABLE $S.Chains (
+    chain_id         INTEGER PRIMARY KEY,
+    parent_chain_id  INTEGER REFERENCES Chains(chain_id),
+    base_hdr_id      INTEGER NOT NULL,
+    tip_hdr_id       INTEGER NOT NULL
+  );'''
+
+
+CREATE_INVALID_HEADERS = '''
+  CREATE TABLE $S.InvalidHeaders(
+    hdr_id INTEGER PRIMARY KEY REFERENCES Headers(hdr_id)
+  );'''
+
+
+CREATE_SEGMENTS = '''
+  CREATE VIEW $S.Segments AS
+    WITH RECURSIVE
+      Segments(chain_id, anc_chain_id, first_hdr_id, last_hdr_id) AS (
+        SELECT chain_id, chain_id, base_hdr_id, tip_hdr_id
+        FROM Chains
+        UNION ALL
+        SELECT S.chain_id, C.parent_chain_id,
+          (SELECT base_hdr_id FROM Chains WHERE chain_id=C.parent_chain_id),
+          (SELECT prev_hdr_id FROM Headers WHERE hdr_id=S.first_hdr_id)
+        FROM Segments S, Chains C
+          WHERE C.chain_id=S.anc_chain_id AND C.parent_chain_id NOT NULL
+      )
+    SELECT *, (SELECT height FROM Headers WHERE hdr_id=Segments.first_hdr_id) AS first_height,
+      (SELECT height FROM Headers WHERE hdr_id=Segments.last_hdr_id) AS last_height
+        FROM Segments;'''
+
+
+HEADER_AT_HEIGHT = '''
+  height=? AND chain_id=(SELECT anc_chain_id FROM Segments
+    WHERE ? BETWEEN first_height AND last_height AND chain_id=?)'''
+
+
+CHAIN_TIPS_HAVING_BLOCK_HASH = '''
+   SELECT tip_hdr_id FROM $S.Chains C, $S.Segments S, $S.Headers H
+     WHERE H.Hash=? AND H.chain_id=S.anc_chain_id AND C.chain_id=S.chain_id
+           AND H.height BETWEEN S.first_height AND S.last_height'''
+
+
 class Headers:
 
     # Queries to create a new database
@@ -163,35 +207,6 @@ class Headers:
           (SELECT hash FROM Headers WHERE hdr_id=H.prev_hdr_id)
         ), merkle_root, timestamp, bits, nonce
         FROM Headers H;'''
-    CREATE_CHAINS_TABLE = '''
-      CREATE TABLE $S.Chains (
-        chain_id         INTEGER PRIMARY KEY,
-        parent_chain_id  INTEGER REFERENCES Chains(chain_id),
-        base_hdr_id      INTEGER NOT NULL,
-        tip_hdr_id       INTEGER NOT NULL
-      );'''
-    CREATE_INVALID_HEADERS_TABLE = '''
-      CREATE TABLE $S.InvalidHeaders(
-        hdr_id INTEGER PRIMARY KEY REFERENCES Headers(hdr_id)
-      );'''
-    CREATE_CHAINS_VIEW = '''
-      CREATE VIEW $S.ChainsView(chain_id, parent_chain_id, base_hdr_id,
-                                      tip_hdr_id, base_height, tip_height)
-        AS SELECT chain_id, parent_chain_id, base_hdr_id, tip_hdr_id,
-            (SELECT height FROM Headers WHERE hdr_id=base_hdr_id),
-            (SELECT height FROM Headers WHERE hdr_id=tip_hdr_id)
-          FROM Chains;'''
-    CREATE_ANCESTORS_VIEW = '''
-      CREATE VIEW $S.AncestorsView(chain_id, anc_chain_id, branch_height)
-        AS WITH RECURSIVE
-          Ancestors(chain_id, anc_chain_id, branch_height) AS (
-            SELECT chain_id, chain_id, tip_height FROM ChainsView
-            UNION ALL
-            SELECT A.chain_id, CV.parent_chain_id, CV.base_height - 1
-              FROM ChainsView CV, Ancestors A
-              WHERE CV.chain_id=A.anc_chain_id AND CV.parent_chain_id NOT NULL
-          )
-        SELECT chain_id, anc_chain_id, branch_height FROM Ancestors;'''
     INSERT_GENESIS = '''
       INSERT INTO $S.Headers(prev_hdr_id, height, chain_id, chain_work, hash,
                                    merkle_root, version, timestamp, bits, nonce)
@@ -237,6 +252,7 @@ class Headers:
         self.insert_header_sql = self.fixup_sql(self.INSERT_HEADER_SQL)
         self.insert_chain_sql = self.fixup_sql(self.INSERT_CHAIN_SQL)
         self.update_chain_tip_sql = self.fixup_sql(self.UPDATE_CHAIN_TIP_SQL)
+        self.chain_tips_having_block_hash = self.fixup_sql(CHAIN_TIPS_HAVING_BLOCK_HASH)
         self.mtp_sql = self.fixup_sql(self.MTP_SQL)
 
     def fixup_sql(self, sql):
@@ -261,11 +277,8 @@ class Headers:
         # Create the tables and insert the genesis header
         async with self.conn:
             for sql in (self.CREATE_HEADERS_TABLE, self.CREATE_HEIGHT_INDEX,
-                        self.CREATE_HEADERS_VIEW, self.CREATE_CHAINS_TABLE,
-                        self.CREATE_INVALID_HEADERS_TABLE,
-                        # A view that adds base_height and tip_height, and one to easily
-                        # obtain ancestor chains
-                        self.CREATE_CHAINS_VIEW, self.CREATE_ANCESTORS_VIEW):
+                        self.CREATE_HEADERS_VIEW, CREATE_CHAINS, CREATE_SEGMENTS,
+                        CREATE_INVALID_HEADERS):
                 await execute(self.fixup_sql(sql))
 
             cursor = await self.conn.execute(
@@ -278,15 +291,7 @@ class Headers:
         self.logger.info('database tables created')
 
     async def _db_header_at_height(self, chain_id, height):
-        where_clause = f'''height={height} AND chain_id=(
-            SELECT chain_id FROM (
-                SELECT ChainsView.chain_id, ChainsView.base_height
-                  FROM $S.ChainsView, $S.AncestorsView
-                  WHERE ChainsView.chain_id=AncestorsView.anc_chain_id
-                    AND {height} BETWEEN base_height AND tip_height
-                    AND AncestorsView.chain_id={chain_id}
-             ) ORDER BY base_height DESC LIMIT 1)'''
-        return await self._query_headers(where_clause, (), False)
+        return await self._query_headers(HEADER_AT_HEIGHT, (height, height, chain_id), False)
 
     async def header_at_height_cached(self, chain_id, height):
         '''Return the header on chain_id at height, or None.'''
@@ -415,11 +420,10 @@ class Headers:
             return Header(pack_header(*row[:6]), *row[6:])
 
         if is_multi:
-            return [row_to_header(row) async for row in cursor]
+            return [row_to_header(row) for row in await cursor.fetchall()]
 
-        async for row in cursor:
-            return row_to_header(row)
-        return None
+        row = await cursor.fetchone()
+        return row_to_header(row) if row else None
 
     async def header_from_hash(self, block_hash):
         '''Look up the block hash and return the block header.'''
@@ -429,18 +433,12 @@ class Headers:
         '''Look up the merkle root and return the block header.'''
         return await self._query_headers('merkle_root=?', (merkle_root, ), False)
 
-    async def _chains(self, tip_hdr_id_query, params=()):
-        tips = await self._query_headers(f'hdr_id IN ({tip_hdr_id_query})', params, True)
-        return [Chain(tip.chain_id, tip) for tip in tips]
-
     async def chains(self, block_hash=None):
         '''Return all chains containing the given block.  All chains if block_hash is None.'''
         block_hash = block_hash or self.genesis_header.hash
-        return await self._chains('''
-           SELECT tip_hdr_id
-             FROM $S.AncestorsView AV, $S.Headers H, $S.Chains C
-               WHERE H.hash=? AND H.chain_id=AV.anc_chain_id AND AV.chain_id=C.chain_id
-                 AND AV.branch_height >= H.height''', (block_hash, ))
+        tips = await self._query_headers(f'hdr_id IN ({self.chain_tips_having_block_hash})',
+                                         (block_hash, ), True)
+        return [Chain(tip.chain_id, tip) for tip in tips]
 
     async def longest_chain(self, block_hash=None):
         '''Return the longest chain containing the given header.'''
