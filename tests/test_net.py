@@ -13,7 +13,7 @@ import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
-    Headers, all_networks, ProtocolError, PackingError,
+    Headers, all_networks, ProtocolError, PackingError, pack_le_uint32,
     NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Session, SimpleHeader
@@ -481,10 +481,6 @@ protoconf_tests = [
 
 class TestProtoconfClass:
 
-    @pytest.mark.parametrize('max_payload', (Protoconf.LEGACY_MAX_PAYLOAD, 10_000_000))
-    def test_max_inv_elements(self, max_payload):
-        assert Protoconf(max_payload, b'').max_inv_elements() == (max_payload - 9) // (4 + 32)
-
     @pytest.mark.parametrize('max_payload, policies, result', protoconf_tests)
     def test_payload(self, max_payload, policies, result):
         assert Protoconf(max_payload, policies).payload() == bytes.fromhex(result)
@@ -492,27 +488,8 @@ class TestProtoconfClass:
     @pytest.mark.parametrize('max_payload, policies, result', protoconf_tests)
     def test_from_payload(self, max_payload, policies, result):
         pc = Protoconf.read(BytesIO(bytes.fromhex(result)).read)
-        assert pc.max_payload == max_payload
+        assert pc.max_payload_length == max_payload
         assert pc.stream_policies == policies
-
-    @pytest.mark.parametrize('N', (0, 1))
-    def test_bad_field_count(self, N):
-        raw = bytearray(Protoconf(2_000_000, [b'Default']).payload())
-        raw[0] = N
-        with pytest.raises(ProtocolError):
-            Protoconf.read(BytesIO(raw).read)
-
-    def test_bad_max_payload(self):
-        raw = Protoconf(Protoconf.LEGACY_MAX_PAYLOAD - 1, [b'Default']).payload()
-        with pytest.raises(ProtocolError):
-            Protoconf.read(BytesIO(raw).read)
-
-    def test_logging(self, caplog):
-        raw = bytearray(Protoconf(2_000_000, [b'Default']).payload())
-        raw[0] = 3
-        with caplog.at_level('WARNING'):
-            Protoconf.read(BytesIO(raw).read)
-        assert 'unexpected field count' in caplog.text
 
 
 class Dribble:
@@ -1360,26 +1337,35 @@ class TestProtoconf:
                                            send_protoconf=False) as session:
                 listener_session = await listening_session(listening_node)
                 assert listener_session.their_protoconf is None
+                session.protoconf.max_payload_length = 1024 * 1024 * 2
+                assert session.protoconf.max_inv_elements() == 58254
+                session.protoconf.max_payload_length = 1024 * 1024
+                assert session.protoconf.max_inv_elements() == 29127
                 await session.send_protoconf()
                 await pause()
                 assert listener_session.their_protoconf == session.protoconf
                 await session.close()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize('force', (True, False))
-    async def test_duplicate(self, client_node, listening_node, caplog, force):
+    async def test_duplicate(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as session:
-                    await session.send_protoconf()
-                    if force:
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   send_protoconf=False) as session:
+                        await session.send_protoconf()
+                        with caplog.at_level(logging.WARNING):
+                            await session.send_protoconf()
+                        await pause()
+                        assert in_caplog(caplog, 'protoconf message already sent')
+                        assert not in_caplog(caplog, 'duplicate protoconf')
+                        # Force it
                         session.protoconf_sent = False
-                    await session.send_protoconf()
-                    await pause()
-                    await session.close()
+                        await session.send_protoconf()
+                        await pause()
+                        await session.close()
 
-        assert in_caplog(caplog, 'duplicate protoconf') is force
+        assert in_caplog(caplog, 'duplicate protoconf')
 
     @pytest.mark.asyncio
     async def test_excess(self, client_node, listening_node, caplog):
@@ -1410,6 +1396,86 @@ class TestProtoconf:
                     await session.close()
 
         assert in_caplog(caplog, 'corrupt protoconf message')
+
+    @pytest.mark.asyncio
+    async def test_no_fields(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   send_protoconf=False) as session:
+                        await session.send_message(MessageHeader.PROTOCONF, b'\0')
+                        await pause()
+                        await session.close()
+
+        assert in_caplog(caplog, 'fatal protocol error: protoconf message must have '
+                         'at least one field')
+
+    @pytest.mark.asyncio
+    async def test_one_field(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           send_protoconf=False) as session:
+                protoconf = Protoconf(1024 * 1024, [b'Default'])
+                payload = pack_varint(1) + pack_le_uint32(protoconf.max_payload_length)
+                await session.send_message(MessageHeader.PROTOCONF, payload)
+                await pause()
+                listener_session = await listening_session(listening_node)
+                assert listener_session.their_protoconf == protoconf
+                await session.close()
+
+    @pytest.mark.asyncio
+    async def test_too_many_fields(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as session:
+                    payload = pack_varint(3) + session.protoconf.payload()[1:] + b'0'
+                    await session.send_message(MessageHeader.PROTOCONF, payload)
+                    await pause()
+                    listener = await listening_session(listening_node)
+                    # Assert still processed
+                    assert listener.their_protoconf == session.protoconf
+                    await session.close()
+
+        assert in_caplog(caplog, 'protoconf message has field count of 3')
+
+    @pytest.mark.asyncio
+    async def test_bad_max_payload_length(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   send_protoconf=False) as session:
+                        session.protoconf.max_payload_length = 1024 * 1024 - 1
+                        await session.send_protoconf()
+                        await pause()
+                        await session.close()
+
+        assert in_caplog(caplog, 'protoconf message has invalid max payload length of 1,048,575')
+
+    @pytest.mark.asyncio
+    async def test_oversized_protoconf_message(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                MAX = 1024 * 1024 - 10
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as session:
+                    session.protoconf.stream_policies = [b'0' * MAX]
+                    assert len(session.protoconf.payload()) == 1024 * 1024
+                    await session.send_protoconf()
+                    await pause()
+                    await session.close()
+
+                with pytest.raises(ConnectionResetError):
+                    async with client_node.connect(listening_node.service,
+                                                   send_protoconf=False) as session:
+                        session.protoconf.stream_policies = [b'0' * (MAX + 1)]
+                        await session.send_protoconf()
+                        await pause()
+                        await session.close()
+
+        assert in_caplog(caplog, 'fatal protocol error: oversized protoconf message')
 
 
 class TestPing:

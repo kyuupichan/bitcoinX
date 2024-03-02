@@ -29,7 +29,7 @@ from .misc import prefixed_logger
 from .net import NetAddress
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
-    pack_varbytes, unpack_port,
+    pack_varbytes, varint_len, unpack_port,
     read_varbytes, read_varint, read_le_int32, read_le_uint32, read_le_uint64, read_le_int64,
     pack_list, read_list,
 )
@@ -270,41 +270,47 @@ class BitcoinService:
 
 @dataclass
 class Protoconf:
-    LEGACY_MAX_PAYLOAD = 1024 * 1024
+    LEGACY_MAX_PAYLOAD_LENGTH = 1024 * 1024
+    DEFAULT_MAX_PAYLOAD_LENGTH = 2 * 1024 * 1024
 
-    max_payload: int
+    max_payload_length: int
     stream_policies: Sequence[bytes]
 
     def max_inv_elements(self):
-        return (self.max_payload - 9) // (4 + 32)
+        count = self.max_payload_length // (4 + 32)
+        size = count * (4 + 32) + varint_len(count)
+        return count if size <= self.max_payload_length else count - 1
 
     def payload(self):
         field_count = 2
         return b''.join((
             pack_varint(field_count),
-            pack_le_uint32(self.max_payload),
+            pack_le_uint32(self.max_payload_length),
             pack_varbytes(b','.join(self.stream_policies)),
         ))
 
     @classmethod
     def default(cls):
-        return cls(5_000_000, [b'Default'])
+        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [b'Default'])
 
     @classmethod
     def read(cls, read, logger=None):
         logger = logger or logging
         field_count = read_varint(read)
-        if field_count < 2:
-            raise ProtocolError('bad field count {field_count} in protoconf message')
-        if field_count != 2:
-            logger.warning('unexpected field count {field_count:,d} in protoconf message')
+        if not field_count:
+            raise ProtocolError(f'protoconf message must have at least one field', is_fatal=True)
+        if field_count > 2:
+            logger.warning(f'protoconf message has field count of {field_count:,d}')
 
-        max_payload = read_le_uint32(read)
-        if max_payload < Protoconf.LEGACY_MAX_PAYLOAD:
-            raise ProtocolError(f'invalid max payload {max_payload:,d} in protconf message')
-
-        stream_policies = read_varbytes(read)
-        return Protoconf(max_payload, stream_policies.split(b','))
+        max_payload_length = read_le_uint32(read)
+        if max_payload_length < Protoconf.LEGACY_MAX_PAYLOAD_LENGTH:
+            raise ProtocolError('protoconf message has invalid max payload length of '
+                                f'{max_payload_length:,d}', is_fatal=True)
+        if field_count > 1:
+            stream_policies = read_varbytes(read)
+        else:
+            stream_policies = b'Default'
+        return Protoconf(max_payload_length, stream_policies.split(b','))
 
 
 @dataclass
@@ -1226,8 +1232,10 @@ class Session:
 
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
+        if len(payload.payload) > Protoconf.LEGACY_MAX_PAYLOAD_LENGTH:
+            raise ProtocolError('oversized protoconf message', is_fatal=True)
         if self.their_protoconf:
-            raise ProtocolError('duplicate protoconf message received')
+            raise ProtocolError('duplicate protoconf message received', is_fatal=True)
         self.their_protoconf = self.unpack_payload(
             payload, partial(Protoconf.read, logger=self.logger))
 
