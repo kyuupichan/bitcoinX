@@ -298,7 +298,7 @@ class Protoconf:
         logger = logger or logging
         field_count = read_varint(read)
         if not field_count:
-            raise ProtocolError(f'protoconf message must have at least one field', is_fatal=True)
+            raise ProtocolError('protoconf message must have at least one field', is_fatal=True)
         if field_count > 2:
             logger.warning(f'protoconf message has field count of {field_count:,d}')
 
