@@ -36,7 +36,7 @@ from .packing import (
 
 
 __all__ = (
-    'BitcoinService', 'ServiceFlags', 'Protoconf', 'MessageHeader', 'Node', 'Session',
+    'BitcoinService', 'ServiceFlags', 'Protoconf', 'MessageHeader', 'Node', 'Association',
 )
 
 #
@@ -221,8 +221,7 @@ class BitcoinService:
                  protocol_version=None,
                  start_height=0,
                  relay=True,
-                 timestamp=None,
-                 assoc_id=None):
+                 timestamp=None):
         from bitcoinx import _version_str
 
         self.address = (NetAddress('::', 0, check_port=False) if address is None else
@@ -233,7 +232,6 @@ class BitcoinService:
         self.start_height = start_height
         self.relay = relay
         self.timestamp = timestamp
-        self.assoc_id = assoc_id
 
     def __eq__(self, other):
         return self.address == other.address
@@ -264,7 +262,7 @@ class BitcoinService:
             f'BitcoinService({self.address}, services={self.services!r}, '
             f'user_agent={self.user_agent!r}, protocol_version={self.protocol_version}, '
             f'start_height={self.start_height:,d} relay={self.relay} '
-            f'timestamp={self.timestamp}, assoc_id={self.assoc_id!r})'
+            f'timestamp={self.timestamp})'
         )
 
 
@@ -361,18 +359,19 @@ def read_version(service, read):
     service.start_height = read_le_int32(read)
     # Relay is optional, defaulting to True
     service.relay = read(1) != b'\0'
-    # Association ID is optional.  We set it to None if not provided.
+    # Association ID is optional, if one is not provided a PackingError with message
+    # ending in 1 bytes will be raised.
     try:
-        service.assoc_id = read_varbytes(read)
+        assoc_id = read_varbytes(read)
     except PackingError as e:
         if not str(e).endswith('1 bytes'):
             raise
-        service.assoc_id = None
+        assoc_id = None
 
-    return (our_address, our_services, nonce)
+    return (our_address, our_services, nonce, assoc_id)
 
 
-def version_payload(service, remote_service, nonce):
+def version_payload(service, remote_service, nonce, assoc_id):
     '''Create a version message payload.
 
     If self.timestamp is None, then the current time is used.
@@ -386,8 +385,6 @@ def version_payload(service, remote_service, nonce):
     else:
         remote_service_packed = remote_service.pack()
 
-    assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
-
     return b''.join((
         pack_le_int32(service.protocol_version),
         pack_le_uint64(service.services),
@@ -398,7 +395,7 @@ def version_payload(service, remote_service, nonce):
         pack_varbytes(service.user_agent.encode()),
         pack_le_int32(service.start_height),
         pack_byte(service.relay),
-        assoc_id,
+        b'' if assoc_id is None else pack_varbytes(assoc_id),
     ))
 
 
@@ -552,7 +549,7 @@ class GetheadersRequest:
 
 class Connection:
     '''A single network connection.  Each connection has its own outgoing message queue
-    because a Session decides which connection an outgoing message is sent on.
+    because an Association decides which connection an outgoing message is sent on.
     '''
 
     def __init__(self, reader, writer):
@@ -618,16 +615,17 @@ async def services_from_seeds(network, timeout=20.0):
 
 class Node:
     '''A node talks on a single network, e.g., mainnet.  Connections to peers are represented
-    by a Session, which references the Node to manage unified state.
+    by an Association, which references the Node to manage unified state.
     '''
 
     def __init__(self, service, headers):
         self.service = service
         self.headers = headers
         self.network = headers.network
-        self.sessions = set()
+        self.assocs = set()
         self.sync_headers_lock = asyncio.Lock()
         self.remote_services = set()
+        self.enable_multistreams = True
         self.logger = prefixed_logger('Node', str(self.network))
 
     def random_nonce(self):
@@ -637,86 +635,88 @@ class Node:
                 return nonce
 
     def is_our_nonce(self, nonce):
-        return any(session.is_outgoing and nonce == session.nonce
-                   for session in self.sessions)
+        return any(assoc.is_outgoing and nonce == assoc.nonce
+                   for assoc in self.assocs)
 
-    def register_session(self, session):
-        self.sessions.add(session)
+    def register_assoc(self, assoc):
+        self.assocs.add(assoc)
 
-    def unregister_session(self, session):
-        self.sessions.remove(session)
+    def unregister_assoc(self, assoc):
+        self.assocs.remove(assoc)
 
     def listen(self, **kwargs):
-        '''Listen for incoming connections, and for each incoming connection create a session to
-        manage it.
+        '''Listen for incoming connections, and for each incoming connection create an association
+        to manage it.
         '''
         async def on_client_connection(reader, writer):
-            session = None
+            assoc = None
             try:
                 host, port = writer.transport.get_extra_info('peername')
                 service = BitcoinService(address=NetAddress(host, port))
                 connection = Connection(reader, writer)
-                async with self.session(service, connection, **kwargs) as session:
+                async with self.association(service, connection, **kwargs) as assoc:
+                    print('CLIENT CONNECTED')
                     pass
             except Exception as e:
-                if session:
-                    session.logger.exception(f'fatal error: {e}')
+                # The association should already have logged the error
+                if assoc:
+                    assoc.logger.exception(str(e))
                 else:
                     self.logger.exception(f'error from {host}:{port}: {e}')
 
         host = str(self.service.address.host)
         port = self.service.address.port
-        return Listener(asyncio.start_server(on_client_connection, host, port), self.sessions)
+        return Listener(asyncio.start_server(on_client_connection, host, port), self.assocs)
 
-    def session(self, remote_service, connection, **kwargs):
-        session_cls = kwargs.pop('session_cls', Session)
-        return session_cls(self, remote_service, connection, **kwargs)
+    def association(self, remote_service, connection, **kwargs):
+        assoc_cls = kwargs.pop('assoc_cls', Association)
+        return assoc_cls(self, remote_service, connection, **kwargs)
 
     def connect(self, remote_service, **kwargs):
-        '''A client session, that when used as an async context manager, establishes an outgoing
+        '''A client assoc, that when used as an async context manager, establishes an outgoing
         connection to remote_service (a BitcoinService instance).
         '''
-        return self.session(remote_service, None, **kwargs)
+        return self.association(remote_service, None, **kwargs)
 
     async def remote_service(self):
         if self.remote_services:
             return self.remote_services.pop()
         return None
 
-    async def outgoing_session(self, on_session, **kwargs):
+    async def outgoing_assoc(self, on_assoc, **kwargs):
         while True:
             service = await self.remote_service()
             if not service:
                 return
-            session = None
+            assoc = None
             try:
-                async with self.connect(service, **kwargs) as session:
-                    done = await on_session(session)
-                    await session.close()
+                async with self.connect(service, **kwargs) as assoc:
+                    done = await on_assoc(assoc)
+                    await assoc.close()
                     if done:
                         return
             except ConnectionResetError as e:
-                session.logger.info(str(e))
+                assoc.logger.info(str(e))
             except Exception as e:
-                if session:
-                    session.logger.exception('connection lost')
+                if assoc:
+                    assoc.logger.exception('connection lost')
                 else:
                     self.logger.debug(f'failed to connect to {service.address}: {e}')
 
-    async def establish_outgoing_sessions(self, on_session, limit, **kwargs):
+    async def establish_outgoing_assocs(self, on_assoc, limit, **kwargs):
         if not self.remote_services:
             self.remote_services = await services_from_seeds(self.network)
         async with TaskGroup() as group:
             for _ in range(limit):
-                group.create_task(self.outgoing_session(on_session, **kwargs))
+                group.create_task(self.outgoing_assoc(on_assoc, **kwargs))
 
 
 class Listener:
-    '''A helper for Node.listen() to ensure sessions are cleaned up properly.'''
+    '''A helper for Node.listen() to ensure assocs are cleaned up properly.'''
 
-    def __init__(self, start_server, sessions):
+    def __init__(self, start_server, assocs):
         self.start_server = start_server
-        self.sessions = sessions
+        self.assocs = assocs
         self.server = None
 
     async def __aenter__(self):
@@ -727,19 +727,15 @@ class Listener:
         # Python bug in 3.12 causes this to hang sometimes, sigh.
         async with ignore_after(0.1):
             await self.server.wait_closed()
-        # Wait until incoming sessions finish
-        while any(not session.is_outgoing for session in self.sessions):
+        # Wait until incoming assocs finish
+        while any(not assoc.is_outgoing for assoc in self.assocs):
             await asyncio.sleep(0)
 
 
-class Session:
-    '''Represents a single logical connection (an association) to a peer.  A logical
-    connection can consist of multiple separate streams connection to a peer.  The sesion
-    determines on which connection a message is sent, and tracks state across the
-    associated connections.
-
-    If a client wishes to maintain several associations with the same address, it must be
-    done with separate Session objects.
+class Association:
+    '''Represents a single logical connection (an association) to a peer.  An association can
+    consist of multiple separate streams connection to a peer.  The association determines
+    on which connection to send a message, and tracks state across the connections.
     '''
 
     # Maximum number of headers to send and receive in a headers message
@@ -762,7 +758,13 @@ class Session:
         # The main connection.  For now, the only one.
         self.connection = connection
         self.is_outgoing = connection is None
-        self.streaming_min_size = 10_000_000
+
+        # Create an association ID for outgoing connections
+        if self.is_outgoing and node.enable_multistreams:
+            self.assoc_id = self.random_assoc_id()
+        else:
+            self.assoc_id = None
+        self.nonce = self.node.random_nonce()
 
         # FIXME: move some things to BitcoinService
         # State
@@ -774,7 +776,6 @@ class Session:
         self.ping_sent = Event()
         self.headers_synced = False
         self.their_protoconf = None
-        self.nonce = self.node.random_nonce()
         self.their_tip = node.headers.genesis_header
         self.sendheaders_sent = False
         self.they_prefer_headers = False
@@ -789,8 +790,9 @@ class Session:
         self._perform_handshake = perform_handshake
         # If True, a sendheaders message is sent
         self.we_prefer_headers = we_prefer_headers
+        self.streaming_min_size = 10_000_000
 
-        # Session management
+        # Association management
         self.group = None
 
         # Logging
@@ -798,6 +800,12 @@ class Session:
         self.logger = prefixed_logger(f'{node.network}:{OI}', str(remote_service.address))
         self.debug = self.logger.isEnabledFor(logging.DEBUG)
         self.unhandled_commands = set()
+
+    @classmethod
+    def random_assoc_id(cls):
+        # Despite the docs saying the assoc_id is opaque, it enforces a certain format and
+        # errors if not in that format...  (duh)
+        return b'\0' + os.urandom(16)
 
     async def __aenter__(self):
         # FIXME: make this robust
@@ -807,8 +815,8 @@ class Session:
             async with timeout_after(self.CONNECTION_TIMEOUT):
                 self.connection = Connection(reader, writer)
         self.group = TaskGroup()
-        await self.setup_session()
-        self.node.register_session(self)
+        await self.setup_association()
+        self.node.register_assoc(self)
         return self
 
     async def __aexit__(self, _et, exc, _tb):
@@ -818,7 +826,7 @@ class Session:
             raise e.exceptions[0] from None
         finally:
             self.group = None
-            self.node.unregister_session(self)
+            self.node.unregister_assoc(self)
             await self.connection.close()
 
     async def close(self):
@@ -867,8 +875,8 @@ class Session:
         self.group.create_task(self.recv_messages_loop(connection))
         self.group.create_task(self.send_messages_loop(connection))
 
-    async def setup_session(self):
-        # Every session needs these
+    async def setup_association(self):
+        # Every association needs these
         self.group.create_task(self.ping_loop())
         self.group.create_task(self.check_pongs_loop())
         self.group.create_task(self.check_handshake_timeout())
@@ -888,14 +896,14 @@ class Session:
         self.logger.info(headline)
         self.logger.info(f'    user_agent={serv.user_agent} services={serv.services!r}')
         self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
-                         f'relay={serv.relay} timestamp={serv.timestamp} assoc_id={serv.assoc_id}')
+                         f'relay={serv.relay} timestamp={serv.timestamp}')
 
     async def version_payload(self):
         # Send version message with our current height
         our_service = self.node.service
         our_service.start_height = await self.node.headers.height()
         self.log_service_details(our_service, 'sending version message:')
-        return version_payload(our_service, self.remote_service.address, self.nonce)
+        return version_payload(our_service, self.remote_service.address, self.nonce, self.assoc_id)
 
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
@@ -1007,10 +1015,8 @@ class Session:
             raise ConnectionResetError('connection closed remotely') from None
         except ProtocolError as e:
             if e.is_fatal:
-                self.logger.error(f'fatal protocol error: {e}')
-                await self.group.cancel_remaining()
-            else:
-                self.logger.error(f'protocol error: {e}')
+                raise
+            self.logger.error(str(e))
 
     async def handle_message(self, header, payload):
         # This routine handles non-streaming messages, whether standard or extended
@@ -1199,9 +1205,19 @@ class Session:
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
         self.version_received.set()
-        _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service))
+        _, _, nonce, assoc_id = self.unpack_payload(payload,
+                                                    partial(read_version, self.remote_service))
         if self.node.is_our_nonce(nonce):
             raise ProtocolError('connected to ourself', is_fatal=True)
+        if self.is_outgoing:
+            if assoc_id != self.assoc_id:
+                if assoc_id is None:
+                    # Peer doesn't handle associations, or has them disabled
+                    self.assoc_id = None
+                else:
+                    raise ProtocolError('version message has wrong assoc_id', is_fatal=True)
+        elif self.node.enable_multistreams:
+            self.assoc_id = assoc_id
         self.can_send_ext_messages = (self.remote_service.protocol_version
                                       >= LARGE_MESSAGES_PROTOCOL_VERSION)
         self.log_service_details(self.remote_service, 'received version message:')
