@@ -136,10 +136,7 @@ def run_test_with_headers(test_func, network=Bitcoin):
         async with asqlite3.connect(':memory:') as conn:
             # Create two copies of the tables with different schemas, to ensure the code
             # always queries with the appropriate schema
-            headers1 = Headers(conn, 'main', BitcoinTestnet)
-            await headers1.initialize()
-            await conn.execute("ATTACH ':memory:' as second")
-            headers = Headers(conn, 'second', network)
+            headers = Headers(conn, network)
             await headers.initialize()
             await test_func(headers)
 

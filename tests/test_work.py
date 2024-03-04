@@ -276,7 +276,7 @@ def test_regtest():
 def run_test_with_headers(test_func, network):
     async def run():
         async with asqlite3.connect(':memory:') as conn:
-            headers = Headers(conn, 'main', network)
+            headers = Headers(conn, network)
             await headers.initialize()
             await test_func(headers)
 

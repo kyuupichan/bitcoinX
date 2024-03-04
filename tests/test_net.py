@@ -770,7 +770,7 @@ listen_host = IPv4Address('127.0.0.1')
 @pytest_asyncio.fixture
 async def listening_headers():
     async with asqlite3.connect(':memory:') as conn:
-        headers = Headers(conn, 'main', Bitcoin)
+        headers = Headers(conn, Bitcoin)
         await headers.initialize()
         yield headers
 
@@ -801,7 +801,7 @@ async def listening_session(listening_node):
 @pytest_asyncio.fixture
 async def client_headers():
     async with asqlite3.connect(':memory:') as conn:
-        headers = Headers(conn, 'main', Bitcoin)
+        headers = Headers(conn, Bitcoin)
         await headers.initialize()
         yield headers
 
