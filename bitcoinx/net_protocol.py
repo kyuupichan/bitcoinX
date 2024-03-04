@@ -271,6 +271,7 @@ class Protoconf:
     LEGACY_MAX_PAYLOAD_LENGTH = 1024 * 1024
     DEFAULT_MAX_PAYLOAD_LENGTH = 2 * 1024 * 1024
     DEFAULT_POLICY = b'Default'
+    BLOCKPRIORITY_POLICY = b'BlockPriority'
 
     max_payload_length: int
     stream_policies: Sequence[bytes]
@@ -310,11 +311,6 @@ class Protoconf:
         else:
             stream_policies = cls.DEFAULT_POLICY
         return Protoconf(max_payload_length, stream_policies.split(b','))
-
-
-class StreamKind(IntEnum):
-    GENERAL = 0
-    DATA1 = 1
 
 
 @dataclass
@@ -551,6 +547,11 @@ class GetheadersRequest:
     async def wait(self):
         '''Wait for the request to be responded to or time out.'''
         await self.event.wait()
+
+
+class StreamKind(IntEnum):
+    GENERAL = 0
+    DATA1 = 1
 
 
 class Stream:
@@ -825,8 +826,9 @@ class Association:
         self.group = TaskGroup()
         # Outgoing connections must create a stream; incoming connections have one already
         if self.is_outgoing:
-            await self.establish_stream(StreamKind.GENERAL)
-        self.group.create_task(self.setup_association())
+            await self.establish_stream(StreamKind.GENERAL, None)
+        else:
+            self.group.create_task(self.setup_stream(StreamKind.GENERAL))
         self.node.register_assoc(self)
         return self
 
@@ -875,63 +877,76 @@ class Association:
                 await self.ping_sent.wait()
                 self.ping_sent.clear()
 
-    async def check_handshake_timeout(self):
-        try:
-            async with timeout_after(self.HANDSHAKE_TIMEOUT):
-                await self.verack_received.wait()
-        except TimeoutError:
-            raise ProtocolError('handshake timed out', is_fatal=True)
+    async def setup_stream(self, kind):
+        stream = self.streams[kind]
 
-    async def setup_stream(self, stream):
         # Every stream needs message processing loops
         self.group.create_task(self.recv_messages_loop(stream))
         self.group.create_task(self.send_messages_loop(stream))
 
-    async def setup_association(self):
-        await self.setup_stream(self.streams[StreamKind.GENERAL])
+        if kind == StreamKind.GENERAL:
+            # Every association needs these
+            self.group.create_task(self.ping_loop())
+            self.group.create_task(self.check_pongs_loop())
 
-        # Every association needs these
-        self.group.create_task(self.ping_loop())
-        self.group.create_task(self.check_pongs_loop())
-        self.group.create_task(self.check_handshake_timeout())
+            # Setup the handshake unless customised
+            if self._perform_handshake:
+                self.group.create_task(self.perform_handshake())
+            if self._send_protoconf:
+                self.group.create_task(self.send_protoconf())
+            if self.we_prefer_headers:
+                self.group.create_task(self.send_sendheaders())
+        else:
+            self.group.create_task(self.perform_stream_handshake())
 
-        # Setup the handshake unless customised
-        if self._perform_handshake:
-            self.group.create_task(self.perform_handshake())
-        if self._send_protoconf:
-            self.group.create_task(self.send_protoconf())
-        if self.we_prefer_headers:
-            self.group.create_task(self.send_sendheaders())
-
-    async def establish_stream(self, stream_type):
+    async def establish_stream(self, stream_kind, stream_policy):
         address = self.remote_service.address
         stream = None
         try:
             async with timeout_after(self.CONNECTION_TIMEOUT):
                 reader, writer = await open_connection(str(address.host), address.port)
             stream = Stream(reader, writer)
-            self.streams[stream_type] = stream
+            self.streams[stream_kind] = stream
+            self.group.create_task(self.setup_stream(stream_kind))
             # Avoid cleanup in the finally clause
             stream = None
         finally:
             if stream:
-                self.streams.pop(stream_type)
+                self.streams.pop(stream_kind)
                 await stream.close()
 
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
-        if self.is_outgoing:
-            await self.send_version()
-            # Outoing connections wait now
-            await self.version_received.wait()
-        else:
-            # Incoming connections wait for version message first
-            await self.version_received.wait()
-            await self.send_version()
+        try:
+            async with timeout_after(self.HANDSHAKE_TIMEOUT):
+                if self.is_outgoing:
+                    await self.send_version()
+                    # Outoing connections wait now
+                    await self.version_received.wait()
+                else:
+                    # Incoming connections wait for version message first
+                    await self.version_received.wait()
+                    await self.send_version()
 
-        # Send verack.
-        await self.send_verack()
+                # Send verack.
+                await self.send_verack()
+                await self.verack_received.wait()
+        except TimeoutError:
+            raise ProtocolError('handshake timed out', is_fatal=True) from None
+
+    def maybe_open_streams(self):
+        # Ignore unless a common association ID is established
+        if not self.assoc_id:
+            return
+        common_policies = set(self.protoconf.stream_policies).intersection(
+            self.their_protoconf.stream_policies)
+        common_str = ','.join(policy.decode() for policy in common_policies)
+        self.logger.info(f'common stream policies: {common_str}')
+        for policy in (Protoconf.BLOCKPRIORITY_POLICY, ):
+            if policy in common_policies:
+                self.group.create_task(establish_stream(StreamKind.DATA1, policy))
+                break
 
     #
     # Sending messages

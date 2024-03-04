@@ -985,7 +985,7 @@ class TestHandshake:
     @pytest.mark.asyncio
     async def test_listener_waits_for_version_message(self, client_node, listening_node):
         class ClientAssociation(Association):
-            async def setup_association(self):
+            async def setup_stream(self, kind):
                 pass
 
         async with listening_node.listen() as assoc:
