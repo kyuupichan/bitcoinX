@@ -655,7 +655,6 @@ class Node:
                 service = BitcoinService(address=NetAddress(host, port))
                 connection = Connection(reader, writer)
                 async with self.association(service, connection, **kwargs) as assoc:
-                    print('CLIENT CONNECTED')
                     pass
             except Exception as e:
                 # The association should already have logged the error

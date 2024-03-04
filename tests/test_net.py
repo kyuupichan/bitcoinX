@@ -1481,7 +1481,6 @@ class TestPing:
 
         class ListenerAssociation(Association):
             async def on_ping(self, payload):
-                print('GOT PING')
                 await super().on_ping(payload)
                 nonlocal pings_received
                 pings_received += 1
@@ -1497,9 +1496,7 @@ class TestPing:
 
             async with client_node.connect(listening_node.service,
                                            assoc_cls=ClientAssociation) as assoc:
-                print('HERE')
                 await asyncio.sleep(0.04)
-                print('HERE2')
                 await assoc.close()
 
         assert pings_received >= 2
