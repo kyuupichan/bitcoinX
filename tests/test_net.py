@@ -902,7 +902,7 @@ class TestBasic:
                         payload = b''
                         header = MessageHeader.std_bytes(BitcoinTestnet.magic,
                                                          MessageHeader.SENDHEADERS, payload)
-                        await assoc.connection.outgoing_messages.put((header, payload))
+                        await assoc.stream.outgoing_messages.put((header, payload))
                         await pause()
                         await assoc.close()
 
@@ -920,7 +920,7 @@ class TestBasic:
                     # Mess up the checksum
                     header = bytearray(header)
                     header[-1] ^= 0x0f
-                    await assoc.connection.outgoing_messages.put((header, payload))
+                    await assoc.stream.outgoing_messages.put((header, payload))
                     await pause()
                     await assoc.close()
 
@@ -991,7 +991,7 @@ class TestHandshake:
                 async with client_node.connect(listening_node.service,
                                                assoc_cls=ClientAssociation) as assoc:
                     async with timeout_after(0.1):
-                        await assoc.connection.recv_exactly(1)
+                        await assoc.stream.recv_exactly(1)
 
     @pytest.mark.asyncio
     async def test_client_sends_version_message(self, client_node, listening_node):
@@ -1071,7 +1071,7 @@ class TestHandshake:
                         else:
                             header = MessageHeader.std_bytes(assoc.node.network.magic,
                                                              command, payload)
-                        await assoc.connection.outgoing_messages.put((header, payload))
+                        await assoc.stream.outgoing_messages.put((header, payload))
 
                     if first:
                         await sendheaders()
@@ -1253,8 +1253,8 @@ class TestExtendedMessages:
     @pytest.mark.asyncio
     async def test_send_streaming(self, client_node, listening_node, caplog):
         class ListeningAssociation(Association):
-            async def on_zombie_streaming(self, connection, size):
-                parts = [chunk async for chunk in connection.recv_chunks(size)]
+            async def on_zombie_streaming(self, stream, size):
+                parts = [chunk async for chunk in stream.recv_chunks(size)]
                 self.zombie_payload = b''.join(parts)
 
             async def on_zombie(self, payload):
