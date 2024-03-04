@@ -891,19 +891,6 @@ class Association:
         # Setup connection-related tasks
         await self.setup_connection(self.connection)
 
-    def log_service_details(self, serv, headline):
-        self.logger.info(headline)
-        self.logger.info(f'    user_agent={serv.user_agent} services={serv.services!r}')
-        self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
-                         f'relay={serv.relay} timestamp={serv.timestamp}')
-
-    async def version_payload(self):
-        # Send version message with our current height
-        our_service = self.node.service
-        our_service.start_height = await self.node.headers.height()
-        self.log_service_details(our_service, 'sending version message:')
-        return version_payload(our_service, self.remote_service.address, self.nonce, self.assoc_id)
-
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
@@ -1198,6 +1185,10 @@ class Association:
             self.logger.info('ignoring getheaders for unknown block '
                              f'{hash_to_hex_str(locator.hash_stop)}')
 
+    #
+    # Handshake
+    #
+
     async def on_version(self, payload):
         '''Called when a version message is received.   remote_service has been updated as
         they report it (except the address is unchanged).'''
@@ -1220,6 +1211,19 @@ class Association:
         self.can_send_ext_messages = (self.remote_service.protocol_version
                                       >= LARGE_MESSAGES_PROTOCOL_VERSION)
         self.log_service_details(self.remote_service, 'received version message:')
+
+    def log_service_details(self, serv, headline):
+        self.logger.info(headline)
+        self.logger.info(f'    user_agent={serv.user_agent} services={serv.services!r}')
+        self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
+                         f'relay={serv.relay} timestamp={serv.timestamp}')
+
+    async def version_payload(self):
+        # Send version message with our current height
+        our_service = self.node.service
+        our_service.start_height = await self.node.headers.height()
+        self.log_service_details(our_service, 'sending version message:')
+        return version_payload(our_service, self.remote_service.address, self.nonce, self.assoc_id)
 
     async def send_version(self):
         if self.version_sent:
@@ -1245,6 +1249,10 @@ class Association:
         await self.send_message(MessageHeader.VERACK, b'')
         self.verack_sent.set()
 
+    #
+    # protoconf
+    #
+
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
         if len(payload.payload) > Protoconf.LEGACY_MAX_PAYLOAD_LENGTH:
@@ -1261,6 +1269,10 @@ class Association:
         self.protoconf_sent = True
         await self.send_message(MessageHeader.PROTOCONF, self.protoconf.payload())
 
+    #
+    # sendheaders
+    #
+
     async def on_sendheaders(self, payload):
         if self.they_prefer_headers:
             raise ProtocolError('duplicate sendheaders message')
@@ -1276,6 +1288,10 @@ class Association:
             self.we_prefer_headers = True
             await self.send_message(MessageHeader.SENDHEADERS, b'')
 
+    #
+    # addr, getaddr
+    #
+
     async def on_getaddr(self, payload):
         self.unpack_payload(payload, read_nothing)
         await self.send_message(MessageHeader.ADDR, pack_addr_payload(await self.services()))
@@ -1286,7 +1302,9 @@ class Association:
     async def on_addr(self, payload):
         self.unpack_payload(payload, read_addrs)
 
-    # TODO: send_addr
+    #
+    # ping, pong
+    #
 
     async def on_ping(self, payload):
         nonce = self.unpack_payload(payload, read_nonce)

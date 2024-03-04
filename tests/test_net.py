@@ -1139,7 +1139,8 @@ class TestHandshake:
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service, assoc_cls=ClientAssociation):
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ClientAssociation):
                     pass
 
         assert in_caplog(caplog, 'protocol error: duplicate verack message')
@@ -1240,11 +1241,11 @@ class TestExtendedMessages:
                         # We should not accept sending a large message
                         with pytest.raises(RuntimeError):
                             await assoc.send_message(MessageHeader.PROTOCONF, payload,
-                                                       force_extended=True)
+                                                     force_extended=True)
                         # Override the check
                         assoc.can_send_ext_messages = True
                         await assoc.send_message(MessageHeader.PROTOCONF, payload,
-                                                   force_extended=True)
+                                                 force_extended=True)
                         pass
 
         assert in_caplog(caplog, 'ext message received but invalid')
@@ -1266,10 +1267,10 @@ class TestExtendedMessages:
                     listener_assoc = await listening_assoc(listening_node)
                     listener_assoc.streaming_min_size = 200
                     await assoc.send_message(_command('zombie'),
-                                               (achunks(payload, 100), len(payload)))
+                                             (achunks(payload, 100), len(payload)))
                     await assoc.send_message(_command('zombie'), payload)
                     await assoc.send_message(_command('ghoul'),
-                                               (achunks(payload, 100), len(payload)))
+                                             (achunks(payload, 100), len(payload)))
                     await pause()
                     assert listener_assoc.zombie_payload == payload
                     assert listener_assoc.zombie_payload2 == payload
@@ -2026,7 +2027,7 @@ class TestAssociations:
 
         async with listening_node.listen(assoc_cls=ListenerAssociation):
             with pytest.raises(ProtocolError) as e:
-                async with client_node.connect(listening_node.service) as assoc:
+                async with client_node.connect(listening_node.service):
                     await pause()
 
         assert str(e.value) == 'fatal protocol error: version message has wrong assoc_id'

@@ -171,7 +171,7 @@ class TestHeaders:
             simple_headers = await self.insert_first_headers(headers, 10)
             cursor = await headers.conn.cursor()
             cursor.row_factory = asqlite3.Row
-            await cursor.execute(f'SELECT * from Headers ORDER BY height')
+            await cursor.execute('SELECT * from Headers ORDER BY height')
             result = await cursor.fetchall()
             assert len(result) == len(simple_headers)
             for row, (height, header) in zip(result, enumerate(simple_headers)):
