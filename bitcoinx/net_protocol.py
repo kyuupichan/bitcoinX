@@ -658,9 +658,9 @@ class Node:
             assoc = None
             try:
                 host, port = writer.transport.get_extra_info('peername')
-                service = BitcoinService(address=NetAddress(host, port))
+                remote_service = BitcoinService(address=NetAddress(host, port))
                 stream = Stream(reader, writer)
-                async with self.association(service, stream, **kwargs) as assoc:
+                async with self.association(remote_service, stream, **kwargs) as assoc:
                     pass
             except Exception as e:
                 # The association should already have logged the error
@@ -822,14 +822,11 @@ class Association:
         return b'\0' + os.urandom(16)
 
     async def __aenter__(self):
-        # FIXME: make this robust
-        if self.is_outgoing:
-            address = self.remote_service.address
-            reader, writer = await open_connection(str(address.host), address.port)
-            async with timeout_after(self.CONNECTION_TIMEOUT):
-                self.streams[StreamKind.GENERAL] = Stream(reader, writer)
         self.group = TaskGroup()
-        await self.setup_association()
+        # Outgoing connections must create a stream; incoming connections have one already
+        if self.is_outgoing:
+            await self.establish_stream(StreamKind.GENERAL)
+        self.group.create_task(self.setup_association())
         self.node.register_assoc(self)
         return self
 
@@ -886,11 +883,13 @@ class Association:
             raise ProtocolError('handshake timed out', is_fatal=True)
 
     async def setup_stream(self, stream):
-        # Every connection needs these
+        # Every stream needs message processing loops
         self.group.create_task(self.recv_messages_loop(stream))
         self.group.create_task(self.send_messages_loop(stream))
 
     async def setup_association(self):
+        await self.setup_stream(self.streams[StreamKind.GENERAL])
+
         # Every association needs these
         self.group.create_task(self.ping_loop())
         self.group.create_task(self.check_pongs_loop())
@@ -904,9 +903,20 @@ class Association:
         if self.we_prefer_headers:
             self.group.create_task(self.send_sendheaders())
 
-        # Setup stream-related tasks
-        for stream in self.streams.values():
-            await self.setup_stream(stream)
+    async def establish_stream(self, stream_type):
+        address = self.remote_service.address
+        stream = None
+        try:
+            async with timeout_after(self.CONNECTION_TIMEOUT):
+                reader, writer = await open_connection(str(address.host), address.port)
+            stream = Stream(reader, writer)
+            self.streams[stream_type] = stream
+            # Avoid cleanup in the finally clause
+            stream = None
+        finally:
+            if stream:
+                self.streams.pop(stream_type)
+                await stream.close()
 
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
