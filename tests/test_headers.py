@@ -138,8 +138,8 @@ class TestHeaders:
             values = [0] * len(COLNAMES)
             values[COLNAMES.index(colname)] = getattr(header, colname)
             with pytest.raises(asqlite3.IntegrityError) as e:
-                await headers.conn.execute(headers.fixup_sql(
-                    f'INSERT INTO $S.Headers({colnames}) VALUES ({questions});'), values)
+                await headers.conn.execute(
+                    f'INSERT INTO Headers({colnames}) VALUES ({questions});', values)
             # An sqlite3 module bug with Python before 3.11 (I think) sometimes gives an
             # error string of "not an error".  Googling shows a few cases online.
             assert str(e.value) in ('not and error',
@@ -151,8 +151,7 @@ class TestHeaders:
     def test_null_insertions(self, colname):
         async def test(headers):
             with pytest.raises(asqlite3.IntegrityError) as e:
-                await headers.conn.execute(headers.fixup_sql(
-                    f'INSERT INTO $S.Headers({colname}) VALUES (NULL);'))
+                await headers.conn.execute(f'INSERT INTO Headers({colname}) VALUES (NULL);')
             assert 'NOT NULL constraint failed' in str(e.value)
 
         if colname != 'prev_hdr_id':
@@ -172,7 +171,7 @@ class TestHeaders:
             simple_headers = await self.insert_first_headers(headers, 10)
             cursor = await headers.conn.cursor()
             cursor.row_factory = asqlite3.Row
-            await cursor.execute(f'SELECT * from {headers.schema}.Headers ORDER BY height')
+            await cursor.execute(f'SELECT * from Headers ORDER BY height')
             result = await cursor.fetchall()
             assert len(result) == len(simple_headers)
             for row, (height, header) in zip(result, enumerate(simple_headers)):

@@ -23,10 +23,6 @@ __all__ = (
 )
 
 
-def blob_literal(raw):
-    return f"x'{raw.hex()}'"
-
-
 @dataclass
 class SimpleHeader:
     '''A trivial wrapper of a raw header.'''
@@ -136,7 +132,7 @@ class Chain:
 
 
 CREATE_HEADERS = '''
-  CREATE TABLE $S.Headers (
+  CREATE TABLE Headers (
     hdr_id       INTEGER PRIMARY KEY,
     prev_hdr_id  INTEGER REFERENCES Headers(hdr_id),
     height       INTEGER NOT NULL,
@@ -150,9 +146,9 @@ CREATE_HEADERS = '''
     nonce        INTEGER NOT NULL
   );'''
 CREATE_HEIGHT_INDEX = '''
-  CREATE INDEX $S.HeightIdx ON Headers(height);'''
+  CREATE INDEX HeightIdx ON Headers(height);'''
 CREATE_HEADERS_VIEW = '''
-  CREATE VIEW $S.HeadersView(hdr_id, height, chain_id, chain_work, hash, version,
+  CREATE VIEW HeadersView(hdr_id, height, chain_id, chain_work, hash, version,
                                    prev_hash, merkle_root, timestamp, bits, nonce)
     AS SELECT hdr_id, height, chain_id, chain_work, hash, version, iif(
       prev_hdr_id ISNULL,
@@ -161,14 +157,14 @@ CREATE_HEADERS_VIEW = '''
     ), merkle_root, timestamp, bits, nonce
     FROM Headers H;'''
 CREATE_CHAINS = '''
-  CREATE TABLE $S.Chains (
+  CREATE TABLE Chains (
     chain_id         INTEGER PRIMARY KEY,
     parent_chain_id  INTEGER REFERENCES Chains(chain_id),
     base_hdr_id      INTEGER NOT NULL,
     tip_hdr_id       INTEGER NOT NULL
   );'''
 CREATE_SEGMENTS = '''
-  CREATE VIEW $S.Segments AS
+  CREATE VIEW Segments AS
     WITH RECURSIVE
       Segments(chain_id, anc_chain_id, first_hdr_id, last_hdr_id) AS (
         SELECT chain_id, chain_id, base_hdr_id, tip_hdr_id
@@ -184,58 +180,57 @@ CREATE_SEGMENTS = '''
       (SELECT height FROM Headers WHERE hdr_id=Segments.last_hdr_id) AS last_height
         FROM Segments;'''
 CREATE_INVALID_HEADERS = '''
-  CREATE TABLE $S.InvalidHeaders(
+  CREATE TABLE InvalidHeaders(
     hdr_id INTEGER PRIMARY KEY REFERENCES Headers(hdr_id)
   );'''
 INSERT_GENESIS = '''
-  INSERT INTO $S.Headers(prev_hdr_id, height, chain_id, chain_work, hash,
+  INSERT INTO Headers(prev_hdr_id, height, chain_id, chain_work, hash,
                                merkle_root, version, timestamp, bits, nonce)
     VALUES (NULL, 0, 1, ?, ?, ?, ?, ?, ?, ?);'''
 
 # Queries for insert_header_chain()
-HASH_EXISTS_SQL = 'SELECT hdr_id FROM $S.Headers WHERE hash=?;'
+HASH_EXISTS_SQL = 'SELECT hdr_id FROM Headers WHERE hash=?;'
 PREV_HEADER_SQL = '''
     SELECT hdr_id, height + 1, chain_work, chain_id,
-        iif(EXISTS(SELECT 1 FROM $S.HeadersView WHERE prev_hash=?),
-            (SELECT 1 + max(chain_id) FROM $S.Chains), chain_id)
-      FROM $S.Headers WHERE hash=?;'''
+        iif(EXISTS(SELECT 1 FROM HeadersView WHERE prev_hash=?),
+            (SELECT 1 + max(chain_id) FROM Chains), chain_id)
+      FROM Headers WHERE hash=?;'''
 INSERT_HEADER_SQL = '''
-      INSERT INTO $S.Headers(prev_hdr_id, height, chain_id,
+      INSERT INTO Headers(prev_hdr_id, height, chain_id,
             chain_work, hash, merkle_root, version, timestamp, bits, nonce)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);'''
 INSERT_CHAIN_SQL = '''
-   INSERT INTO $S.Chains(chain_id, parent_chain_id, base_hdr_id, tip_hdr_id)
+   INSERT INTO Chains(chain_id, parent_chain_id, base_hdr_id, tip_hdr_id)
      VALUES (?, ?, ?, ?);'''
-UPDATE_CHAIN_TIP_SQL = 'UPDATE $S.Chains SET tip_hdr_id=? WHERE chain_id=?;'
+UPDATE_CHAIN_TIP_SQL = 'UPDATE Chains SET tip_hdr_id=? WHERE chain_id=?;'
 
 # other queries
 MTP_SQL = '''
   WITH RECURSIVE Timestamps(ts, hdr_id) AS (
-    SELECT timestamp, prev_hdr_id FROM $S.Headers WHERE chain_id=? AND height=?
+    SELECT timestamp, prev_hdr_id FROM Headers WHERE chain_id=? AND height=?
     UNION ALL
-    SELECT timestamp, prev_hdr_id FROM $S.Headers, Timestamps
+    SELECT timestamp, prev_hdr_id FROM Headers, Timestamps
        WHERE Headers.hdr_id=Timestamps.hdr_id LIMIT 11
   )
   SELECT ts FROM Timestamps ORDER BY ts;'''
 QUERY_HEADERS = '''
   SELECT version, prev_hash, merkle_root, timestamp, bits, nonce, height, chain_id, chain_work
-  FROM $S.HeadersView WHERE $WHERE;'''
+  FROM HeadersView WHERE $WHERE;'''
 HEADER_AT_HEIGHT = QUERY_HEADERS.replace('$WHERE', '''
   height=? AND chain_id=(SELECT anc_chain_id FROM Segments
     WHERE ? BETWEEN first_height AND last_height AND chain_id=?)''')
 HEADER_FROM_HASH = QUERY_HEADERS.replace('$WHERE', 'hash=?')
 HEADER_FROM_MERKLE_ROOT = QUERY_HEADERS.replace('$WHERE', 'merkle_root=?')
 CHAIN_TIPS_HAVING_BLOCK_HASH = QUERY_HEADERS.replace('$WHERE', '''
-  hdr_id IN (SELECT tip_hdr_id FROM $S.Chains C, $S.Segments S, $S.Headers H
+  hdr_id IN (SELECT tip_hdr_id FROM Chains C, Segments S, Headers H
     WHERE H.Hash=? AND H.chain_id=S.anc_chain_id AND C.chain_id=S.chain_id
       AND H.height BETWEEN S.first_height AND S.last_height)''')
 
 
 class Headers:
 
-    def __init__(self, conn, schema, network):
+    def __init__(self, conn, network):
         self.conn = conn
-        self.schema = schema
         self.network = network
         self.logger = prefixed_logger('Headers', str(network))
         self.genesis_header = None    # An instance of Header
@@ -244,19 +239,6 @@ class Headers:
         self.cache_by_chain = defaultdict(dict)
         # Map from new chain ID to (parent_chain_id, new_id_first_height) pairs
         self.chain_info = {}
-        self.hash_exists_sql = self.fixup_sql(HASH_EXISTS_SQL)
-        self.prev_header_sql = self.fixup_sql(PREV_HEADER_SQL)
-        self.insert_header_sql = self.fixup_sql(INSERT_HEADER_SQL)
-        self.insert_chain_sql = self.fixup_sql(INSERT_CHAIN_SQL)
-        self.update_chain_tip_sql = self.fixup_sql(UPDATE_CHAIN_TIP_SQL)
-        self.header_at_height_sql = self.fixup_sql(HEADER_AT_HEIGHT)
-        self.header_from_hash_sql = self.fixup_sql(HEADER_FROM_HASH)
-        self.header_from_merkle_root_sql = self.fixup_sql(HEADER_FROM_MERKLE_ROOT)
-        self.chain_tips_having_block_hash = self.fixup_sql(CHAIN_TIPS_HAVING_BLOCK_HASH)
-        self.mtp_sql = self.fixup_sql(MTP_SQL)
-
-    def fixup_sql(self, sql):
-        return sql.replace('$S', self.schema)
 
     async def initialize(self):
         '''If the database is new, create the tables and views needed, and insert the genesis
@@ -278,13 +260,12 @@ class Headers:
         async with self.conn:
             for sql in (CREATE_HEADERS, CREATE_HEIGHT_INDEX, CREATE_HEADERS_VIEW,
                         CREATE_CHAINS, CREATE_SEGMENTS, CREATE_INVALID_HEADERS):
-                await execute(self.fixup_sql(sql))
+                await execute(sql)
 
-            cursor = await self.conn.execute(
-                self.fixup_sql(INSERT_GENESIS), (
-                    int_to_le_bytes(gh.work()), gh.hash, gh.merkle_root,
-                    gh.version, gh.timestamp, gh.bits, gh.nonce))
-            await execute(self.insert_chain_sql, (1, None, cursor.lastrowid, cursor.lastrowid))
+            cursor = await self.conn.execute(INSERT_GENESIS,
+                                             (int_to_le_bytes(gh.work()), gh.hash, gh.merkle_root,
+                                              gh.version, gh.timestamp, gh.bits, gh.nonce))
+            await execute(INSERT_CHAIN_SQL, (1, None, cursor.lastrowid, cursor.lastrowid))
 
         self.genesis_header = await self.header_from_hash(gh.hash)
         self.logger.info('database tables created')
@@ -307,7 +288,7 @@ class Headers:
         # Find the first header not in the DB; this will generally be the first one
         execute = self.conn.execute
         for n, header in enumerate(headers):
-            cursor = await execute(self.hash_exists_sql, (header.hash, ))
+            cursor = await execute(HASH_EXISTS_SQL, (header.hash, ))
             if not await cursor.fetchone():
                 if n:
                     headers = headers[n:]
@@ -318,7 +299,7 @@ class Headers:
         # If the headers connect they all have the same chain ID, which is that of the
         # prior header if it is a tip, otherwise we need a new chain ID.
         prev_hash = headers[0].prev_hash
-        cursor = await execute(self.prev_header_sql, (prev_hash, prev_hash))
+        cursor = await execute(PREV_HEADER_SQL, (prev_hash, prev_hash))
         result = await cursor.fetchone()
         if not result:
             raise MissingHeader(f'no header with hash {hash_to_hex_str(prev_hash)}')
@@ -348,7 +329,7 @@ class Headers:
                 if check_work:
                     await self.pow_checker.check(self, header)
 
-                cursor = await execute(self.insert_header_sql,
+                cursor = await execute(INSERT_HEADER_SQL,
                                        (tip_hdr_id, height, chain_id, le_work, header.hash,
                                         header.merkle_root, header.version, header.timestamp,
                                         header.bits, header.nonce))
@@ -356,12 +337,12 @@ class Headers:
                 cache[height] = header
                 tip_hdr_id = cursor.lastrowid
                 if create_new_chain:
-                    await execute(self.insert_chain_sql, (chain_id, parent_chain_id, tip_hdr_id,
-                                                          tip_hdr_id))
+                    await execute(INSERT_CHAIN_SQL, (chain_id, parent_chain_id, tip_hdr_id,
+                                                     tip_hdr_id))
                     create_new_chain = False
         finally:
             if count:
-                await execute(self.update_chain_tip_sql, (tip_hdr_id, chain_id))
+                await execute(UPDATE_CHAIN_TIP_SQL, (tip_hdr_id, chain_id))
             await self.conn.commit()
             if create_new_chain:
                 del self.chain_info[chain_id]
@@ -382,15 +363,14 @@ class Headers:
 
     async def header_from_hash(self, block_hash):
         '''Look up the block hash and return the block header.'''
-        return await self._query_headers(self.header_from_hash_sql, (block_hash, ), False)
+        return await self._query_headers(HEADER_FROM_HASH, (block_hash, ), False)
 
     async def header_from_merkle_root(self, merkle_root):
         '''Look up the merkle root and return the block header.'''
-        return await self._query_headers(self.header_from_merkle_root_sql, (merkle_root, ), False)
+        return await self._query_headers(HEADER_FROM_MERKLE_ROOT, (merkle_root, ), False)
 
     async def _db_header_at_height(self, chain_id, height):
-        return await self._query_headers(self.header_at_height_sql,
-                                         (height, height, chain_id), False)
+        return await self._query_headers(HEADER_AT_HEIGHT, (height, height, chain_id), False)
 
     async def header_at_height_cached(self, chain_id, height):
         '''Return the header on chain_id at height, or None.'''
@@ -432,7 +412,7 @@ class Headers:
     async def chains(self, block_hash=None):
         '''Return all chains containing the given block.  All chains if block_hash is None.'''
         block_hash = block_hash or self.genesis_header.hash
-        tips = await self._query_headers(self.chain_tips_having_block_hash, (block_hash, ), True)
+        tips = await self._query_headers(CHAIN_TIPS_HAVING_BLOCK_HASH, (block_hash, ), True)
         return [Chain(tip.chain_id, tip) for tip in tips]
 
     async def longest_chain(self, block_hash=None):
@@ -464,7 +444,7 @@ class Headers:
         '''
         # Timings show that this sqlite query more than twice as fast as using the block
         # cache.  It seems to be slightly faster to take the middle entry in Python.
-        cursor = await self.conn.execute(self.mtp_sql, (chain_id, height))
+        cursor = await self.conn.execute(MTP_SQL, (chain_id, height))
         timestamps = await cursor.fetchall()   # These are already sorted
         if not timestamps:
             raise MissingHeader(f'no header found at height {height:,d} on chain {chain_id}')
