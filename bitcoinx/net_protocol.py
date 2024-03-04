@@ -760,9 +760,18 @@ class Association:
                  send_protoconf=True, we_prefer_headers=True, protoconf=None):
         self.node = node
         self.remote_service = remote_service
-        # The main stream.  For now, the only one.
-        self.stream = stream
-        self.is_outgoing = stream is None
+
+        if stream is None:
+            self.is_outgoing = True
+            self.streams = {}
+        else:
+            self.is_outgoing = False
+            self.streams = {
+                StreamKind.GENERAL: stream,
+            }
+
+        # Maps messages to stream kinds
+        self.message_map = {}
 
         # Create an association ID for outgoing connections
         if self.is_outgoing and node.enable_multistreams:
@@ -814,11 +823,11 @@ class Association:
 
     async def __aenter__(self):
         # FIXME: make this robust
-        if self.stream is None:
+        if self.is_outgoing:
             address = self.remote_service.address
             reader, writer = await open_connection(str(address.host), address.port)
             async with timeout_after(self.CONNECTION_TIMEOUT):
-                self.stream = Stream(reader, writer)
+                self.streams[StreamKind.GENERAL] = Stream(reader, writer)
         self.group = TaskGroup()
         await self.setup_association()
         self.node.register_assoc(self)
@@ -832,7 +841,8 @@ class Association:
         finally:
             self.group = None
             self.node.unregister_assoc(self)
-            await self.stream.close()
+            for stream in self.streams.values():
+                await stream.close()
 
     async def close(self):
         if self.group:
@@ -895,7 +905,8 @@ class Association:
             self.group.create_task(self.send_sendheaders())
 
         # Setup stream-related tasks
-        await self.setup_stream(self.stream)
+        for stream in self.streams.values():
+            await self.setup_stream(stream)
 
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
@@ -912,12 +923,13 @@ class Association:
         # Send verack.
         await self.send_verack()
 
-    def stream_for_command(self, _command):
-        return self.stream
-
     #
     # Sending messages
     #
+
+    def stream_for_message(self, command):
+        '''Return the stream on which to send a command.'''
+        return self.streams[self.message_map.get(command, StreamKind.GENERAL)]
 
     async def send_message(self, command, payload, *, force_extended=False):
         '''Send a command and its payload.  If force_extended is True, it is sent as an extended
@@ -928,7 +940,7 @@ class Association:
         used as an asynchronous generator to send the payload in chunks.  Currently, no
         sanity check is done that the payload we send is actually of the claimed length.
         '''
-        stream = self.stream_for_command(command)
+        stream = self.stream_for_message(command)
         if force_extended or isinstance(payload, tuple):
             if not self.can_send_ext_messages:
                 raise RuntimeError('extended messages cannot be sent')

@@ -899,10 +899,11 @@ class TestBasic:
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service) as assoc:
                         await assoc.verack_sent.wait()
+                        command = MessageHeader.SENDHEADERS
                         payload = b''
-                        header = MessageHeader.std_bytes(BitcoinTestnet.magic,
-                                                         MessageHeader.SENDHEADERS, payload)
-                        await assoc.stream.outgoing_messages.put((header, payload))
+                        header = MessageHeader.std_bytes(BitcoinTestnet.magic, command, payload)
+                        stream = assoc.stream_for_message(command)
+                        await stream.outgoing_messages.put((header, payload))
                         await pause()
                         await assoc.close()
 
@@ -914,13 +915,14 @@ class TestBasic:
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service) as assoc:
                     await assoc.verack_sent.wait()
+                    command = MessageHeader.SENDHEADERS
                     payload = b''
-                    header = MessageHeader.std_bytes(client_node.network.magic,
-                                                     MessageHeader.SENDHEADERS, payload)
+                    header = MessageHeader.std_bytes(client_node.network.magic, command, payload)
                     # Mess up the checksum
                     header = bytearray(header)
                     header[-1] ^= 0x0f
-                    await assoc.stream.outgoing_messages.put((header, payload))
+                    stream = assoc.stream_for_message(command)
+                    await stream.outgoing_messages.put((header, payload))
                     await pause()
                     await assoc.close()
 
@@ -991,7 +993,8 @@ class TestHandshake:
                 async with client_node.connect(listening_node.service,
                                                assoc_cls=ClientAssociation) as assoc:
                     async with timeout_after(0.1):
-                        await assoc.stream.recv_exactly(1)
+                        stream = assoc.stream_for_message(MessageHeader.VERSION)
+                        await stream.recv_exactly(1)
 
     @pytest.mark.asyncio
     async def test_client_sends_version_message(self, client_node, listening_node):
@@ -1071,7 +1074,8 @@ class TestHandshake:
                         else:
                             header = MessageHeader.std_bytes(assoc.node.network.magic,
                                                              command, payload)
-                        await assoc.stream.outgoing_messages.put((header, payload))
+                        stream = assoc.stream_for_message(command)
+                        await stream.outgoing_messages.put((header, payload))
 
                     if first:
                         await sendheaders()
