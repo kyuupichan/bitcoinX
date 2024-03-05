@@ -605,6 +605,8 @@ class Stream:
         self.is_active = False
         self.event = None
         self.outgoing_messages = Queue()
+        self.sent_bytes = 0
+        self.recd_bytes = 0
 
     def commands(self):
         return StreamPolicy.commands(self.policy)
@@ -619,12 +621,15 @@ class Stream:
 
     def send(self, data):
         self.writer.write(data)
+        self.sent_bytes += len(data)
 
     async def drain(self):
         await self.writer.drain()
 
     async def recv_exactly(self, nbytes):
-        return await self.reader.readexactly(nbytes)
+        result = await self.reader.readexactly(nbytes)
+        self.recd_bytes += nbytes
+        return result
 
     async def recv_chunks(self, size, chunk_size=None):
         '''Read size bytes, returning it in chunks.  An asynchronous iterator.'''
@@ -1002,8 +1007,8 @@ class Association:
         # Ignore unless a common association ID is established
         if not self.assoc_id:
             return
-        common_policies = set(self.protoconf.stream_policies).intersection(
-            self.their_protoconf.stream_policies)
+        common_policies = sorted(set(self.protoconf.stream_policies).intersection(
+            self.their_protoconf.stream_policies))
         self.logger.info(f'common stream policies: [{", ".join(common_policies)}]')
         for policy in StreamPolicy.ORDERED:
             if policy in common_policies:
@@ -1443,8 +1448,6 @@ class Association:
     #
 
     def streamack_payload(self, kind):
-        assert self.assoc_id is not None
-        assert kind in {StreamKind.DATA1}
         return pack_varbytes(self.assoc_id) + pack_byte(kind)
 
     def createstrm_payload(self, kind, policy):
@@ -1461,7 +1464,6 @@ class Association:
         return assoc_id, kind
 
     def read_createstrm_payload(self, read):
-        # Return an (assoc_id, stream_kind, policy) tuple.
         assoc_id, kind = self.read_streamack_payload(read)
         policy = read_varbytes(read)
         return (assoc_id, kind, policy)
@@ -1472,10 +1474,14 @@ class Association:
         '''
         if not self.assoc_id:
             raise RuntimeError('common association ID is not established')
-        if stream not in self.streams or stream.kind == StreamKind.GENERAL or stream.is_active:
-            raise RuntimeError('invalid stream passed to send_createstrm')
+        if stream not in self.streams:
+            raise RuntimeError('send_createstrm: stream is not ours')
+        if stream.kind == StreamKind.GENERAL:
+            raise RuntimeError('send_createstrm: cannot use a GENERAL stream')
+        if stream.is_active:
+            raise RuntimeError('send_createstrm: stream is active')
         if stream.event:
-            raise ProtocolError('createstrm message already pending')
+            raise RuntimeError('createstrm message already pending')
         payload = self.createstrm_payload(stream.kind, stream.policy)
         stream.event = asyncio.Event()
         try:
@@ -1490,7 +1496,7 @@ class Association:
         assoc_id, kind, policy = self.unpack_payload(payload, self.read_createstrm_payload)
         assoc = self.node.lookup_association(assoc_id)
         if not assoc:
-            raise ProtocolError(f'createstrm for unknown assoc_id {assoc_id}', is_fatal=True)
+            raise ProtocolError('received createstrm for unknown assoc_id', is_fatal=True)
         assert len(self.streams) == 1
         stream = self.streams[0]
         await assoc.transfer_stream(stream, kind, policy)
@@ -1505,7 +1511,7 @@ class Association:
         assoc_id, kind = self.unpack_payload(payload, self.read_streamack_payload)
         # Detect if this streamack does not correspond to a createstrm message we sent
         if assoc_id != self.assoc_id:
-            raise ProtocolError(f'streamack for unknown assoc_id {assoc_id}', is_fatal=True)
+            raise ProtocolError('received streamack for unknown assoc_id', is_fatal=True)
         for stream in self.streams:
             if stream.kind == kind and stream.event is not None:
                 assert not stream.is_active

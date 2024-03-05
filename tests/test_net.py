@@ -20,7 +20,7 @@ from bitcoinx import (
 )
 from bitcoinx.misc import chunks
 from bitcoinx.net_protocol import (
-    ServicePacking, BlockLocator, version_payload, read_version, _command,
+    ServicePacking, BlockLocator, Stream, StreamKind, version_payload, read_version, _command,
     pack_headers_payload, read_headers, read_addrs, services_from_seeds,
 )
 from bitcoinx.aiolib import timeout_after, ignore_after, TaskGroup
@@ -1999,7 +1999,9 @@ class TestSyncHeaders:
         assert await client_node.headers.height() == height
 
 
-class TestAssociations:
+class TestStreams:
+    '''Tests for CREATESTRM message and assoc_id negotiation.'''
+
     @pytest.mark.asyncio
     async def test_assoc_id_echoed(self, client_node, listening_node):
         async with listening_node.listen():
@@ -2048,7 +2050,7 @@ class TestAssociations:
                 await assoc.close()
 
     @pytest.mark.asyncio
-    async def test_create_multistream(self, client_node, listening_node, caplog):
+    async def test_multistream_works(self, client_node, listening_node, caplog):
         protoconf = Protoconf(2_000_000, ['Default', 'BlockPriority'])
         with caplog.at_level(logging.INFO):
             async with listening_node.listen(protoconf=protoconf):
@@ -2061,9 +2063,137 @@ class TestAssociations:
                     assert len(listening_node.assocs) == 1
                     lassoc = list(listening_node.assocs)[0]
                     assert len(lassoc.streams) == 2
+
+                    # Test a fake block is sent on the second stream
+                    sent_bytes = [stream.sent_bytes for stream in assoc.streams]
+                    await assoc.send_message(MessageHeader.BLOCK, bytes(1000))
+                    await pause(0.01)
+                    assert assoc.streams[1].sent_bytes > sent_bytes[1] + 1000
+                    assert assoc.streams[0].sent_bytes < sent_bytes[0] + 100
+
+                    # Test a fake tx is sent on the first stream
+                    sent_bytes = [stream.sent_bytes for stream in assoc.streams]
+                    await assoc.send_message(MessageHeader.TX, bytes(1000))
+                    await pause(0.01)
+                    assert assoc.streams[1].sent_bytes == sent_bytes[1]
+                    assert assoc.streams[0].sent_bytes > sent_bytes[0] + 1000
+
                     await assoc.close()
 
-        print_caplog(caplog)
-        assert in_caplog(caplog, 'common stream policies: [Default, BlockPriority]')
+        assert in_caplog(caplog, 'common stream policies: [BlockPriority, Default]')
         assert in_caplog(caplog, 'implementing stream policy BlockPriority')
         assert in_caplog(caplog, 'streamack received, activating stream <StreamKind.DATA1: 1>')
+
+    @pytest.mark.asyncio
+    async def test_createstrm_no_common_assoc_id(self, client_node, listening_node):
+        async with listening_node.listen():
+            listening_node.enable_multistreams = False
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                with pytest.raises(RuntimeError) as e:
+                    await assoc.send_createstrm(assoc.streams[0])
+                assert str(e.value) == 'common association ID is not established'
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_createstrm_GENERAL(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                stream = Stream(None, None, StreamKind.GENERAL, 'policy')
+                assoc.streams.append(stream)
+                with pytest.raises(RuntimeError) as e:
+                    await assoc.send_createstrm(stream)
+                assoc.streams.pop()
+                assert str(e.value) == 'send_createstrm: cannot use a GENERAL stream'
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_createstrm_active(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                stream = Stream(None, None, StreamKind.DATA1, 'policy')
+                stream.is_active = True
+                assoc.streams.append(stream)
+                with pytest.raises(RuntimeError) as e:
+                    await assoc.send_createstrm(stream)
+                assoc.streams.pop()
+                assert str(e.value) == 'send_createstrm: stream is active'
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_createstrm_not_ours(self, client_node, listening_node):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                stream = Stream(None, None, StreamKind.DATA1, 'policy')
+                with pytest.raises(RuntimeError) as e:
+                    await assoc.send_createstrm(stream)
+                assert str(e.value) == 'send_createstrm: stream is not ours'
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_createstrm_pending(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_createstrm(self, payload):
+                await pause(0.1)
+
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                await assoc.open_stream(StreamKind.DATA1, 'policy')
+                stream = assoc.streams[1]
+                await pause(0.02)
+                with pytest.raises(RuntimeError) as e:
+                    await assoc.send_createstrm(stream)
+                assert str(e.value) == 'createstrm message already pending'
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_createstrm_after_version(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_message(MessageHeader.CREATESTRM, b'')
+                    await pause()
+                    assert in_caplog(caplog, 'received createstrm after version message')
+                    assert in_caplog(caplog, 'connection closed remotely')
+
+    @pytest.mark.asyncio
+    async def test_createstrm_bad_assoc_id(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as assoc:
+                    await assoc.verack_received.wait()
+                    assoc.assoc_id = bytes(17)
+                    await assoc.open_stream(StreamKind.DATA1, 'policy')
+                    await pause()
+                    assert in_caplog(caplog, 'received createstrm for unknown assoc_id')
+                    assert in_caplog(caplog, 'connection closed remotely')
+
+    @pytest.mark.asyncio
+    async def test_streamack_no_common_assoc_id(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            listening_node.enable_multistreams = False
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as assoc:
+                    await assoc.verack_received.wait()
+                    assoc.assoc_id = assoc.random_assoc_id()
+                    await assoc.send_streamack(StreamKind.DATA1)
+                    await pause()
+                    assert in_caplog(caplog, 'received streamack for unknown assoc_id')
+                    assert in_caplog(caplog, 'connection closed remotely')
+
+    @pytest.mark.asyncio
+    async def test_unexpected_streamack(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_streamack(StreamKind.DATA1)
+                    await pause()
+                    assert in_caplog(caplog, 'fatal protocol error: unexpected streamack '
+                                     'for stream kind <StreamKind.DATA1: 1>')
+                    assert in_caplog(caplog, 'connection closed remotely')
