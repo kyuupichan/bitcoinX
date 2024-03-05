@@ -378,7 +378,7 @@ pack_ts_tests = (
 )
 
 X_address = NetAddress.from_string('1.2.3.4:5678')
-X_protoconf = Protoconf(2_000_000, [b'Default', b'BlockPriority'])
+X_protoconf = Protoconf(2_000_000, ['Default', 'BlockPriority'])
 X_service = BitcoinService(
     services=ServiceFlags.NODE_NETWORK,
     address=X_address,
@@ -472,7 +472,7 @@ class TestBitcoinService:
 
 
 protoconf_tests = [
-    (2_000_000, [b'foo', b'bar'], '0280841e0007666f6f2c626172'),
+    (2_000_000, ['foo', 'bar'], '0280841e0007666f6f2c626172'),
 ]
 
 
@@ -985,16 +985,15 @@ class TestHandshake:
     @pytest.mark.asyncio
     async def test_listener_waits_for_version_message(self, client_node, listening_node):
         class ClientAssociation(Association):
-            async def setup_stream(self, kind, policy):
-                pass
+            async def activate_stream(self, stream):
+                async with timeout_after(0.1):
+                    await stream.recv_exactly(1)
 
-        async with listening_node.listen() as assoc:
+        async with listening_node.listen():
             with pytest.raises(TimeoutError):
                 async with client_node.connect(listening_node.service,
-                                               assoc_cls=ClientAssociation) as assoc:
-                    async with timeout_after(0.1):
-                        stream = assoc.stream_for_message(MessageHeader.VERSION)
-                        await stream.recv_exactly(1)
+                                               assoc_cls=ClientAssociation):
+                    pass
 
     @pytest.mark.asyncio
     async def test_client_sends_version_message(self, client_node, listening_node):
@@ -1224,7 +1223,7 @@ class TestExtendedMessages:
                                            send_protoconf=False) as assoc:
                 listener_assoc = await listening_assoc(listening_node)
                 assert listener_assoc.their_protoconf is None
-                assoc.our_protoconf = Protoconf(2_000_000, [b'foo', b'bar'])
+                assoc.our_protoconf = Protoconf(2_000_000, ['foo', 'bar'])
                 payload = assoc.our_protoconf.payload()
                 await assoc.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
                 await pause()
@@ -1414,7 +1413,7 @@ class TestProtoconf:
         async with listening_node.listen():
             async with client_node.connect(listening_node.service,
                                            send_protoconf=False) as assoc:
-                protoconf = Protoconf(1024 * 1024, [b'Default'])
+                protoconf = Protoconf(1024 * 1024, ['Default'])
                 payload = pack_varint(1) + pack_le_uint32(protoconf.max_payload_length)
                 await assoc.send_message(MessageHeader.PROTOCONF, payload)
                 await pause()
@@ -1459,7 +1458,7 @@ class TestProtoconf:
                 MAX = 1024 * 1024 - 10
                 async with client_node.connect(listening_node.service,
                                                send_protoconf=False) as assoc:
-                    assoc.protoconf.stream_policies = [b'0' * MAX]
+                    assoc.protoconf.stream_policies = ['0' * MAX]
                     assert len(assoc.protoconf.payload()) == 1024 * 1024
                     await assoc.send_protoconf()
                     await pause()
@@ -1468,7 +1467,7 @@ class TestProtoconf:
                 with pytest.raises(ConnectionResetError):
                     async with client_node.connect(listening_node.service,
                                                    send_protoconf=False) as assoc:
-                        assoc.protoconf.stream_policies = [b'0' * (MAX + 1)]
+                        assoc.protoconf.stream_policies = ['0' * (MAX + 1)]
                         await assoc.send_protoconf()
                         await pause()
                         await assoc.close()

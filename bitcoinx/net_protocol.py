@@ -155,7 +155,9 @@ MessageHeader.STREAMACK = _command('streamack')
 MessageHeader.TX = _command('tx')
 MessageHeader.VERACK = _command('verack')
 MessageHeader.VERSION = _command('version')
-MessageHeader.HANDSHAKE_COMMANDS = {MessageHeader.VERSION, MessageHeader.VERACK}
+MessageHeader.HANDSHAKE_COMMANDS = {
+    MessageHeader.VERSION, MessageHeader.VERACK,
+}
 
 
 class ServiceFlags(IntFlag):
@@ -270,11 +272,9 @@ class BitcoinService:
 class Protoconf:
     LEGACY_MAX_PAYLOAD_LENGTH = 1024 * 1024
     DEFAULT_MAX_PAYLOAD_LENGTH = 2 * 1024 * 1024
-    DEFAULT_POLICY = b'Default'
-    BLOCKPRIORITY_POLICY = b'BlockPriority'
 
     max_payload_length: int
-    stream_policies: Sequence[bytes]
+    stream_policies: Sequence[str]
 
     def max_inv_elements(self):
         count = self.max_payload_length // (4 + 32)
@@ -286,12 +286,12 @@ class Protoconf:
         return b''.join((
             pack_varint(field_count),
             pack_le_uint32(self.max_payload_length),
-            pack_varbytes(b','.join(self.stream_policies)),
+            pack_varbytes(b','.join(policy.encode() for policy in self.stream_policies)),
         ))
 
     @classmethod
     def default(cls):
-        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [cls.DEFAULT_POLICY])
+        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [StreamPolicy.DEFAULT, ])
 
     @classmethod
     def read(cls, read, logger=None):
@@ -308,9 +308,13 @@ class Protoconf:
                                 f'{max_payload_length:,d}', is_fatal=True)
         if field_count > 1:
             stream_policies = read_varbytes(read)
+            try:
+                stream_policies = stream_policies.decode().split(',')
+            except UnicodeDecodeError:
+                raise PackingError from None
         else:
-            stream_policies = cls.DEFAULT_POLICY
-        return Protoconf(max_payload_length, stream_policies.split(b','))
+            stream_policies = [StreamPolicy.DEFAULT]
+        return Protoconf(max_payload_length, stream_policies)
 
 
 @dataclass
@@ -555,9 +559,35 @@ class GetheadersRequest:
 class StreamKind(IntEnum):
     GENERAL = 0
     DATA1 = 1
-    DATA2 = 1
-    DATA3 = 1
-    DATA4 = 1
+    DATA2 = 2
+    DATA3 = 3
+    DATA4 = 4
+
+
+class StreamPolicy:
+    DEFAULT = 'Default'
+    BLOCKPRIORITY = 'BlockPriority'
+    COMMANDS = {
+        BLOCKPRIORITY: {
+            MessageHeader.BLOCK,
+            MessageHeader.BLOCKTXN,
+            MessageHeader.CMPCTBLOCK,
+            MessageHeader.GETBLOCKTXN,
+        }
+    }
+    STREAM_KINDS = {
+        BLOCKPRIORITY: (StreamKind.DATA1, ),
+    }
+    # Implemented policies, in order
+    ORDERED = (BLOCKPRIORITY, )
+
+    @classmethod
+    def commands(cls, policy):
+        return cls.COMMANDS.get(policy, ())
+
+    @classmethod
+    def stream_kinds(cls, policy):
+        return cls.STREAM_KINDS.get(policy, ())
 
 
 class Stream:
@@ -565,10 +595,19 @@ class Stream:
     because an association decides which connection an outgoing message is sent on.
     '''
 
-    def __init__(self, reader, writer):
+    def __init__(self, reader, writer, kind, policy):
+        assert isinstance(kind, StreamKind)
+        assert isinstance(policy, str)
         self.reader = reader
         self.writer = writer
+        self.kind = kind
+        self.policy = policy
+        self.is_active = False
+        self.event = None
         self.outgoing_messages = Queue()
+
+    def commands(self):
+        return StreamPolicy.commands(self.policy)
 
     async def close(self):
         self.writer.close()
@@ -672,9 +711,9 @@ class Node:
             try:
                 host, port = writer.transport.get_extra_info('peername')
                 remote_service = BitcoinService(address=NetAddress(host, port))
-                stream = Stream(reader, writer)
-                async with self.association(remote_service, stream, **kwargs) as assoc:
-                    pass
+                async with self.association(remote_service, False, **kwargs) as assoc:
+                    stream = Stream(reader, writer, StreamKind.GENERAL, StreamPolicy.DEFAULT)
+                    await assoc.activate_stream(stream)
             except Exception as e:
                 # The association should already have logged the error
                 if assoc:
@@ -694,7 +733,7 @@ class Node:
         '''A client assoc, that when used as an async context manager, establishes an outgoing
         connection to remote_service (a BitcoinService instance).
         '''
-        return self.association(remote_service, None, **kwargs)
+        return self.association(remote_service, True, **kwargs)
 
     async def remote_service(self):
         if self.remote_services:
@@ -769,32 +808,21 @@ class Association:
     # After this amount of time, a getheaders request is assumed abandoned.
     GETHEADERS_TIMEOUT = 30
 
-    def __init__(self, node, remote_service, stream, perform_handshake=True,
+    def __init__(self, node, remote_service, is_outgoing, perform_handshake=True,
                  send_protoconf=True, we_prefer_headers=True, protoconf=None):
         self.node = node
         self.remote_service = remote_service
-
-        if stream is None:
-            self.is_outgoing = True
-            self.streams = {}
-        else:
-            self.is_outgoing = False
-            self.streams = {
-                StreamKind.GENERAL: stream,
-            }
-
-        # Maps messages to stream kinds
-        self.message_map = {}
-        self.streamack_events = {}
+        self.is_outgoing = is_outgoing
 
         # Association management
+        self.streams = []
+        self.group = TaskGroup()
+        self.nonce = self.node.random_nonce()
         # Create an association ID for outgoing connections
         if self.is_outgoing and node.enable_multistreams:
             self.assoc_id = self.random_assoc_id()
         else:
             self.assoc_id = None
-        self.group = None
-        self.nonce = self.node.random_nonce()
 
         # FIXME: move some things to BitcoinService
         # State
@@ -835,12 +863,8 @@ class Association:
         return b'\0' + os.urandom(16)
 
     async def __aenter__(self):
-        self.group = TaskGroup()
-        # Outgoing connections must create a stream; incoming connections have one already
         if self.is_outgoing:
-            await self.establish_stream(StreamKind.GENERAL, None)
-        else:
-            self.group.create_task(self.setup_stream(StreamKind.GENERAL, None))
+            await self.open_stream(StreamKind.GENERAL, StreamPolicy.DEFAULT)
         self.node.register_assoc(self)
         return self
 
@@ -850,14 +874,13 @@ class Association:
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
         finally:
-            self.group = None
             self.node.unregister_assoc(self)
-            for stream in self.streams.values():
+            for stream in self.streams:
                 await stream.close()
+            self.streams.clear()
 
     async def close(self):
-        if self.group:
-            await self.group.cancel_remaining()
+        await self.group.cancel_remaining()
 
     async def send_messages_loop(self, stream):
         '''Handle sending the queue of messages.'''
@@ -893,14 +916,34 @@ class Association:
     # Stream management
     #
 
-    async def setup_stream(self, kind, policy):
-        stream = self.streams[kind]
+    def check_stream_kind(self, kind, exc_cls):
+        if kind in (stream.kind for stream in self.streams):
+            raise exc_cls('association already has a {stream.kind} stream')
+        if not self.streams and kind != StreamKind.GENERAL:
+            raise exc_cls('first stream must be a {StreamKind.GENERAL} stream')
 
-        # Every stream needs message processing loops
+    def add_stream(self, stream):
+        self.check_stream_kind(stream.kind, RuntimeError)
+        self.streams.append(stream)
+
+    async def transfer_stream(self, stream, kind, policy):
+        '''Transfer a stream from another (ephemeral) association to this one.'''
+        assert stream.is_active
+        self.check_stream_kind(kind, partial(ProtocolError, is_fatal=True))
+        stream.kind = kind
+        stream.policy = policy
+        self.streams.append(stream)
+
+    async def activate_stream(self, stream):
+        '''Activate a stream by setting up its message processing loops, and performing
+        a handshake.'''
+        self.add_stream(stream)
+
+        # The message processing loops make the stream "live"
         self.group.create_task(self.recv_messages_loop(stream))
         self.group.create_task(self.send_messages_loop(stream))
 
-        if kind == StreamKind.GENERAL:
+        if stream.kind == StreamKind.GENERAL:
             # Every association needs these
             self.group.create_task(self.ping_loop())
             self.group.create_task(self.check_pongs_loop())
@@ -913,33 +956,24 @@ class Association:
             if self.we_prefer_headers:
                 self.group.create_task(self.send_sendheaders())
         else:
-            self.group.create_task(self.perform_stream_handshake(kind, policy))
+            self.group.create_task(self.perform_stream_handshake(stream))
 
-    async def establish_stream(self, stream_kind, stream_policy):
+    async def open_stream(self, kind, policy):
         address = self.remote_service.address
-        stream = None
-        try:
-            async with timeout_after(self.CONNECTION_TIMEOUT):
-                reader, writer = await open_connection(str(address.host), address.port)
-            stream = Stream(reader, writer)
-            self.streams[stream_kind] = stream
-            self.group.create_task(self.setup_stream(stream_kind, stream_policy))
-            # Avoid cleanup in the finally clause
-            stream = None
-        finally:
-            if stream:
-                self.streams.pop(stream_kind)
-                await stream.close()
+        async with timeout_after(self.CONNECTION_TIMEOUT):
+            reader, writer = await open_connection(str(address.host), address.port)
+        stream = Stream(reader, writer, kind, policy)
+        await self.activate_stream(stream)
 
-    async def perform_stream_handshake(self, kind, policy):
-        '''Perform the additional stream handshake.'''
+    async def perform_stream_handshake(self, stream):
+        '''Perform the stream handshake (outgoing only - an incoming stream connection doesn't
+        know it's a stream until it gets the createstream message).
+        '''
+        assert self.is_outgoing
         try:
             async with timeout_after(self.HANDSHAKE_TIMEOUT):
-                if self.is_outgoing:
-                    await self.send_createstream(kind, policy)
-                    await self.streamack_events[kind].wait()
+                await self.send_createstream(stream)
         except TimeoutError:
-            self.streamack_events.pop(kind, None)
             self.logger.error('stream handshake timed out')
 
     async def perform_handshake(self):
@@ -968,12 +1002,13 @@ class Association:
             return
         common_policies = set(self.protoconf.stream_policies).intersection(
             self.their_protoconf.stream_policies)
-        common_str = ','.join(policy.decode() for policy in common_policies)
-        self.logger.info(f'common stream policies: {common_str}')
-        for policy in (Protoconf.BLOCKPRIORITY_POLICY, ):
+        self.logger.info(f'common stream policies: [{",".join(common_policies)}]')
+        for policy in StreamPolicy.ORDERED:
             if policy in common_policies:
-                self.group.create_task(self.establish_stream(StreamKind.DATA1, policy))
-                break
+                self.logger.info(f'implementing stream policy {policy}')
+                kinds = StreamPolicy.stream_kinds(policy)
+                for kind in kinds:
+                    self.group.create_task(self.open_stream(kind, policy))
 
     #
     # Sending messages
@@ -981,7 +1016,10 @@ class Association:
 
     def stream_for_message(self, command):
         '''Return the stream on which to send a command.'''
-        return self.streams[self.message_map.get(command, StreamKind.GENERAL)]
+        for stream in self.streams:
+            if stream.is_active and command in stream.commands():
+                return stream
+        return self.streams[0]
 
     async def send_message(self, command, payload, *, force_extended=False):
         '''Send a command and its payload.  If force_extended is True, it is sent as an extended
@@ -1255,7 +1293,7 @@ class Association:
                              f'{hash_to_hex_str(locator.hash_stop)}')
 
     #
-    # Handshake
+    # version, verack
     #
 
     async def on_version(self, payload):
@@ -1414,34 +1452,56 @@ class Association:
         return (read_varbytes(read), read_exactly(read, 1))
 
     def read_createstream_payload(self, read):
-        # Return an (assoc_id, stream_kind) pair.
+        # Return an (assoc_id, stream_kind, policy) tuple.
         assoc_id, kind = self.read_streamack_payload(read)
         policy = read_varbytes(read)
         return (assoc_id, kind, policy)
 
-    async def send_createstream(self, kind, policy):
-        if kind in self.streamack_events:
-            raise ProtocolError(f'createstream message pending for stream kind {kind}')
-        self.streamack_events[kind] = asyncio.Event()
-        await self.send_message(MessageHeader.CREATESTREAM,
-                                self.createstream_payload(kind, policy))
+    async def send_createstream(self, stream):
+        '''Sends a createstream message (on the general stream) to establish the passed stream.
+        Return only once a corresponding streamack is received.
+        '''
+        if not self.assoc_id:
+            raise RuntimeError('common association ID is not established')
+        if stream not in self.streams or stream.kind == StreamKind.GENERAL or stream.is_active:
+            raise RuntimeError('invalid stream passed to send_createstream')
+        if stream.event:
+            raise ProtocolError('createstream message already pending')
+        stream.event = asyncio.Event()
+        try:
+            await self.send_message(MessageHeader.CREATESTREAM,
+                                    self.createstream_payload(stream.kind, stream.policy))
+            await stream.event.wait()
+        finally:
+            stream.event = None
 
     async def on_createstream(self, payload):
-        # FIXME: Enforce correct context
+        if self.version_received.is_set():
+            raise ProtocolError('received createstream after version message', is_fatal=True)
         assoc_id, kind, policy = self.unpack_payload(payload, self.read_createstream_payload)
-        # TODO: verify and move stream
-        await self.send_streamack(kind)
+        assoc = self.node.lookup_association(assoc_id)
+        if not assoc:
+            raise ProtocolError(f'createstream for unknown assoc_id {assoc_id}', is_fatal=True)
+        assert len(self.streams) == 1
+        stream = self.streams[0]
+        await assoc.transfer_stream(stream, kind, policy)
+        self.streams.remove(stream)
+        await assoc.send_streamack(kind)
 
     async def send_streamack(self, kind):
         await self.send_message(MessageHeader.STREAMACK, self.streamack_payload(kind))
 
     async def on_streamack(self, payload):
-        assoc_id, kind, policy = self.unpack_payload(payload, self.read_streamack_payload)
-
+        assoc_id, kind = self.unpack_payload(payload, self.read_streamack_payload)
         # Detect if this streamack does not correspond to a createstream message we sent
-        event = self.streamack_events.get(kind)
-        if event is None:
-            raise ProtocolError(f'unexpected streamack for stream kind {kind}', is_fatal=True)
         if assoc_id != self.assoc_id:
             raise ProtocolError(f'streamack for unknown assoc_id {assoc_id}', is_fatal=True)
-        self.logger.info(f'received streamack for stream kind {kind}')
+        for stream in self.streams:
+            if stream.kind == kind and stream.event is not None:
+                break
+        else:
+            raise ProtocolError(f'unexpected streamack for stream kind {kind}', is_fatal=True)
+
+        self.logger.info(f'activated stream {kind} as streamack received')
+        stream.is_active = True
+        stream.event.set()
