@@ -189,5 +189,6 @@ def in_caplog(caplog, message, count=1):
 
 
 def print_caplog(caplog):
+    print('CAPLOG:')
     for record in caplog.records:
         print(record.message)

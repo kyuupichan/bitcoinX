@@ -885,9 +885,8 @@ class TestBasic:
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 client_node.network = BitcoinTestnet
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service):
-                        pass
+                async with client_node.connect(listening_node.service):
+                    pass
 
         assert in_caplog(caplog, 'fatal protocol error: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
 
@@ -896,16 +895,15 @@ class TestBasic:
     async def test_bad_magic_later(self, client_node, listening_node, caplog, force_extended):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service) as assoc:
-                        await assoc.verack_sent.wait()
-                        command = MessageHeader.SENDHEADERS
-                        payload = b''
-                        header = MessageHeader.std_bytes(BitcoinTestnet.magic, command, payload)
-                        stream = assoc.stream_for_message(command)
-                        await stream.outgoing_messages.put((header, payload))
-                        await pause()
-                        await assoc.close()
+                async with client_node.connect(listening_node.service) as assoc:
+                    await assoc.verack_sent.wait()
+                    command = MessageHeader.SENDHEADERS
+                    payload = b''
+                    header = MessageHeader.std_bytes(BitcoinTestnet.magic, command, payload)
+                    stream = assoc.stream_for_message(command)
+                    await stream.outgoing_messages.put((header, payload))
+                    await pause()
+                    await assoc.close()
 
         assert in_caplog(caplog, 'fatal protocol error: bad magic 0xf4e5f3f4 expected 0xe3e1f3e8')
 
@@ -958,9 +956,8 @@ class TestBasic:
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen(assoc_cls=ListeningAssociation):
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service):
-                        pass
+                async with client_node.connect(listening_node.service):
+                    pass
 
         assert in_caplog(caplog, "'ListeningAssociation' object has no attribute")
 
@@ -972,9 +969,8 @@ class TestBasic:
 
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen(assoc_cls=ListeningAssociation):
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service):
-                        pass
+                async with client_node.connect(listening_node.service):
+                    pass
 
         assert in_caplog(caplog, "'ListeningAssociation' object has no attribute")
 
@@ -1002,9 +998,8 @@ class TestHandshake:
                 await self.close()
 
         async with listening_node.listen(assoc_cls=ListeningAssociation):
-            with pytest.raises(ConnectionResetError):
-                async with client_node.connect(listening_node.service):
-                    pass
+            async with client_node.connect(listening_node.service):
+                pass
 
     @pytest.mark.asyncio
     async def test_duplicate_version(self, client_node, listening_node, caplog):
@@ -1042,14 +1037,13 @@ class TestHandshake:
     async def test_send_verack_without_version(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   perform_handshake=False) as assoc:
-                        await assoc.send_version()
-                        # Don't wait for an incoming version message....
-                        await assoc.send_verack()
-                        await pause()
-                        await assoc.close()
+                async with client_node.connect(listening_node.service,
+                                               perform_handshake=False) as assoc:
+                    await assoc.send_version()
+                    # Don't wait for an incoming version message....
+                    await assoc.send_verack()
+                    await pause()
+                    await assoc.close()
 
         assert in_caplog(caplog, 'fatal protocol error: verack message received before '
                          'version message sent')
@@ -1091,13 +1085,12 @@ class TestHandshake:
     async def test_corrupt_version(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   assoc_cls=CorruptClientAssociation,
-                                                   corrupt_command=MessageHeader.VERSION,
-                                                   ) as assoc:
-                        await pause()
-                        await assoc.close()
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.VERSION,
+                                               ) as assoc:
+                    await pause()
+                    await assoc.close()
 
         assert in_caplog(caplog, 'corrupt version message')
 
@@ -1118,9 +1111,8 @@ class TestHandshake:
     async def test_self_connect(self, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with listening_node.connect(listening_node.service):
-                        pass
+                async with listening_node.connect(listening_node.service):
+                    pass
 
         assert in_caplog(caplog, 'protocol error: connected to ourself')
 
@@ -1235,21 +1227,20 @@ class TestExtendedMessages:
         with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   send_protoconf=False) as assoc:
-                        await assoc.verack_sent.wait()
-                        payload = Protoconf.default().payload()
-                        assert not assoc.can_send_ext_messages
-                        # We should not accept sending a large message
-                        with pytest.raises(RuntimeError):
-                            await assoc.send_message(MessageHeader.PROTOCONF, payload,
-                                                     force_extended=True)
-                        # Override the check
-                        assoc.can_send_ext_messages = True
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as assoc:
+                    await assoc.verack_sent.wait()
+                    payload = Protoconf.default().payload()
+                    assert not assoc.can_send_ext_messages
+                    # We should not accept sending a large message
+                    with pytest.raises(RuntimeError):
                         await assoc.send_message(MessageHeader.PROTOCONF, payload,
                                                  force_extended=True)
-                        pass
+                    # Override the check
+                    assoc.can_send_ext_messages = True
+                    await assoc.send_message(MessageHeader.PROTOCONF, payload,
+                                             force_extended=True)
+                    pass
 
         assert in_caplog(caplog, 'ext message received but invalid')
 
@@ -1347,20 +1338,19 @@ class TestProtoconf:
     async def test_duplicate(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   send_protoconf=False) as assoc:
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as assoc:
+                    await assoc.send_protoconf()
+                    with caplog.at_level(logging.WARNING):
                         await assoc.send_protoconf()
-                        with caplog.at_level(logging.WARNING):
-                            await assoc.send_protoconf()
-                        await pause()
-                        assert in_caplog(caplog, 'protoconf message already sent')
-                        assert not in_caplog(caplog, 'duplicate protoconf')
-                        # Force it
-                        assoc.protoconf_sent = False
-                        await assoc.send_protoconf()
-                        await pause()
-                        await assoc.close()
+                    await pause()
+                    assert in_caplog(caplog, 'protoconf message already sent')
+                    assert not in_caplog(caplog, 'duplicate protoconf')
+                    # Force it
+                    assoc.protoconf_sent = False
+                    await assoc.send_protoconf()
+                    await pause()
+                    await assoc.close()
 
         assert in_caplog(caplog, 'duplicate protoconf')
 
@@ -1398,12 +1388,11 @@ class TestProtoconf:
     async def test_no_fields(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   send_protoconf=False) as assoc:
-                        await assoc.send_message(MessageHeader.PROTOCONF, b'\0')
-                        await pause()
-                        await assoc.close()
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as assoc:
+                    await assoc.send_message(MessageHeader.PROTOCONF, b'\0')
+                    await pause()
+                    await assoc.close()
 
         assert in_caplog(caplog, 'fatal protocol error: protoconf message must have '
                          'at least one field')
@@ -1441,13 +1430,12 @@ class TestProtoconf:
     async def test_bad_max_payload_length(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   send_protoconf=False) as assoc:
-                        assoc.protoconf.max_payload_length = 1024 * 1024 - 1
-                        await assoc.send_protoconf()
-                        await pause()
-                        await assoc.close()
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as assoc:
+                    assoc.protoconf.max_payload_length = 1024 * 1024 - 1
+                    await assoc.send_protoconf()
+                    await pause()
+                    await assoc.close()
 
         assert in_caplog(caplog, 'protoconf message has invalid max payload length of 1,048,575')
 
@@ -1464,15 +1452,18 @@ class TestProtoconf:
                     await pause()
                     await assoc.close()
 
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   send_protoconf=False) as assoc:
-                        assoc.protoconf.stream_policies = ['0' * (MAX + 1)]
-                        await assoc.send_protoconf()
-                        await pause()
-                        await assoc.close()
+                assert not in_caplog(caplog, 'oversized protoconf message')
+                await pause()  # Wait for the listener to close the connection
+                caplog.clear()
 
-        assert in_caplog(caplog, 'fatal protocol error: oversized protoconf message')
+                async with client_node.connect(listening_node.service,
+                                               send_protoconf=False) as assoc:
+                    assoc.protoconf.stream_policies = ['0' * (MAX + 1)]
+                    await assoc.send_protoconf()
+                    await pause()
+
+                assert in_caplog(caplog, 'fatal protocol error: oversized protoconf message')
+                assert in_caplog(caplog, 'connection closed remotely')
 
 
 class TestPing:
@@ -1523,10 +1514,9 @@ class TestPing:
 
                 assert not in_caplog(caplog, 'ping timeout')
 
-                with pytest.raises(ConnectionResetError):
-                    async with client_node.connect(listening_node.service,
-                                                   assoc_cls=ClientAssociation) as assoc:
-                        pass
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ClientAssociation) as assoc:
+                    pass
 
                 assert in_caplog(caplog, 'ping timeout after 0.02s')
 
@@ -2056,3 +2046,24 @@ class TestAssociations:
                 assert assoc.assoc_id is None
                 assert listener_assoc.assoc_id is None
                 await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_create_multistream(self, client_node, listening_node, caplog):
+        protoconf = Protoconf(2_000_000, ['Default', 'BlockPriority'])
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen(protoconf=protoconf):
+                async with client_node.connect(listening_node.service,
+                                               protoconf=protoconf) as assoc:
+                    await assoc.verack_received.wait()
+                    await pause(0.1)
+                    assert len(assoc.streams) == 2
+
+                    assert len(listening_node.assocs) == 1
+                    lassoc = list(listening_node.assocs)[0]
+                    assert len(lassoc.streams) == 2
+                    await assoc.close()
+
+        print_caplog(caplog)
+        assert in_caplog(caplog, 'common stream policies: [Default, BlockPriority]')
+        assert in_caplog(caplog, 'implementing stream policy BlockPriority')
+        assert in_caplog(caplog, 'streamack received, activating stream <StreamKind.DATA1: 1>')

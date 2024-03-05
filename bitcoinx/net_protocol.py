@@ -291,7 +291,7 @@ class Protoconf:
 
     @classmethod
     def default(cls):
-        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [StreamPolicy.DEFAULT, ])
+        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [StreamPolicy.DEFAULT])
 
     @classmethod
     def read(cls, read, logger=None):
@@ -918,7 +918,7 @@ class Association:
 
     def check_stream_kind(self, kind, exc_cls):
         if kind in (stream.kind for stream in self.streams):
-            raise exc_cls('association already has a {stream.kind} stream')
+            raise exc_cls('association already has a {stream.kind!r} stream')
         if not self.streams and kind != StreamKind.GENERAL:
             raise exc_cls('first stream must be a {StreamKind.GENERAL} stream')
 
@@ -955,6 +955,7 @@ class Association:
                 self.group.create_task(self.send_protoconf())
             if self.we_prefer_headers:
                 self.group.create_task(self.send_sendheaders())
+            stream.is_active = True
         else:
             self.group.create_task(self.perform_stream_handshake(stream))
 
@@ -967,12 +968,13 @@ class Association:
 
     async def perform_stream_handshake(self, stream):
         '''Perform the stream handshake (outgoing only - an incoming stream connection doesn't
-        know it's a stream until it gets the createstream message).
+        know it's a stream until it gets the createstrm message).
         '''
         assert self.is_outgoing
+        assert not stream.is_active
         try:
             async with timeout_after(self.HANDSHAKE_TIMEOUT):
-                await self.send_createstream(stream)
+                await self.send_createstrm(stream)
         except TimeoutError:
             self.logger.error('stream handshake timed out')
 
@@ -1002,7 +1004,7 @@ class Association:
             return
         common_policies = set(self.protoconf.stream_policies).intersection(
             self.their_protoconf.stream_policies)
-        self.logger.info(f'common stream policies: [{",".join(common_policies)}]')
+        self.logger.info(f'common stream policies: [{", ".join(common_policies)}]')
         for policy in StreamPolicy.ORDERED:
             if policy in common_policies:
                 self.logger.info(f'implementing stream policy {policy}')
@@ -1021,7 +1023,7 @@ class Association:
                 return stream
         return self.streams[0]
 
-    async def send_message(self, command, payload, *, force_extended=False):
+    async def send_message(self, command, payload, *, force_extended=False, stream=None):
         '''Send a command and its payload.  If force_extended is True, it is sent as an extended
         message, perhaps to save both parties doing the checksum.
 
@@ -1030,7 +1032,7 @@ class Association:
         used as an asynchronous generator to send the payload in chunks.  Currently, no
         sanity check is done that the payload we send is actually of the claimed length.
         '''
-        stream = self.stream_for_message(command)
+        stream = stream or self.stream_for_message(command)
         if force_extended or isinstance(payload, tuple):
             if not self.can_send_ext_messages:
                 raise RuntimeError('extended messages cannot be sent')
@@ -1084,7 +1086,7 @@ class Association:
             self.group.create_task(self.handle_safe(header, payload))
             return
 
-        if header.command_bytes == MessageHeader.VERSION:
+        if header.command_bytes in (MessageHeader.VERSION, MessageHeader.CREATESTRM):
             pass
         elif not self.version_received.is_set():
             raise ProtocolError(f'{header} message received before version')
@@ -1105,7 +1107,8 @@ class Association:
         try:
             await coro
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
-            raise ConnectionResetError('connection closed remotely') from None
+            self.logger.error('connection closed remotely')
+            await self.close()
         except ProtocolError as e:
             if e.is_fatal:
                 raise
@@ -1436,7 +1439,7 @@ class Association:
         await self.send_message(MessageHeader.PONG, nonce)
 
     #
-    # createstream, streamack
+    # createstrm, streamack
     #
 
     def streamack_payload(self, kind):
@@ -1444,64 +1447,72 @@ class Association:
         assert kind in {StreamKind.DATA1}
         return pack_varbytes(self.assoc_id) + pack_byte(kind)
 
-    def createstream_payload(self, kind, policy):
-        return self.streamack_payload(kind) + pack_varbytes(policy)
+    def createstrm_payload(self, kind, policy):
+        return self.streamack_payload(kind) + pack_varbytes(policy.encode())
 
     def read_streamack_payload(self, read):
         # Return an (assoc_id, stream_kind) pair.
-        return (read_varbytes(read), read_exactly(read, 1))
+        assoc_id = read_varbytes(read)
+        kind = read_exactly(read, 1)[0]
+        for member, value in StreamKind.__members__.items():
+            if value == kind:
+                kind = value
+                break
+        return assoc_id, kind
 
-    def read_createstream_payload(self, read):
+    def read_createstrm_payload(self, read):
         # Return an (assoc_id, stream_kind, policy) tuple.
         assoc_id, kind = self.read_streamack_payload(read)
         policy = read_varbytes(read)
         return (assoc_id, kind, policy)
 
-    async def send_createstream(self, stream):
-        '''Sends a createstream message (on the general stream) to establish the passed stream.
+    async def send_createstrm(self, stream):
+        '''Sends a createstrm message (on the general stream) to establish the passed stream.
         Return only once a corresponding streamack is received.
         '''
         if not self.assoc_id:
             raise RuntimeError('common association ID is not established')
         if stream not in self.streams or stream.kind == StreamKind.GENERAL or stream.is_active:
-            raise RuntimeError('invalid stream passed to send_createstream')
+            raise RuntimeError('invalid stream passed to send_createstrm')
         if stream.event:
-            raise ProtocolError('createstream message already pending')
+            raise ProtocolError('createstrm message already pending')
+        payload = self.createstrm_payload(stream.kind, stream.policy)
         stream.event = asyncio.Event()
         try:
-            await self.send_message(MessageHeader.CREATESTREAM,
-                                    self.createstream_payload(stream.kind, stream.policy))
+            await self.send_message(MessageHeader.CREATESTRM, payload, stream=stream)
             await stream.event.wait()
         finally:
             stream.event = None
 
-    async def on_createstream(self, payload):
+    async def on_createstrm(self, payload):
         if self.version_received.is_set():
-            raise ProtocolError('received createstream after version message', is_fatal=True)
-        assoc_id, kind, policy = self.unpack_payload(payload, self.read_createstream_payload)
+            raise ProtocolError('received createstrm after version message', is_fatal=True)
+        assoc_id, kind, policy = self.unpack_payload(payload, self.read_createstrm_payload)
         assoc = self.node.lookup_association(assoc_id)
         if not assoc:
-            raise ProtocolError(f'createstream for unknown assoc_id {assoc_id}', is_fatal=True)
+            raise ProtocolError(f'createstrm for unknown assoc_id {assoc_id}', is_fatal=True)
         assert len(self.streams) == 1
         stream = self.streams[0]
         await assoc.transfer_stream(stream, kind, policy)
         self.streams.remove(stream)
         await assoc.send_streamack(kind)
+        await self.close()
 
     async def send_streamack(self, kind):
         await self.send_message(MessageHeader.STREAMACK, self.streamack_payload(kind))
 
     async def on_streamack(self, payload):
         assoc_id, kind = self.unpack_payload(payload, self.read_streamack_payload)
-        # Detect if this streamack does not correspond to a createstream message we sent
+        # Detect if this streamack does not correspond to a createstrm message we sent
         if assoc_id != self.assoc_id:
             raise ProtocolError(f'streamack for unknown assoc_id {assoc_id}', is_fatal=True)
         for stream in self.streams:
             if stream.kind == kind and stream.event is not None:
+                assert not stream.is_active
                 break
         else:
-            raise ProtocolError(f'unexpected streamack for stream kind {kind}', is_fatal=True)
+            raise ProtocolError(f'unexpected streamack for stream kind {kind!r}', is_fatal=True)
 
-        self.logger.info(f'activated stream {kind} as streamack received')
+        self.logger.info(f'streamack received, activating stream {kind!r}')
         stream.is_active = True
         stream.event.set()
