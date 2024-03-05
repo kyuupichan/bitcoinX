@@ -339,6 +339,15 @@ def read_nonce(read):
     return read_exactly(read, 8)
 
 
+def read_optional_varbytes(read):
+    try:
+        return read_varbytes(read)
+    except PackingError as e:
+        if not str(e).endswith('1 bytes'):
+            raise
+        return None
+
+
 def read_version(service, read):
     '''Read a version payload and update member variables of service (except address).  Return
      a tuple (our_address, our_services, nonce) in the payload.
@@ -361,14 +370,8 @@ def read_version(service, read):
     service.start_height = read_le_int32(read)
     # Relay is optional, defaulting to True
     service.relay = read(1) != b'\0'
-    # Association ID is optional, if one is not provided a PackingError with message
-    # ending in 1 bytes will be raised.
-    try:
-        assoc_id = read_varbytes(read)
-    except PackingError as e:
-        if not str(e).endswith('1 bytes'):
-            raise
-        assoc_id = None
+    # Association ID is optional
+    assoc_id = read_optional_varbytes(read)
 
     return (our_address, our_services, nonce, assoc_id)
 
@@ -552,6 +555,9 @@ class GetheadersRequest:
 class StreamKind(IntEnum):
     GENERAL = 0
     DATA1 = 1
+    DATA2 = 1
+    DATA3 = 1
+    DATA4 = 1
 
 
 class Stream:
@@ -650,6 +656,12 @@ class Node:
 
     def unregister_assoc(self, assoc):
         self.assocs.remove(assoc)
+
+    def lookup_association(self, assoc_id):
+        for assoc in self.assocs:
+            if assoc.assoc_id == assoc_id:
+                return assoc
+        return None
 
     def listen(self, **kwargs):
         '''Listen for incoming connections, and for each incoming connection create an association
@@ -773,12 +785,15 @@ class Association:
 
         # Maps messages to stream kinds
         self.message_map = {}
+        self.streamack_events = {}
 
+        # Association management
         # Create an association ID for outgoing connections
         if self.is_outgoing and node.enable_multistreams:
             self.assoc_id = self.random_assoc_id()
         else:
             self.assoc_id = None
+        self.group = None
         self.nonce = self.node.random_nonce()
 
         # FIXME: move some things to BitcoinService
@@ -807,9 +822,6 @@ class Association:
         self.we_prefer_headers = we_prefer_headers
         self.streaming_min_size = 10_000_000
 
-        # Association management
-        self.group = None
-
         # Logging
         OI = 'O' if self.is_outgoing else 'I'
         self.logger = prefixed_logger(f'{node.network}:{OI}', str(remote_service.address))
@@ -828,7 +840,7 @@ class Association:
         if self.is_outgoing:
             await self.establish_stream(StreamKind.GENERAL, None)
         else:
-            self.group.create_task(self.setup_stream(StreamKind.GENERAL))
+            self.group.create_task(self.setup_stream(StreamKind.GENERAL, None))
         self.node.register_assoc(self)
         return self
 
@@ -877,7 +889,11 @@ class Association:
                 await self.ping_sent.wait()
                 self.ping_sent.clear()
 
-    async def setup_stream(self, kind):
+    #
+    # Stream management
+    #
+
+    async def setup_stream(self, kind, policy):
         stream = self.streams[kind]
 
         # Every stream needs message processing loops
@@ -897,7 +913,7 @@ class Association:
             if self.we_prefer_headers:
                 self.group.create_task(self.send_sendheaders())
         else:
-            self.group.create_task(self.perform_stream_handshake())
+            self.group.create_task(self.perform_stream_handshake(kind, policy))
 
     async def establish_stream(self, stream_kind, stream_policy):
         address = self.remote_service.address
@@ -907,13 +923,24 @@ class Association:
                 reader, writer = await open_connection(str(address.host), address.port)
             stream = Stream(reader, writer)
             self.streams[stream_kind] = stream
-            self.group.create_task(self.setup_stream(stream_kind))
+            self.group.create_task(self.setup_stream(stream_kind, stream_policy))
             # Avoid cleanup in the finally clause
             stream = None
         finally:
             if stream:
                 self.streams.pop(stream_kind)
                 await stream.close()
+
+    async def perform_stream_handshake(self, kind, policy):
+        '''Perform the additional stream handshake.'''
+        try:
+            async with timeout_after(self.HANDSHAKE_TIMEOUT):
+                if self.is_outgoing:
+                    await self.send_createstream(kind, policy)
+                    await self.streamack_events[kind].wait()
+        except TimeoutError:
+            self.streamack_events.pop(kind, None)
+            self.logger.error('stream handshake timed out')
 
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
@@ -935,7 +962,7 @@ class Association:
         except TimeoutError:
             raise ProtocolError('handshake timed out', is_fatal=True) from None
 
-    def maybe_open_streams(self):
+    async def maybe_open_streams(self):
         # Ignore unless a common association ID is established
         if not self.assoc_id:
             return
@@ -945,7 +972,7 @@ class Association:
         self.logger.info(f'common stream policies: {common_str}')
         for policy in (Protoconf.BLOCKPRIORITY_POLICY, ):
             if policy in common_policies:
-                self.group.create_task(establish_stream(StreamKind.DATA1, policy))
+                self.group.create_task(self.establish_stream(StreamKind.DATA1, policy))
                 break
 
     #
@@ -1303,6 +1330,8 @@ class Association:
             raise ProtocolError('duplicate protoconf message received', is_fatal=True)
         self.their_protoconf = self.unpack_payload(
             payload, partial(Protoconf.read, logger=self.logger))
+        if self.is_outgoing:
+            await self.maybe_open_streams()
 
     async def send_protoconf(self):
         if self.protoconf_sent:
@@ -1367,3 +1396,52 @@ class Association:
 
     async def send_pong(self, nonce):
         await self.send_message(MessageHeader.PONG, nonce)
+
+    #
+    # createstream, streamack
+    #
+
+    def streamack_payload(self, kind):
+        assert self.assoc_id is not None
+        assert kind in {StreamKind.DATA1}
+        return pack_varbytes(self.assoc_id) + pack_byte(kind)
+
+    def createstream_payload(self, kind, policy):
+        return self.streamack_payload(kind) + pack_varbytes(policy)
+
+    def read_streamack_payload(self, read):
+        # Return an (assoc_id, stream_kind) pair.
+        return (read_varbytes(read), read_exactly(read, 1))
+
+    def read_createstream_payload(self, read):
+        # Return an (assoc_id, stream_kind) pair.
+        assoc_id, kind = self.read_streamack_payload(read)
+        policy = read_varbytes(read)
+        return (assoc_id, kind, policy)
+
+    async def send_createstream(self, kind, policy):
+        if kind in self.streamack_events:
+            raise ProtocolError(f'createstream message pending for stream kind {kind}')
+        self.streamack_events[kind] = asyncio.Event()
+        await self.send_message(MessageHeader.CREATESTREAM,
+                                self.createstream_payload(kind, policy))
+
+    async def on_createstream(self, payload):
+        # FIXME: Enforce correct context
+        assoc_id, kind, policy = self.unpack_payload(payload, self.read_createstream_payload)
+        # TODO: verify and move stream
+        await self.send_streamack(kind)
+
+    async def send_streamack(self, kind):
+        await self.send_message(MessageHeader.STREAMACK, self.streamack_payload(kind))
+
+    async def on_streamack(self, payload):
+        assoc_id, kind, policy = self.unpack_payload(payload, self.read_streamack_payload)
+
+        # Detect if this streamack does not correspond to a createstream message we sent
+        event = self.streamack_events.get(kind)
+        if event is None:
+            raise ProtocolError(f'unexpected streamack for stream kind {kind}', is_fatal=True)
+        if assoc_id != self.assoc_id:
+            raise ProtocolError(f'streamack for unknown assoc_id {assoc_id}', is_fatal=True)
+        self.logger.info(f'received streamack for stream kind {kind}')
