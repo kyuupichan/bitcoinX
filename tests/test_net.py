@@ -2085,6 +2085,28 @@ class TestStreams:
         assert in_caplog(caplog, 'streamack received, activating stream <StreamKind.DATA1: 1>')
 
     @pytest.mark.asyncio
+    async def test_multistream_no_send_until_ack(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_createstrm(self, payload):
+                pass
+
+        protoconf = Protoconf(2_000_000, ['Default', 'BlockPriority'])
+        async with listening_node.listen(protoconf=protoconf, assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service,
+                                           protoconf=protoconf) as assoc:
+                await assoc.verack_received.wait()
+                await pause(0.1)
+                assert len(assoc.streams) == 2
+                assert not assoc.streams[1].is_active
+
+                # Test a fake block is not sent on the second stream
+                sent_bytes = [stream.sent_bytes for stream in assoc.streams]
+                await assoc.send_message(MessageHeader.BLOCK, bytes(1000))
+                await pause(0.01)
+                assert assoc.streams[1].sent_bytes == sent_bytes[1]
+                await assoc.close()
+
+    @pytest.mark.asyncio
     async def test_createstrm_no_common_assoc_id(self, client_node, listening_node):
         async with listening_node.listen():
             listening_node.enable_multistreams = False
@@ -2137,7 +2159,7 @@ class TestStreams:
     async def test_createstrm_pending(self, client_node, listening_node):
         class ListenerAssociation(Association):
             async def on_createstrm(self, payload):
-                await pause(0.1)
+                pass
 
         async with listening_node.listen(assoc_cls=ListenerAssociation):
             async with client_node.connect(listening_node.service) as assoc:
