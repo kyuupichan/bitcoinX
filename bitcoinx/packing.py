@@ -23,6 +23,7 @@ __all__ = (
     'read_le_uint16', 'read_le_uint32', 'read_le_uint64',
     'read_be_uint16', 'read_be_uint32', 'read_be_uint64',
     'read_varint', 'read_varbytes', 'read_list',
+    'read_exactly', 'read_bool', 'read_byte',
 )
 
 from struct import Struct
@@ -173,6 +174,21 @@ def read_be_uint64(read):
     return result
 
 
+def read_exactly(read, size):
+    result = read(size)
+    if len(result) != size:
+        raise PackingError(f'could not read {size} bytes')
+    return result
+
+
+def read_byte(read):
+    return read_exactly(read, 1)[0]
+
+
+def read_bool(read):
+    return bool(read_byte(read))
+
+
 def read_varint(read):
     # read_byte is supported by mmap objects but not BytesIO
     n, = unpack_byte(read(1))
@@ -186,11 +202,7 @@ def read_varint(read):
 
 
 def read_varbytes(read):
-    n = read_varint(read)
-    result = read(n)
-    if len(result) != n:
-        raise PackingError(f'varbytes could not read {n:,d} bytes')
-    return result
+    return read_exactly(read, read_varint(read))
 
 
 def read_list(read, read_one):

@@ -13,7 +13,7 @@ import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
-    Headers, all_networks, ProtocolError, PackingError, pack_le_uint32,
+    Headers, all_networks, ProtocolError, PackingError, pack_le_uint32, pack_byte, pack_le_uint64,
     NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Association, SimpleHeader
@@ -831,7 +831,7 @@ class ExcessClientAssociation(Association):
         self.excess_command = kwargs.pop('excess_command')
         super().__init__(*args, **kwargs)
 
-    async def send_message(self, command, payload, *, force_extended=False):
+    async def send_message(self, command, payload, *, force_extended=False, stream=None):
         if command == self.excess_command:
             payload += b'x'
         await super().send_message(command, payload, force_extended=force_extended)
@@ -843,7 +843,7 @@ class CorruptClientAssociation(Association):
         self.excess_command = kwargs.pop('corrupt_command')
         super().__init__(*args, **kwargs)
 
-    async def send_message(self, command, payload, *, force_extended=False):
+    async def send_message(self, command, payload, *, force_extended=False, stream=None):
         if command == self.excess_command:
             assert payload
             payload = payload[:-1]
@@ -1568,23 +1568,41 @@ class TestPing:
 class TestSendHeaders:
 
     @pytest.mark.asyncio
-    async def test_sendheaders_and_protoconf_are_sent(self, client_node, listening_node):
+    async def test_sendheaders_sendcmpct_protoconf_are_sent(self, client_node, listening_node):
         async with listening_node.listen():
             async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                await pause()
                 listener_assoc = await listening_assoc(listening_node)
                 assert assoc.they_prefer_headers
                 assert listener_assoc.they_prefer_headers
                 assert assoc.their_protoconf
                 assert listener_assoc.their_protoconf
+                assert assoc.they_provide_compact_blocks
+                assert listener_assoc.they_provide_compact_blocks
+                assert not assoc.announce_with_cmpctblock
+                assert not listener_assoc.announce_with_cmpctblock
+                assert assoc.sendheaders_sent
+                assert assoc.sendcmpct_sent
                 await assoc.close()
 
     @pytest.mark.asyncio
-    async def test_understood(self, client_node, listening_node):
-        async with listening_node.listen():
+    async def test_sent_only_if_understood(self, client_node, listening_node):
+        received = False
+        class ListenerAssociation(Association):
+            async def on_sendheaders(self, payload):
+                nonlocal received
+                received = True
+
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            listening_node.service.protocol_version = 70_011
             async with client_node.connect(listening_node.service) as assoc:
-                assoc.remote_service.protocol_version = 70_011
-                await assoc.send_sendheaders()
-                assert not assoc.sendheaders_sent
+                await assoc.verack_received.wait()
+                await pause()
+                # Set to True even though nothing done, to warn for double-calls
+                assert assoc.sendheaders_sent
+                await pause()
+                assert not received
                 await assoc.close()
 
     @pytest.mark.asyncio
@@ -1622,6 +1640,91 @@ class TestSendHeaders:
                     await assoc.close()
 
         assert in_caplog(caplog, 'extra bytes at end of sendheaders payload')
+
+
+class TestSendCmpct:
+
+    @pytest.mark.asyncio
+    async def test_sent_only_if_understood(self, client_node, listening_node):
+        received = False
+        class ListenerAssociation(Association):
+            async def on_sendcmpct(self, payload):
+                nonlocal received
+                received = True
+
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            listening_node.service.protocol_version = 70_013
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                await pause()
+                # Set to True even though nothing done, to warn for double-calls
+                assert assoc.sendcmpct_sent
+                assert not received
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_unknown_version_ignored(self, client_node, listening_node):
+        class ClientAssociation(Association):
+            async def send_sendcmpct(self):
+                cmpct_version = 2
+                payload = pack_byte(False) + pack_le_uint64(cmpct_version)
+                await self.send_message(MessageHeader.SENDCMPCT, payload)
+
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service,
+                                           assoc_cls=ClientAssociation) as assoc:
+                await assoc.verack_received.wait()
+                await pause()
+                assert assoc.they_provide_compact_blocks
+                assert not assoc.announce_with_cmpctblock
+                lassoc = await listening_assoc(listening_node)
+                assert lassoc.they_provide_compact_blocks is False
+                assert not lassoc.announce_with_cmpctblock
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_duplicate(self, client_node, listening_node, caplog):
+        async with listening_node.listen():
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                await pause()
+                with caplog.at_level(logging.WARNING):
+                    await assoc.send_sendcmpct()
+                # Force it
+                assoc.sendcmpct_sent = False
+                await assoc.send_sendcmpct()
+                await pause()
+                # Remote should not complain
+                assert not in_caplog(caplog, 'duplicate')
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ExcessClientAssociation,
+                                               excess_command=MessageHeader.SENDCMPCT,
+                                               ) as assoc:
+                    await assoc.verack_sent.wait()
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of sendcmpct payload')
+
+    @pytest.mark.asyncio
+    async def test_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.SENDCMPCT,
+                                               ) as assoc:
+                    await assoc.verack_sent.wait()
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'corrupt sendcmpct message')
 
 
 class TestGetHeaders:

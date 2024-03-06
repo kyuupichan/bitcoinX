@@ -31,7 +31,7 @@ from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
     pack_varbytes, varint_len, unpack_port,
     read_varbytes, read_varint, read_le_int32, read_le_uint32, read_le_uint64, read_le_int64,
-    pack_list, read_list,
+    pack_list, read_list, read_byte, read_bool, read_exactly,
 )
 
 
@@ -215,6 +215,7 @@ class BitcoinService:
     a connection waas made.
     '''
     SENDHEADERS_VERSION = 70_012
+    SENDCMPCT_VERSION = 70_014
 
     def __init__(self, *,
                  address=None,
@@ -243,6 +244,9 @@ class BitcoinService:
 
     def understands_sendheaders(self):
         return self.protocol_version >= self.SENDHEADERS_VERSION
+
+    def understands_sendcmpct(self):
+        return self.protocol_version >= self.SENDCMPCT_VERSION
 
     def pack(self):
         '''Return the address and service flags as an encoded service.'''
@@ -331,13 +335,6 @@ def random_nonce():
         nonce = os.urandom(8)
         if nonce != ZERO_NONCE:
             return nonce
-
-
-def read_exactly(read, size):
-    result = read(size)
-    if len(result) != size:
-        raise PackingError(f'could not read {size} bytes')
-    return result
 
 
 def read_nonce(read):
@@ -815,7 +812,8 @@ class Association:
     GETHEADERS_TIMEOUT = 30
 
     def __init__(self, node, remote_service, is_outgoing, perform_handshake=True,
-                 send_protoconf=True, we_prefer_headers=True, protoconf=None):
+                 send_protoconf=True, we_prefer_headers=True, we_prefer_cmpctblock=False,
+                 protoconf=None):
         self.node = node
         self.remote_service = remote_service
         self.is_outgoing = is_outgoing
@@ -842,7 +840,10 @@ class Association:
         self.their_protoconf = None
         self.their_tip = node.headers.genesis_header
         self.sendheaders_sent = False
+        self.sendcmpct_sent = False
         self.they_prefer_headers = False
+        self.they_provide_compact_blocks = False
+        self.announce_with_cmpctblock = False
         self.getheaders_request = None
         self.pings = {}
         # Be optimistic, at least until we receive a version message
@@ -854,6 +855,8 @@ class Association:
         self._perform_handshake = perform_handshake
         # If True, a sendheaders message is sent
         self.we_prefer_headers = we_prefer_headers
+        # If True, we request cmpctblock announcements
+        self.we_prefer_cmpctblock = we_prefer_cmpctblock
         self.streaming_min_size = 10_000_000
 
         # Logging
@@ -959,8 +962,8 @@ class Association:
                 self.group.create_task(self.perform_handshake())
             if self._send_protoconf:
                 self.group.create_task(self.send_protoconf())
-            if self.we_prefer_headers:
-                self.group.create_task(self.send_sendheaders())
+            self.group.create_task(self.send_sendheaders())
+            self.group.create_task(self.send_sendcmpct())
             stream.is_active = True
         else:
             self.group.create_task(self.perform_stream_handshake(stream))
@@ -1401,9 +1404,8 @@ class Association:
         if self.sendheaders_sent:
             self.logger.warning('sendheaders message already sent')
             return
-        if self.remote_service.understands_sendheaders():
-            self.sendheaders_sent = True
-            self.we_prefer_headers = True
+        self.sendheaders_sent = True
+        if self.we_prefer_headers and self.remote_service.understands_sendheaders():
             await self.send_message(MessageHeader.SENDHEADERS, b'')
 
     #
@@ -1459,7 +1461,7 @@ class Association:
     def read_streamack_payload(self, read):
         # Return an (assoc_id, stream_kind) pair.
         assoc_id = read_varbytes(read)
-        kind = read_exactly(read, 1)[0]
+        kind = read_byte(read)
         for member, value in StreamKind.__members__.items():
             if value == kind:
                 kind = value
@@ -1523,3 +1525,38 @@ class Association:
         self.logger.info(f'streamack received, activating stream {kind!r}')
         stream.is_active = True
         stream.event.set()
+
+    #
+    # sendcmpct, cmpctblock
+    #
+
+    async def send_sendcmpct(self):
+        # Note - if multiple compact block versions are implemented, this routine should
+        # send one message for each
+        if self.sendcmpct_sent:
+            self.logger.warning('sendcmpct message already sent')
+            return
+        if self.remote_service.understands_sendcmpct():
+            cmpct_version = 1
+            payload = pack_byte(bool(self.we_prefer_cmpctblock)) + pack_le_uint64(cmpct_version)
+            await self.send_message(MessageHeader.SENDCMPCT, payload)
+        self.sendcmpct_sent = True
+
+    def read_sendcmpct_payload(self, read):
+        announce_with_cmpctblock = read_bool(read)
+        cmpct_version = read_le_uint64(read)
+        return bool(announce_with_cmpctblock), cmpct_version
+
+    async def on_sendcmpct(self, payload):
+        # Note - if the remote node implements multiple compact block versions, multiple
+        # messages may be received
+        announce, cmpct_version = self.unpack_payload(payload, self.read_sendcmpct_payload)
+        # We (and the network) only implement version 1
+        if cmpct_version == 1:
+            self.they_provide_compact_blocks = True
+            self.announce_with_cmpctblock = announce
+
+
+    #
+    # getblocktxn, blocktxn
+    #
