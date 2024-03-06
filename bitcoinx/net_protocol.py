@@ -840,7 +840,7 @@ class Association:
 
     def __init__(self, node, remote_service, is_outgoing, perform_handshake=True,
                  send_protoconf=True, we_prefer_headers=True, we_prefer_cmpctblock=False,
-                 inv_queue=None, protoconf=None):
+                 protoconf=None):
         self.node = node
         self.remote_service = remote_service
         self.is_outgoing = is_outgoing
@@ -876,9 +876,10 @@ class Association:
         # Be optimistic, at least until we receive a version message
         self.can_send_ext_messages = True
 
-        # If None, invcoming Inv objects are dropped.  Otherwise it should be a Queue, and
-        # they are pushed onto it
-        self.inv_queue = inv_queue
+        # Incoming "inv" inventory objects are pushed on this queue
+        self.inv_queue = asyncio.Queue()
+        # Incoming "getdata" request object are pushed on this queue
+        self.getdata_queue = asyncio.Queue()
 
         # Setup
         self.protoconf = protoconf or Protoconf.default()
@@ -1558,7 +1559,7 @@ class Association:
         stream.event.set()
 
     #
-    # inv
+    # inv, getdata
     #
 
     async def send_inv(self, inv):
@@ -1566,9 +1567,14 @@ class Association:
 
     async def on_inv(self, payload):
         inv = self.unpack_payload(payload, Inv.read)
-        if self.inv_queue:
-            await self.inv_queue.push(inv)
+        await self.inv_queue.push(inv)
 
+    async def send_getdata(self, inv):
+        await self.send_message(MessageHeader.GETDATA, inv.to_payload())
+
+    async def on_getdata(self, payload):
+        inv = self.unpack_payload(payload, Inv.read)
+        await self.getdata_queue.push(inv)
 
     #
     # sendcmpct

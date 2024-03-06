@@ -1277,7 +1277,7 @@ class TestExtendedMessages:
     async def test_whole_assoc(self, client_node, listening_node):
         '''Test sending every message as extended, even the version message.'''
         class ClientAssociation(Association):
-            async def send_message(self, command, payload, *, force_extended=False):
+            async def send_message(self, command, payload, *, force_extended=False, stream=None):
                 await super().send_message(command, payload, force_extended=True)
 
         async with listening_node.listen():
@@ -1728,11 +1728,13 @@ class TestSendCmpct:
         assert in_caplog(caplog, 'corrupt sendcmpct message')
 
 
-def random_inv():
+def random_inv(is_getdata=False):
     items = [
         InvItem(InvKind.TX, urandom(32)),
         InvItem(InvKind.BLOCK, urandom(32)),
     ]
+    if is_getdata:
+        items.append(InvItem(InvKind.CMPCT_BLOCK, urandom(32)))
     return Inv(items)
 
 
@@ -1748,7 +1750,7 @@ class TestInv:
 
         inv = random_inv()
         queue = asyncio.Queue()
-        async with listening_node.listen(assoc_cls=ListenerAssociation, inv_queue=queue):
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
             async with client_node.connect(listening_node.service) as assoc:
                 await assoc.verack_received.wait()
                 await assoc.send_inv(inv)
@@ -1784,6 +1786,56 @@ class TestInv:
                     await assoc.close()
 
         assert in_caplog(caplog, 'corrupt inv message')
+
+
+class TestGetdata:
+
+    @pytest.mark.asyncio
+    async def test_sent_and_received(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_getdata(self, payload):
+                await super().on_getdata(payload)
+                our_inv = await self.getdata_queue.get()
+                assert our_inv == inv
+
+        inv = random_inv(True)
+        queue = asyncio.Queue()
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                await assoc.send_getdata(inv)
+                await pause()
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ExcessClientAssociation,
+                                               excess_command=MessageHeader.GETDATA,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_getdata(random_inv(True))
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of getdata payload')
+
+    @pytest.mark.asyncio
+    async def test_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.GETDATA,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_getdata(random_inv(True))
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'corrupt getdata message')
 
 
 class TestGetHeaders:
