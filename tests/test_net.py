@@ -2119,8 +2119,11 @@ class TestStreams:
             listening_node.enable_multistreams = False
             async with client_node.connect(listening_node.service) as assoc:
                 await assoc.verack_received.wait()
+                stream = Stream(None, None, StreamKind.DATA1, 'policy')
+                assoc.streams.append(stream)
                 with pytest.raises(RuntimeError) as e:
-                    await assoc.send_createstrm(assoc.streams[0])
+                    await assoc.send_createstrm(stream)
+                assoc.streams.pop()
                 assert str(e.value) == 'common association ID is not established'
                 await assoc.close()
 

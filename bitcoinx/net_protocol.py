@@ -1450,7 +1450,7 @@ class Association:
 
     def streamack_payload(self, kind):
         if self.assoc_id is None:
-            raise RuntimeError('no common assoc_id')
+            raise RuntimeError('common association ID is not established')
         return pack_varbytes(self.assoc_id) + pack_byte(kind)
 
     def createstrm_payload(self, kind, policy):
@@ -1475,8 +1475,6 @@ class Association:
         '''Sends a createstrm message (on the general stream) to establish the passed stream.
         Return only once a corresponding streamack is received.
         '''
-        if not self.assoc_id:
-            raise RuntimeError('common association ID is not established')
         if stream not in self.streams:
             raise RuntimeError('send_createstrm: stream is not ours')
         if stream.kind == StreamKind.GENERAL:
