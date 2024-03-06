@@ -2002,6 +2002,13 @@ class TestSyncHeaders:
 class TestStreams:
     '''Tests for CREATESTRM message and assoc_id negotiation.'''
 
+    def test_stream_kind(self):
+        assert StreamKind.GENERAL == 1
+        assert StreamKind.DATA1 == 2
+        assert StreamKind.DATA2 == 3
+        assert StreamKind.DATA3 == 4
+        assert StreamKind.DATA4 == 5
+
     @pytest.mark.asyncio
     async def test_assoc_id_echoed(self, client_node, listening_node):
         async with listening_node.listen():
@@ -2082,7 +2089,7 @@ class TestStreams:
 
         assert in_caplog(caplog, 'common stream policies: [BlockPriority, Default]')
         assert in_caplog(caplog, 'implementing stream policy BlockPriority')
-        assert in_caplog(caplog, 'streamack received, activating stream <StreamKind.DATA1: 1>')
+        assert in_caplog(caplog, 'streamack received, activating stream <StreamKind.DATA1: 2>')
 
     @pytest.mark.asyncio
     async def test_multistream_no_send_until_ack(self, client_node, listening_node):
@@ -2161,7 +2168,9 @@ class TestStreams:
             async def on_createstrm(self, payload):
                 pass
 
-        async with listening_node.listen(assoc_cls=ListenerAssociation):
+        # Ensure a DATA1 stream is not opened automatically
+        protoconf = Protoconf(2_000_000, ['Default'])
+        async with listening_node.listen(assoc_cls=ListenerAssociation, protoconf=protoconf):
             async with client_node.connect(listening_node.service) as assoc:
                 await assoc.verack_received.wait()
                 await assoc.open_stream(StreamKind.DATA1, 'policy')
@@ -2190,7 +2199,6 @@ class TestStreams:
                 async with client_node.connect(listening_node.service) as assoc:
                     await assoc.verack_received.wait()
                     assoc.assoc_id = bytes(17)
-                    await assoc.open_stream(StreamKind.DATA1, 'policy')
                     await pause()
                     assert in_caplog(caplog, 'received createstrm for unknown assoc_id')
                     assert in_caplog(caplog, 'connection closed remotely')
@@ -2217,5 +2225,5 @@ class TestStreams:
                     await assoc.send_streamack(StreamKind.DATA1)
                     await pause()
                     assert in_caplog(caplog, 'fatal protocol error: unexpected streamack '
-                                     'for stream kind <StreamKind.DATA1: 1>')
+                                     'for stream kind <StreamKind.DATA1: 2>')
                     assert in_caplog(caplog, 'connection closed remotely')

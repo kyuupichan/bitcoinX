@@ -291,7 +291,8 @@ class Protoconf:
 
     @classmethod
     def default(cls):
-        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [StreamPolicy.DEFAULT])
+        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH,
+                   [StreamPolicy.DEFAULT, StreamPolicy.BLOCKPRIORITY])
 
     @classmethod
     def read(cls, read, logger=None):
@@ -557,11 +558,11 @@ class GetheadersRequest:
 
 
 class StreamKind(IntEnum):
-    GENERAL = 0
-    DATA1 = 1
-    DATA2 = 2
-    DATA3 = 3
-    DATA4 = 4
+    GENERAL = 1
+    DATA1 = 2
+    DATA2 = 3
+    DATA3 = 4
+    DATA4 = 5
 
 
 class StreamPolicy:
@@ -765,7 +766,7 @@ class Node:
                 else:
                     self.logger.debug(f'failed to connect to {service.address}: {e}')
 
-    async def establish_outgoing_assocs(self, on_assoc, limit, **kwargs):
+    async def establish_outgoing_associations(self, on_assoc, limit, **kwargs):
         if not self.remote_services:
             self.remote_services = await services_from_seeds(self.network)
         async with TaskGroup() as group:
@@ -923,9 +924,9 @@ class Association:
 
     def check_stream_kind(self, kind, exc_cls):
         if kind in (stream.kind for stream in self.streams):
-            raise exc_cls('association already has a {stream.kind!r} stream')
+            raise exc_cls(f'association already has a {kind!r} stream')
         if not self.streams and kind != StreamKind.GENERAL:
-            raise exc_cls('first stream must be a {StreamKind.GENERAL} stream')
+            raise exc_cls(f'first stream must be a {StreamKind.GENERAL} stream')
 
     def add_stream(self, stream):
         self.check_stream_kind(stream.kind, RuntimeError)
@@ -1448,6 +1449,8 @@ class Association:
     #
 
     def streamack_payload(self, kind):
+        if self.assoc_id is None:
+            raise RuntimeError('no common assoc_id')
         return pack_varbytes(self.assoc_id) + pack_byte(kind)
 
     def createstrm_payload(self, kind, policy):
