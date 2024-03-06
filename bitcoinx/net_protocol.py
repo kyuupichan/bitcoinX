@@ -36,7 +36,7 @@ from .packing import (
 
 
 __all__ = (
-    'BitcoinService', 'ServiceFlags', 'Protoconf', 'MessageHeader', 'Node', 'Session',
+    'BitcoinService', 'ServiceFlags', 'Protoconf', 'MessageHeader', 'Node', 'Association',
 )
 
 #
@@ -155,7 +155,9 @@ MessageHeader.STREAMACK = _command('streamack')
 MessageHeader.TX = _command('tx')
 MessageHeader.VERACK = _command('verack')
 MessageHeader.VERSION = _command('version')
-MessageHeader.HANDSHAKE_COMMANDS = {MessageHeader.VERSION, MessageHeader.VERACK}
+MessageHeader.HANDSHAKE_COMMANDS = {
+    MessageHeader.VERSION, MessageHeader.VERACK,
+}
 
 
 class ServiceFlags(IntFlag):
@@ -221,8 +223,7 @@ class BitcoinService:
                  protocol_version=None,
                  start_height=0,
                  relay=True,
-                 timestamp=None,
-                 assoc_id=None):
+                 timestamp=None):
         from bitcoinx import _version_str
 
         self.address = (NetAddress('::', 0, check_port=False) if address is None else
@@ -233,7 +234,6 @@ class BitcoinService:
         self.start_height = start_height
         self.relay = relay
         self.timestamp = timestamp
-        self.assoc_id = assoc_id
 
     def __eq__(self, other):
         return self.address == other.address
@@ -264,7 +264,7 @@ class BitcoinService:
             f'BitcoinService({self.address}, services={self.services!r}, '
             f'user_agent={self.user_agent!r}, protocol_version={self.protocol_version}, '
             f'start_height={self.start_height:,d} relay={self.relay} '
-            f'timestamp={self.timestamp}, assoc_id={self.assoc_id!r})'
+            f'timestamp={self.timestamp})'
         )
 
 
@@ -274,7 +274,7 @@ class Protoconf:
     DEFAULT_MAX_PAYLOAD_LENGTH = 2 * 1024 * 1024
 
     max_payload_length: int
-    stream_policies: Sequence[bytes]
+    stream_policies: Sequence[str]
 
     def max_inv_elements(self):
         count = self.max_payload_length // (4 + 32)
@@ -286,12 +286,13 @@ class Protoconf:
         return b''.join((
             pack_varint(field_count),
             pack_le_uint32(self.max_payload_length),
-            pack_varbytes(b','.join(self.stream_policies)),
+            pack_varbytes(b','.join(policy.encode() for policy in self.stream_policies)),
         ))
 
     @classmethod
     def default(cls):
-        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH, [b'Default'])
+        return cls(cls.DEFAULT_MAX_PAYLOAD_LENGTH,
+                   [StreamPolicy.DEFAULT, StreamPolicy.BLOCKPRIORITY])
 
     @classmethod
     def read(cls, read, logger=None):
@@ -308,9 +309,13 @@ class Protoconf:
                                 f'{max_payload_length:,d}', is_fatal=True)
         if field_count > 1:
             stream_policies = read_varbytes(read)
+            try:
+                stream_policies = stream_policies.decode().split(',')
+            except UnicodeDecodeError:
+                raise PackingError from None
         else:
-            stream_policies = b'Default'
-        return Protoconf(max_payload_length, stream_policies.split(b','))
+            stream_policies = [StreamPolicy.DEFAULT]
+        return Protoconf(max_payload_length, stream_policies)
 
 
 @dataclass
@@ -339,6 +344,15 @@ def read_nonce(read):
     return read_exactly(read, 8)
 
 
+def read_optional_varbytes(read):
+    try:
+        return read_varbytes(read)
+    except PackingError as e:
+        if not str(e).endswith('1 bytes'):
+            raise
+        return None
+
+
 def read_version(service, read):
     '''Read a version payload and update member variables of service (except address).  Return
      a tuple (our_address, our_services, nonce) in the payload.
@@ -361,18 +375,13 @@ def read_version(service, read):
     service.start_height = read_le_int32(read)
     # Relay is optional, defaulting to True
     service.relay = read(1) != b'\0'
-    # Association ID is optional.  We set it to None if not provided.
-    try:
-        service.assoc_id = read_varbytes(read)
-    except PackingError as e:
-        if not str(e).endswith('1 bytes'):
-            raise
-        service.assoc_id = None
+    # Association ID is optional
+    assoc_id = read_optional_varbytes(read)
 
-    return (our_address, our_services, nonce)
+    return (our_address, our_services, nonce, assoc_id)
 
 
-def version_payload(service, remote_service, nonce):
+def version_payload(service, remote_service, nonce, assoc_id):
     '''Create a version message payload.
 
     If self.timestamp is None, then the current time is used.
@@ -386,8 +395,6 @@ def version_payload(service, remote_service, nonce):
     else:
         remote_service_packed = remote_service.pack()
 
-    assoc_id = b'' if service.assoc_id is None else pack_varbytes(service.assoc_id)
-
     return b''.join((
         pack_le_int32(service.protocol_version),
         pack_le_uint64(service.services),
@@ -398,7 +405,7 @@ def version_payload(service, remote_service, nonce):
         pack_varbytes(service.user_agent.encode()),
         pack_le_int32(service.start_height),
         pack_byte(service.relay),
-        assoc_id,
+        b'' if assoc_id is None else pack_varbytes(assoc_id),
     ))
 
 
@@ -550,15 +557,60 @@ class GetheadersRequest:
         await self.event.wait()
 
 
-class Connection:
-    '''A single network connection.  Each connection has its own outgoing message queue
-    because a Session decides which connection an outgoing message is sent on.
+class StreamKind(IntEnum):
+    GENERAL = 1
+    DATA1 = 2
+    DATA2 = 3
+    DATA3 = 4
+    DATA4 = 5
+
+
+class StreamPolicy:
+    DEFAULT = 'Default'
+    BLOCKPRIORITY = 'BlockPriority'
+    COMMANDS = {
+        BLOCKPRIORITY: {
+            MessageHeader.BLOCK,
+            MessageHeader.BLOCKTXN,
+            MessageHeader.CMPCTBLOCK,
+            MessageHeader.GETBLOCKTXN,
+        }
+    }
+    STREAM_KINDS = {
+        BLOCKPRIORITY: (StreamKind.DATA1, ),
+    }
+    # Implemented policies, in order
+    ORDERED = (BLOCKPRIORITY, )
+
+    @classmethod
+    def commands(cls, policy):
+        return cls.COMMANDS.get(policy, ())
+
+    @classmethod
+    def stream_kinds(cls, policy):
+        return cls.STREAM_KINDS.get(policy, ())
+
+
+class Stream:
+    '''A single network connection.  Each stream has its own outgoing message queue
+    because an association decides which connection an outgoing message is sent on.
     '''
 
-    def __init__(self, reader, writer):
+    def __init__(self, reader, writer, kind, policy):
+        assert isinstance(kind, StreamKind)
+        assert isinstance(policy, str)
         self.reader = reader
         self.writer = writer
+        self.kind = kind
+        self.policy = policy
+        self.is_active = False
+        self.event = None
         self.outgoing_messages = Queue()
+        self.sent_bytes = 0
+        self.recd_bytes = 0
+
+    def commands(self):
+        return StreamPolicy.commands(self.policy)
 
     async def close(self):
         self.writer.close()
@@ -570,12 +622,15 @@ class Connection:
 
     def send(self, data):
         self.writer.write(data)
+        self.sent_bytes += len(data)
 
     async def drain(self):
         await self.writer.drain()
 
     async def recv_exactly(self, nbytes):
-        return await self.reader.readexactly(nbytes)
+        result = await self.reader.readexactly(nbytes)
+        self.recd_bytes += nbytes
+        return result
 
     async def recv_chunks(self, size, chunk_size=None):
         '''Read size bytes, returning it in chunks.  An asynchronous iterator.'''
@@ -618,16 +673,17 @@ async def services_from_seeds(network, timeout=20.0):
 
 class Node:
     '''A node talks on a single network, e.g., mainnet.  Connections to peers are represented
-    by a Session, which references the Node to manage unified state.
+    by an Association, which references the Node to manage unified state.
     '''
 
     def __init__(self, service, headers):
         self.service = service
         self.headers = headers
         self.network = headers.network
-        self.sessions = set()
+        self.assocs = set()
         self.sync_headers_lock = asyncio.Lock()
         self.remote_services = set()
+        self.enable_multistreams = True
         self.logger = prefixed_logger('Node', str(self.network))
 
     def random_nonce(self):
@@ -637,86 +693,93 @@ class Node:
                 return nonce
 
     def is_our_nonce(self, nonce):
-        return any(session.is_outgoing and nonce == session.nonce
-                   for session in self.sessions)
+        return any(assoc.is_outgoing and nonce == assoc.nonce
+                   for assoc in self.assocs)
 
-    def register_session(self, session):
-        self.sessions.add(session)
+    def register_assoc(self, assoc):
+        self.assocs.add(assoc)
 
-    def unregister_session(self, session):
-        self.sessions.remove(session)
+    def unregister_assoc(self, assoc):
+        self.assocs.remove(assoc)
+
+    def lookup_association(self, assoc_id):
+        for assoc in self.assocs:
+            if assoc.assoc_id == assoc_id:
+                return assoc
+        return None
 
     def listen(self, **kwargs):
-        '''Listen for incoming connections, and for each incoming connection create a session to
-        manage it.
+        '''Listen for incoming connections, and for each incoming connection create an association
+        to manage it.
         '''
         async def on_client_connection(reader, writer):
-            session = None
+            assoc = None
             try:
                 host, port = writer.transport.get_extra_info('peername')
-                service = BitcoinService(address=NetAddress(host, port))
-                connection = Connection(reader, writer)
-                async with self.session(service, connection, **kwargs) as session:
-                    pass
+                remote_service = BitcoinService(address=NetAddress(host, port))
+                async with self.association(remote_service, False, **kwargs) as assoc:
+                    stream = Stream(reader, writer, StreamKind.GENERAL, StreamPolicy.DEFAULT)
+                    await assoc.activate_stream(stream)
             except Exception as e:
-                if session:
-                    session.logger.exception(f'fatal error: {e}')
+                # The association should already have logged the error
+                if assoc:
+                    assoc.logger.exception(str(e))
                 else:
                     self.logger.exception(f'error from {host}:{port}: {e}')
 
         host = str(self.service.address.host)
         port = self.service.address.port
-        return Listener(asyncio.start_server(on_client_connection, host, port), self.sessions)
+        return Listener(asyncio.start_server(on_client_connection, host, port), self.assocs)
 
-    def session(self, remote_service, connection, **kwargs):
-        session_cls = kwargs.pop('session_cls', Session)
-        return session_cls(self, remote_service, connection, **kwargs)
+    def association(self, remote_service, stream, **kwargs):
+        assoc_cls = kwargs.pop('assoc_cls', Association)
+        return assoc_cls(self, remote_service, stream, **kwargs)
 
     def connect(self, remote_service, **kwargs):
-        '''A client session, that when used as an async context manager, establishes an outgoing
+        '''A client assoc, that when used as an async context manager, establishes an outgoing
         connection to remote_service (a BitcoinService instance).
         '''
-        return self.session(remote_service, None, **kwargs)
+        return self.association(remote_service, True, **kwargs)
 
     async def remote_service(self):
         if self.remote_services:
             return self.remote_services.pop()
         return None
 
-    async def outgoing_session(self, on_session, **kwargs):
+    async def outgoing_assoc(self, on_assoc, **kwargs):
         while True:
             service = await self.remote_service()
             if not service:
                 return
-            session = None
+            assoc = None
             try:
-                async with self.connect(service, **kwargs) as session:
-                    done = await on_session(session)
-                    await session.close()
+                async with self.connect(service, **kwargs) as assoc:
+                    done = await on_assoc(assoc)
+                    await assoc.close()
                     if done:
                         return
             except ConnectionResetError as e:
-                session.logger.info(str(e))
+                assoc.logger.info(str(e))
             except Exception as e:
-                if session:
-                    session.logger.exception('connection lost')
+                if assoc:
+                    assoc.logger.exception('connection lost')
                 else:
                     self.logger.debug(f'failed to connect to {service.address}: {e}')
 
-    async def establish_outgoing_sessions(self, on_session, limit, **kwargs):
+    async def establish_outgoing_associations(self, on_assoc, limit, **kwargs):
         if not self.remote_services:
             self.remote_services = await services_from_seeds(self.network)
         async with TaskGroup() as group:
             for _ in range(limit):
-                group.create_task(self.outgoing_session(on_session, **kwargs))
+                group.create_task(self.outgoing_assoc(on_assoc, **kwargs))
 
 
 class Listener:
-    '''A helper for Node.listen() to ensure sessions are cleaned up properly.'''
+    '''A helper for Node.listen() to ensure assocs are cleaned up properly.'''
 
-    def __init__(self, start_server, sessions):
+    def __init__(self, start_server, assocs):
         self.start_server = start_server
-        self.sessions = sessions
+        self.assocs = assocs
         self.server = None
 
     async def __aenter__(self):
@@ -727,26 +790,22 @@ class Listener:
         # Python bug in 3.12 causes this to hang sometimes, sigh.
         async with ignore_after(0.1):
             await self.server.wait_closed()
-        # Wait until incoming sessions finish
-        while any(not session.is_outgoing for session in self.sessions):
+        # Wait until incoming assocs finish
+        while any(not assoc.is_outgoing for assoc in self.assocs):
             await asyncio.sleep(0)
 
 
-class Session:
-    '''Represents a single logical connection (an association) to a peer.  A logical
-    connection can consist of multiple separate streams connection to a peer.  The sesion
-    determines on which connection a message is sent, and tracks state across the
-    associated connections.
-
-    If a client wishes to maintain several associations with the same address, it must be
-    done with separate Session objects.
+class Association:
+    '''Represents a single logical connection (an association) to a peer.  An association can
+    consist of multiple separate streams (connections).  The association determines on
+    which stream to send a message, and tracks state across them.
     '''
 
     # Maximum number of headers to send and receive in a headers message
     MAX_HEADERS = 2000
     # Time between sent pings
     PING_INTERVAL = 120
-    # If a ping takes longer than this to receive a pong, terminate the connection
+    # If a ping takes longer than this to receive a pong, terminate the association
     PING_CUTOFF = 120
     # If the handshake hasn't completed after this amount of time, disconnect
     HANDSHAKE_TIMEOUT = 10
@@ -755,14 +814,21 @@ class Session:
     # After this amount of time, a getheaders request is assumed abandoned.
     GETHEADERS_TIMEOUT = 30
 
-    def __init__(self, node, remote_service, connection, perform_handshake=True,
+    def __init__(self, node, remote_service, is_outgoing, perform_handshake=True,
                  send_protoconf=True, we_prefer_headers=True, protoconf=None):
         self.node = node
         self.remote_service = remote_service
-        # The main connection.  For now, the only one.
-        self.connection = connection
-        self.is_outgoing = connection is None
-        self.streaming_min_size = 10_000_000
+        self.is_outgoing = is_outgoing
+
+        # Association management
+        self.streams = []
+        self.group = TaskGroup()
+        self.nonce = self.node.random_nonce()
+        # Create an association ID for outgoing connections
+        if self.is_outgoing and node.enable_multistreams:
+            self.assoc_id = self.random_assoc_id()
+        else:
+            self.assoc_id = None
 
         # FIXME: move some things to BitcoinService
         # State
@@ -774,7 +840,6 @@ class Session:
         self.ping_sent = Event()
         self.headers_synced = False
         self.their_protoconf = None
-        self.nonce = self.node.random_nonce()
         self.their_tip = node.headers.genesis_header
         self.sendheaders_sent = False
         self.they_prefer_headers = False
@@ -789,9 +854,7 @@ class Session:
         self._perform_handshake = perform_handshake
         # If True, a sendheaders message is sent
         self.we_prefer_headers = we_prefer_headers
-
-        # Session management
-        self.group = None
+        self.streaming_min_size = 10_000_000
 
         # Logging
         OI = 'O' if self.is_outgoing else 'I'
@@ -799,16 +862,16 @@ class Session:
         self.debug = self.logger.isEnabledFor(logging.DEBUG)
         self.unhandled_commands = set()
 
+    @classmethod
+    def random_assoc_id(cls):
+        # Despite the docs saying the assoc_id is opaque, it enforces a certain format and
+        # errors if not in that format...  (duh)
+        return b'\0' + os.urandom(16)
+
     async def __aenter__(self):
-        # FIXME: make this robust
-        if self.connection is None:
-            address = self.remote_service.address
-            reader, writer = await open_connection(str(address.host), address.port)
-            async with timeout_after(self.CONNECTION_TIMEOUT):
-                self.connection = Connection(reader, writer)
-        self.group = TaskGroup()
-        await self.setup_session()
-        self.node.register_session(self)
+        if self.is_outgoing:
+            await self.open_stream(StreamKind.GENERAL, StreamPolicy.DEFAULT)
+        self.node.register_assoc(self)
         return self
 
     async def __aexit__(self, _et, exc, _tb):
@@ -817,19 +880,19 @@ class Session:
         except ExceptionGroup as e:
             raise e.exceptions[0] from None
         finally:
-            self.group = None
-            self.node.unregister_session(self)
-            await self.connection.close()
+            self.node.unregister_assoc(self)
+            for stream in self.streams:
+                await stream.close()
+            self.streams.clear()
 
     async def close(self):
-        if self.group:
-            await self.group.cancel_remaining()
+        await self.group.cancel_remaining()
 
-    async def send_messages_loop(self, connection):
+    async def send_messages_loop(self, stream):
         '''Handle sending the queue of messages.'''
-        send = self.connection.send
+        send = stream.send
         while True:
-            header, payload = await connection.outgoing_messages.get()
+            header, payload = await stream.outgoing_messages.get()
             send(header)
             if isinstance(payload, tuple):
                 payload_async_gen, _payload_len = payload
@@ -837,7 +900,7 @@ class Session:
                     send(part)
             else:
                 send(payload)
-            await self.connection.drain()
+            await stream.drain()
 
     async def ping_loop(self):
         while True:
@@ -855,71 +918,118 @@ class Session:
                 await self.ping_sent.wait()
                 self.ping_sent.clear()
 
-    async def check_handshake_timeout(self):
+    #
+    # Stream management
+    #
+
+    def check_stream_kind(self, kind, exc_cls):
+        if kind in (stream.kind for stream in self.streams):
+            raise exc_cls(f'association already has a {kind!r} stream')
+        if not self.streams and kind != StreamKind.GENERAL:
+            raise exc_cls(f'first stream must be a {StreamKind.GENERAL} stream')
+
+    def add_stream(self, stream):
+        self.check_stream_kind(stream.kind, RuntimeError)
+        self.streams.append(stream)
+
+    async def transfer_stream(self, stream, kind, policy):
+        '''Transfer a stream from another (ephemeral) association to this one.'''
+        assert stream.is_active
+        self.check_stream_kind(kind, partial(ProtocolError, is_fatal=True))
+        stream.kind = kind
+        stream.policy = policy
+        self.streams.append(stream)
+
+    async def activate_stream(self, stream):
+        '''Activate a stream by setting up its message processing loops, and performing
+        a handshake.'''
+        self.add_stream(stream)
+
+        # The message processing loops make the stream "live"
+        self.group.create_task(self.recv_messages_loop(stream))
+        self.group.create_task(self.send_messages_loop(stream))
+
+        if stream.kind == StreamKind.GENERAL:
+            # Every association needs these
+            self.group.create_task(self.ping_loop())
+            self.group.create_task(self.check_pongs_loop())
+
+            # Setup the handshake unless customised
+            if self._perform_handshake:
+                self.group.create_task(self.perform_handshake())
+            if self._send_protoconf:
+                self.group.create_task(self.send_protoconf())
+            if self.we_prefer_headers:
+                self.group.create_task(self.send_sendheaders())
+            stream.is_active = True
+        else:
+            self.group.create_task(self.perform_stream_handshake(stream))
+
+    async def open_stream(self, kind, policy):
+        address = self.remote_service.address
+        async with timeout_after(self.CONNECTION_TIMEOUT):
+            reader, writer = await open_connection(str(address.host), address.port)
+        stream = Stream(reader, writer, kind, policy)
+        await self.activate_stream(stream)
+
+    async def perform_stream_handshake(self, stream):
+        '''Perform the stream handshake (outgoing only - an incoming stream connection doesn't
+        know it's a stream until it gets the createstrm message).
+        '''
+        assert self.is_outgoing
+        assert not stream.is_active
         try:
             async with timeout_after(self.HANDSHAKE_TIMEOUT):
-                await self.verack_received.wait()
+                await self.send_createstrm(stream)
         except TimeoutError:
-            raise ProtocolError('handshake timed out', is_fatal=True)
-
-    async def setup_connection(self, connection):
-        # Every connection needs these
-        self.group.create_task(self.recv_messages_loop(connection))
-        self.group.create_task(self.send_messages_loop(connection))
-
-    async def setup_session(self):
-        # Every session needs these
-        self.group.create_task(self.ping_loop())
-        self.group.create_task(self.check_pongs_loop())
-        self.group.create_task(self.check_handshake_timeout())
-
-        # Setup the handshake unless customised
-        if self._perform_handshake:
-            self.group.create_task(self.perform_handshake())
-        if self._send_protoconf:
-            self.group.create_task(self.send_protoconf())
-        if self.we_prefer_headers:
-            self.group.create_task(self.send_sendheaders())
-
-        # Setup connection-related tasks
-        await self.setup_connection(self.connection)
-
-    def log_service_details(self, serv, headline):
-        self.logger.info(headline)
-        self.logger.info(f'    user_agent={serv.user_agent} services={serv.services!r}')
-        self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
-                         f'relay={serv.relay} timestamp={serv.timestamp} assoc_id={serv.assoc_id}')
-
-    async def version_payload(self):
-        # Send version message with our current height
-        our_service = self.node.service
-        our_service.start_height = await self.node.headers.height()
-        self.log_service_details(our_service, 'sending version message:')
-        return version_payload(our_service, self.remote_service.address, self.nonce)
+            self.logger.error('stream handshake timed out')
 
     async def perform_handshake(self):
         '''Perform the initial handshake.  Send version and verack messages, and wait until a
         verack is received back.'''
-        if self.is_outgoing:
-            await self.send_version()
-            # Outoing connections wait now
-            await self.version_received.wait()
-        else:
-            # Incoming connections wait for version message first
-            await self.version_received.wait()
-            await self.send_version()
+        try:
+            async with timeout_after(self.HANDSHAKE_TIMEOUT):
+                if self.is_outgoing:
+                    await self.send_version()
+                    # Outoing connections wait now
+                    await self.version_received.wait()
+                else:
+                    # Incoming connections wait for version message first
+                    await self.version_received.wait()
+                    await self.send_version()
 
-        # Send verack.
-        await self.send_verack()
+                # Send verack.
+                await self.send_verack()
+                await self.verack_received.wait()
+        except TimeoutError:
+            raise ProtocolError('handshake timed out', is_fatal=True) from None
 
-    def connection_for_command(self, _command):
-        return self.connection
+    async def maybe_open_streams(self):
+        # Ignore unless a common association ID is established
+        if not self.assoc_id:
+            return
+        common_policies = sorted(set(self.protoconf.stream_policies).intersection(
+            self.their_protoconf.stream_policies))
+        self.logger.info(f'common stream policies: [{", ".join(common_policies)}]')
+        for policy in StreamPolicy.ORDERED:
+            if policy in common_policies:
+                self.logger.info(f'implementing stream policy {policy}')
+                kinds = StreamPolicy.stream_kinds(policy)
+                for kind in kinds:
+                    self.group.create_task(self.open_stream(kind, policy))
 
     #
     # Sending messages
     #
 
-    async def send_message(self, command, payload, *, force_extended=False):
+    def stream_for_message(self, command):
+        '''Return the stream on which to send a command.'''
+        for stream in self.streams:
+            if stream.is_active and command in stream.commands():
+                return stream
+        return self.streams[0]
+
+    async def send_message(self, command, payload, *, force_extended=False, stream=None):
         '''Send a command and its payload.  If force_extended is True, it is sent as an extended
         message, perhaps to save both parties doing the checksum.
 
@@ -928,7 +1038,7 @@ class Session:
         used as an asynchronous generator to send the payload in chunks.  Currently, no
         sanity check is done that the payload we send is actually of the claimed length.
         '''
-        connection = self.connection_for_command(command)
+        stream = stream or self.stream_for_message(command)
         if force_extended or isinstance(payload, tuple):
             if not self.can_send_ext_messages:
                 raise RuntimeError('extended messages cannot be sent')
@@ -944,17 +1054,16 @@ class Session:
         if command not in MessageHeader.HANDSHAKE_COMMANDS:
             await self.verack_sent.wait()
 
-        await connection.outgoing_messages.put((header, payload))
+        await stream.outgoing_messages.put((header, payload))
 
     #
     # Receiving messages
     #
 
-    async def handle_one_message(self, connection):
-        # Each connection is a single stream of incoming bytes, so messages must be
-        # received in full (i.e., header and payload) before they can be handled in
-        # parallel.
-        header = await MessageHeader.from_stream(connection.recv_exactly)
+    async def handle_one_message(self, stream):
+        # Each stream is a single pipe of incoming bytes, so messages must be received
+        # in full (i.e., header and payload) before they can be handled in parallel.
+        header = await MessageHeader.from_stream(stream.recv_exactly)
         if self.debug:
             self.logger.debug(f'<- {header} payload {header.payload_len:,d} bytes')
 
@@ -967,11 +1076,11 @@ class Session:
             if self.node.service.protocol_version < LARGE_MESSAGES_PROTOCOL_VERSION:
                 raise ProtocolError('ext message received but invalid', is_fatal=True)
             if header.payload_len > self.streaming_min_size:
-                await self.handle_streaming_message(connection, header)
+                await self.handle_streaming_message(stream, header)
                 return
             # If the payload is small read it all in - just as for standard messages
 
-        payload = await connection.recv_exactly(header.payload_len)
+        payload = await stream.recv_exactly(header.payload_len)
         if not header.is_extended and header.payload_checksum(payload) != header.checksum:
             # Ignore messages with a bad checksum, like bitcoind.  Maybe force disconnect
             # if we get too many bad checksums in a short time
@@ -983,7 +1092,7 @@ class Session:
             self.group.create_task(self.handle_safe(header, payload))
             return
 
-        if header.command_bytes == MessageHeader.VERSION:
+        if header.command_bytes in (MessageHeader.VERSION, MessageHeader.CREATESTRM):
             pass
         elif not self.version_received.is_set():
             raise ProtocolError(f'{header} message received before version')
@@ -991,10 +1100,10 @@ class Session:
             raise ProtocolError(f'{header} message received before verack')
         await self.handle_message(header, payload)
 
-    async def recv_messages_loop(self, connection):
+    async def recv_messages_loop(self, stream):
         '''Read messages from a stream and pass them to handlers for processing.'''
         while True:
-            await self.run_coro_safe(self.handle_one_message(connection))
+            await self.run_coro_safe(self.handle_one_message(stream))
 
     async def handle_safe(self, header, payload):
         await self.run_coro_safe(self.handle_message(header, payload))
@@ -1004,13 +1113,12 @@ class Session:
         try:
             await coro
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
-            raise ConnectionResetError('connection closed remotely') from None
+            self.logger.error('connection closed remotely')
+            await self.close()
         except ProtocolError as e:
             if e.is_fatal:
-                self.logger.error(f'fatal protocol error: {e}')
-                await self.group.cancel_remaining()
-            else:
-                self.logger.error(f'protocol error: {e}')
+                raise
+            self.logger.error(str(e))
 
     async def handle_message(self, header, payload):
         # This routine handles non-streaming messages, whether standard or extended
@@ -1022,17 +1130,17 @@ class Session:
             self.unhandled_commands.add(command)
             self.logger.warning(f'ignoring unhandled {command} messages')
 
-    async def handle_streaming_message(self, connection, header):
+    async def handle_streaming_message(self, stream, header):
         size = header.payload_len
         command = f'{header.command()}_streaming'
         handler = getattr(self, f'on_{command}', None)
         if handler:
-            await handler(connection, size)
+            await handler(stream, size)
         else:
             if command not in self.unhandled_commands:
                 self.unhandled_commands.add(command)
                 self.logger.warning(f'ignoring unhandled extended {header.command()} messages')
-            async for _chunk in connection.recv_chunks(size):
+            async for _chunk in stream.recv_chunks(size):
                 pass
         return True
 
@@ -1193,18 +1301,45 @@ class Session:
             self.logger.info('ignoring getheaders for unknown block '
                              f'{hash_to_hex_str(locator.hash_stop)}')
 
+    #
+    # version, verack
+    #
+
     async def on_version(self, payload):
         '''Called when a version message is received.   remote_service has been updated as
         they report it (except the address is unchanged).'''
         if self.version_received.is_set():
             raise ProtocolError('duplicate version message')
         self.version_received.set()
-        _, _, nonce = self.unpack_payload(payload, partial(read_version, self.remote_service))
+        _, _, nonce, assoc_id = self.unpack_payload(payload,
+                                                    partial(read_version, self.remote_service))
         if self.node.is_our_nonce(nonce):
             raise ProtocolError('connected to ourself', is_fatal=True)
+        if self.is_outgoing:
+            if assoc_id != self.assoc_id:
+                if assoc_id is None:
+                    # Peer doesn't handle associations, or has them disabled
+                    self.assoc_id = None
+                else:
+                    raise ProtocolError('version message has wrong assoc_id', is_fatal=True)
+        elif self.node.enable_multistreams:
+            self.assoc_id = assoc_id
         self.can_send_ext_messages = (self.remote_service.protocol_version
                                       >= LARGE_MESSAGES_PROTOCOL_VERSION)
         self.log_service_details(self.remote_service, 'received version message:')
+
+    def log_service_details(self, serv, headline):
+        self.logger.info(headline)
+        self.logger.info(f'    user_agent={serv.user_agent} services={serv.services!r}')
+        self.logger.info(f'    protocol={serv.protocol_version} height={serv.start_height:,d}  '
+                         f'relay={serv.relay} timestamp={serv.timestamp}')
+
+    async def version_payload(self):
+        # Send version message with our current height
+        our_service = self.node.service
+        our_service.start_height = await self.node.headers.height()
+        self.log_service_details(our_service, 'sending version message:')
+        return version_payload(our_service, self.remote_service.address, self.nonce, self.assoc_id)
 
     async def send_version(self):
         if self.version_sent:
@@ -1230,6 +1365,10 @@ class Session:
         await self.send_message(MessageHeader.VERACK, b'')
         self.verack_sent.set()
 
+    #
+    # protoconf
+    #
+
     async def on_protoconf(self, payload):
         '''Called when a protoconf message is received.'''
         if len(payload.payload) > Protoconf.LEGACY_MAX_PAYLOAD_LENGTH:
@@ -1238,6 +1377,8 @@ class Session:
             raise ProtocolError('duplicate protoconf message received', is_fatal=True)
         self.their_protoconf = self.unpack_payload(
             payload, partial(Protoconf.read, logger=self.logger))
+        if self.is_outgoing:
+            await self.maybe_open_streams()
 
     async def send_protoconf(self):
         if self.protoconf_sent:
@@ -1245,6 +1386,10 @@ class Session:
             return
         self.protoconf_sent = True
         await self.send_message(MessageHeader.PROTOCONF, self.protoconf.payload())
+
+    #
+    # sendheaders
+    #
 
     async def on_sendheaders(self, payload):
         if self.they_prefer_headers:
@@ -1261,6 +1406,10 @@ class Session:
             self.we_prefer_headers = True
             await self.send_message(MessageHeader.SENDHEADERS, b'')
 
+    #
+    # addr, getaddr
+    #
+
     async def on_getaddr(self, payload):
         self.unpack_payload(payload, read_nothing)
         await self.send_message(MessageHeader.ADDR, pack_addr_payload(await self.services()))
@@ -1271,7 +1420,9 @@ class Session:
     async def on_addr(self, payload):
         self.unpack_payload(payload, read_addrs)
 
-    # TODO: send_addr
+    #
+    # ping, pong
+    #
 
     async def on_ping(self, payload):
         nonce = self.unpack_payload(payload, read_nonce)
@@ -1292,3 +1443,85 @@ class Session:
 
     async def send_pong(self, nonce):
         await self.send_message(MessageHeader.PONG, nonce)
+
+    #
+    # createstrm, streamack
+    #
+
+    def streamack_payload(self, kind):
+        if self.assoc_id is None:
+            raise RuntimeError('no common assoc_id')
+        return pack_varbytes(self.assoc_id) + pack_byte(kind)
+
+    def createstrm_payload(self, kind, policy):
+        return self.streamack_payload(kind) + pack_varbytes(policy.encode())
+
+    def read_streamack_payload(self, read):
+        # Return an (assoc_id, stream_kind) pair.
+        assoc_id = read_varbytes(read)
+        kind = read_exactly(read, 1)[0]
+        for member, value in StreamKind.__members__.items():
+            if value == kind:
+                kind = value
+                break
+        return assoc_id, kind
+
+    def read_createstrm_payload(self, read):
+        assoc_id, kind = self.read_streamack_payload(read)
+        policy = read_varbytes(read)
+        return (assoc_id, kind, policy)
+
+    async def send_createstrm(self, stream):
+        '''Sends a createstrm message (on the general stream) to establish the passed stream.
+        Return only once a corresponding streamack is received.
+        '''
+        if not self.assoc_id:
+            raise RuntimeError('common association ID is not established')
+        if stream not in self.streams:
+            raise RuntimeError('send_createstrm: stream is not ours')
+        if stream.kind == StreamKind.GENERAL:
+            raise RuntimeError('send_createstrm: cannot use a GENERAL stream')
+        if stream.is_active:
+            raise RuntimeError('send_createstrm: stream is active')
+        if stream.event:
+            raise RuntimeError('createstrm message already pending')
+        payload = self.createstrm_payload(stream.kind, stream.policy)
+        stream.event = asyncio.Event()
+        try:
+            await self.send_message(MessageHeader.CREATESTRM, payload, stream=stream)
+            await stream.event.wait()
+        finally:
+            stream.event = None
+
+    async def on_createstrm(self, payload):
+        if self.version_received.is_set():
+            raise ProtocolError('received createstrm after version message', is_fatal=True)
+        assoc_id, kind, policy = self.unpack_payload(payload, self.read_createstrm_payload)
+        assoc = self.node.lookup_association(assoc_id)
+        if not assoc:
+            raise ProtocolError('received createstrm for unknown assoc_id', is_fatal=True)
+        assert len(self.streams) == 1
+        stream = self.streams[0]
+        await assoc.transfer_stream(stream, kind, policy)
+        self.streams.remove(stream)
+        await assoc.send_streamack(kind)
+        await self.close()
+
+    async def send_streamack(self, kind):
+        await self.send_message(MessageHeader.STREAMACK, self.streamack_payload(kind))
+
+    async def on_streamack(self, payload):
+        assoc_id, kind = self.unpack_payload(payload, self.read_streamack_payload)
+        # Detect if this streamack does not correspond to a createstrm message we sent
+        if assoc_id != self.assoc_id:
+            raise ProtocolError('received streamack for unknown assoc_id', is_fatal=True)
+        for stream in self.streams:
+            if stream.kind == kind and stream.event is not None:
+                assert not stream.is_active
+                break
+        else:
+            raise ProtocolError(f'unexpected streamack for stream kind {kind!r}', is_fatal=True)
+
+        self.logger.info(f'streamack received, activating stream {kind!r}')
+        stream.is_active = True
+        stream.event.set()

@@ -8,7 +8,7 @@ import asqlite3
 from bitcoinx import (
     Tx, TxInput, TxOutput, Script, TxInputContext, SEQUENCE_FINAL,
     OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR,
-    Bitcoin, BitcoinTestnet, Headers, pack_header, SimpleHeader
+    Bitcoin, Headers, pack_header, SimpleHeader
 )
 from bitcoinx.misc import chunks
 
@@ -189,5 +189,6 @@ def in_caplog(caplog, message, count=1):
 
 
 def print_caplog(caplog):
+    print('CAPLOG:')
     for record in caplog.records:
         print(record.message)

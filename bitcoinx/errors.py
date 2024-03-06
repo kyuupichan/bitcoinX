@@ -94,6 +94,10 @@ class ProtocolError(Exception):
     '''Raise on detecting a network protcol error.  If is_fatal then the connection is closed.'''
 
     def __init__(self, msg, *, is_fatal=False):
+        if is_fatal:
+            msg = f'fatal protocol error: {msg}'
+        else:
+            msg = f'protocol error: {msg}'
         super().__init__(msg)
         self.is_fatal = is_fatal
 
