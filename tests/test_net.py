@@ -20,7 +20,8 @@ from bitcoinx import (
 )
 from bitcoinx.misc import chunks
 from bitcoinx.net_protocol import (
-    ServicePacking, BlockLocator, Stream, StreamKind, version_payload, read_version, _command,
+    ServicePacking, BlockLocator, Stream, StreamKind, Inv, InvKind, InvItem,
+    version_payload, read_version, _command,
     pack_headers_payload, read_headers, read_addrs, services_from_seeds,
 )
 from bitcoinx.aiolib import timeout_after, ignore_after, TaskGroup
@@ -1725,6 +1726,64 @@ class TestSendCmpct:
                     await assoc.close()
 
         assert in_caplog(caplog, 'corrupt sendcmpct message')
+
+
+def random_inv():
+    items = [
+        InvItem(InvKind.TX, urandom(32)),
+        InvItem(InvKind.BLOCK, urandom(32)),
+    ]
+    return Inv(items)
+
+
+class TestInv:
+
+    @pytest.mark.asyncio
+    async def test_sent_and_received(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_inv(self, payload):
+                await super().on_inv(payload)
+                our_inv = await self.inv_queue.get()
+                assert our_inv == inv
+
+        inv = random_inv()
+        queue = asyncio.Queue()
+        async with listening_node.listen(assoc_cls=ListenerAssociation, inv_queue=queue):
+            async with client_node.connect(listening_node.service) as assoc:
+                await assoc.verack_received.wait()
+                await assoc.send_inv(inv)
+                await pause()
+                await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ExcessClientAssociation,
+                                               excess_command=MessageHeader.INV,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_inv(random_inv())
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of inv payload')
+
+    @pytest.mark.asyncio
+    async def test_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.INV,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_inv(random_inv())
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'corrupt inv message')
 
 
 class TestGetHeaders:

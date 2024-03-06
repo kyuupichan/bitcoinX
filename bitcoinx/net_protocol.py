@@ -57,15 +57,6 @@ ext_extra_unpack = ext_extra_struct.unpack
 empty_checksum = bytes(4)
 
 
-class InventoryKind(IntEnum):
-    ERROR = 0
-    TX = 1
-    BLOCK = 2
-    # The following occur only in getdata messages.  Invs always use TX or BLOCK.
-    FILTERED_BLOCK = 3
-    COMPACT_BLOCK = 4
-
-
 @dataclass
 class MessageHeader:
     '''The header of a network protocol message.'''
@@ -554,6 +545,42 @@ class GetheadersRequest:
         await self.event.wait()
 
 
+class InvKind(IntEnum):
+    TX = 1
+    BLOCK = 2
+    # FILTERED_BLOCK = 3   (unused)
+    CMPCT_BLOCK = 4     # Used in getdata only.
+    DATAREF_TX = 5      # Who knows?  They are undocumented, sigh....
+
+
+@dataclass
+class InvItem:
+    kind: InvKind
+    hash: bytes
+
+
+class Inv:
+
+    def __init__(self, items):
+        self.items = items
+
+    def to_payload(self):
+        def pack_item(item):
+            return pack_le_uint32(item.kind) + item.hash
+
+        return pack_list(self.items, pack_item)
+
+    @classmethod
+    def read(cls, read):
+        def read_item(read):
+            return InvItem(read_le_uint32(read), read(32))
+
+        items = read_list(read, read_item)
+        if items and len(items[-1].hash) != 32:
+            raise PackingError('hash must be 32 bytes')
+        return cls(items)
+
+
 class StreamKind(IntEnum):
     GENERAL = 1
     DATA1 = 2
@@ -813,7 +840,7 @@ class Association:
 
     def __init__(self, node, remote_service, is_outgoing, perform_handshake=True,
                  send_protoconf=True, we_prefer_headers=True, we_prefer_cmpctblock=False,
-                 protoconf=None):
+                 inv_queue=None, protoconf=None):
         self.node = node
         self.remote_service = remote_service
         self.is_outgoing = is_outgoing
@@ -848,6 +875,10 @@ class Association:
         self.pings = {}
         # Be optimistic, at least until we receive a version message
         self.can_send_ext_messages = True
+
+        # If None, invcoming Inv objects are dropped.  Otherwise it should be a Queue, and
+        # they are pushed onto it
+        self.inv_queue = inv_queue
 
         # Setup
         self.protoconf = protoconf or Protoconf.default()
@@ -1527,7 +1558,20 @@ class Association:
         stream.event.set()
 
     #
-    # sendcmpct, cmpctblock
+    # inv
+    #
+
+    async def send_inv(self, inv):
+        await self.send_message(MessageHeader.INV, inv.to_payload())
+
+    async def on_inv(self, payload):
+        inv = self.unpack_payload(payload, Inv.read)
+        if self.inv_queue:
+            await self.inv_queue.push(inv)
+
+
+    #
+    # sendcmpct
     #
 
     async def send_sendcmpct(self):
@@ -1555,8 +1599,3 @@ class Association:
         if cmpct_version == 1:
             self.they_provide_compact_blocks = True
             self.announce_with_cmpctblock = announce
-
-
-    #
-    # getblocktxn, blocktxn
-    #
