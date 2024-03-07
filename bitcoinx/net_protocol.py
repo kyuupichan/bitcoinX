@@ -978,25 +978,28 @@ class Association:
     async def activate_stream(self, stream):
         '''Activate a stream by setting up its message processing loops, and performing
         a handshake.'''
-        self.add_stream(stream)
-
-        # The message processing loops make the stream "live"
-        self.group.create_task(self.recv_messages_loop(stream))
-        self.group.create_task(self.send_messages_loop(stream))
-
-        if stream.kind == StreamKind.GENERAL:
-            # Every association needs these
+        async def deferred_general_tasks():
+            # Maintenance jobs every association needs once verack is sent.  This is
+            # important on incoming connections - this might be a stream which we close
+            # after sending a streamack.
+            await self.verack_sent.wait()
             self.group.create_task(self.ping_loop())
             self.group.create_task(self.check_pongs_loop())
-
-            # Setup the handshake unless customised
-            if self._perform_handshake:
-                self.group.create_task(self.perform_handshake())
             if self._send_protoconf:
                 self.group.create_task(self.send_protoconf())
             self.group.create_task(self.send_sendheaders())
             self.group.create_task(self.send_sendcmpct())
+
+        self.add_stream(stream)
+        # The message processing loops make the stream "live"
+        self.group.create_task(self.recv_messages_loop(stream))
+        self.group.create_task(self.send_messages_loop(stream))
+        if stream.kind == StreamKind.GENERAL:
             stream.is_active = True
+            # Setup the handshake unless customised
+            if self._perform_handshake:
+                self.group.create_task(self.perform_handshake())
+            self.group.create_task(deferred_general_tasks())
         else:
             self.group.create_task(self.perform_stream_handshake(stream))
 
