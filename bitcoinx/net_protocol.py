@@ -1219,20 +1219,23 @@ class Association:
         self.logger.debug(f'requesting headers; locator has {len(locator)} entries')
         await self.send_message(MessageHeader.GETHEADERS, locator.to_payload())
 
-        async def response_or_timeout(request, timeout):
+        async def timeout_response(request, timeout):
             try:
                 async with timeout_after(timeout):
                     await request.wait()
             except TimeoutError:
-                # Ensure the request is either answered or times out; it cannot do both
-                if self.getheaders_request:
+                pass
+            finally:
+                # Cancellation, timeout, or response.  A good response will have changed
+                # self.getheaders_request. Ensure the request is either answered or times
+                # out; it cannot do both.
+                if request is self.getheaders_request:
                     self.getheaders_request = None
                     self.logger.info('getheaders request timed out')
                     request.timeout()
 
         self.getheaders_request = GetheadersRequest(locator)
-        self.group.create_task(response_or_timeout(self.getheaders_request,
-                                                   self.GETHEADERS_TIMEOUT))
+        self.group.create_task(timeout_response(self.getheaders_request, self.GETHEADERS_TIMEOUT))
         return self.getheaders_request
 
     async def _sync_headers(self):

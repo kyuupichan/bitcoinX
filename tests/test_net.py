@@ -835,7 +835,7 @@ class ExcessClientAssociation(Association):
     async def send_message(self, command, payload, *, force_extended=False, stream=None):
         if command == self.excess_command:
             payload += b'x'
-        await super().send_message(command, payload, force_extended=force_extended)
+        await super().send_message(command, payload, force_extended=force_extended, stream=stream)
 
 
 class CorruptClientAssociation(Association):
@@ -848,7 +848,7 @@ class CorruptClientAssociation(Association):
         if command == self.excess_command:
             assert payload
             payload = payload[:-1]
-        await super().send_message(command, payload, force_extended=force_extended)
+        await super().send_message(command, payload, force_extended=force_extended, stream=stream)
 
 
 class TestNode:
@@ -1278,7 +1278,7 @@ class TestExtendedMessages:
         '''Test sending every message as extended, even the version message.'''
         class ClientAssociation(Association):
             async def send_message(self, command, payload, *, force_extended=False, stream=None):
-                await super().send_message(command, payload, force_extended=True)
+                await super().send_message(command, payload, force_extended=True, stream=stream)
 
         async with listening_node.listen():
             async with client_node.connect(listening_node.service,
