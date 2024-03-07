@@ -1728,11 +1728,9 @@ class TestSendCmpct:
         assert in_caplog(caplog, 'corrupt sendcmpct message')
 
 
-def random_inv(is_getdata=False):
-    items = [
-        InvItem(InvKind.TX, urandom(32)),
-        InvItem(InvKind.BLOCK, urandom(32)),
-    ]
+def random_inv(is_getdata=False, tx_count=1):
+    items = [InvItem(InvKind.TX, urandom(32)) for _ in range(tx_count)]
+    items.append(InvItem(InvKind.BLOCK, urandom(32)))
     if is_getdata:
         items.append(InvItem(InvKind.CMPCT_BLOCK, urandom(32)))
     return Inv(items)
@@ -1749,13 +1747,34 @@ class TestInv:
                 assert our_inv == inv
 
         inv = random_inv()
-        queue = asyncio.Queue()
         async with listening_node.listen(assoc_cls=ListenerAssociation):
             async with client_node.connect(listening_node.service) as assoc:
                 await assoc.verack_received.wait()
                 await assoc.send_inv(inv)
                 await pause()
                 await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_count_limit(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_inv(self, payload):
+                await super().on_inv(payload)
+                our_inv = await self.inv_queue.get()
+                assert len(our_inv.items) <= max_inv_elements
+                recd_inv.extend(our_inv.items)
+
+        max_inv_elements = 4
+        recd_inv = []
+        inv = random_inv(tx_count=20)
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service) as assoc:
+                assoc.protoconf.max_payload_length = 160
+                assert assoc.protoconf.max_inv_elements() == max_inv_elements
+                await assoc.verack_received.wait()
+                await assoc.send_inv(inv)
+                await pause()
+                await assoc.close()
+        assert recd_inv == inv.items
 
     @pytest.mark.asyncio
     async def test_excess(self, client_node, listening_node, caplog):
@@ -1806,6 +1825,28 @@ class TestGetdata:
                 await assoc.send_getdata(inv)
                 await pause()
                 await assoc.close()
+
+    @pytest.mark.asyncio
+    async def test_count_limit(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_getdata(self, payload):
+                await super().on_getdata(payload)
+                our_inv = await self.getdata_queue.get()
+                assert len(our_inv.items) <= max_inv_elements
+                recd_inv.extend(our_inv.items)
+
+        max_inv_elements = 4
+        recd_inv = []
+        inv = random_inv(tx_count=20)
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service) as assoc:
+                assoc.protoconf.max_payload_length = 160
+                assert assoc.protoconf.max_inv_elements() == max_inv_elements
+                await assoc.verack_received.wait()
+                await assoc.send_getdata(inv)
+                await pause()
+                await assoc.close()
+        assert recd_inv == inv.items
 
     @pytest.mark.asyncio
     async def test_excess(self, client_node, listening_node, caplog):

@@ -25,7 +25,7 @@ from .errors import (
 )
 from .hashes import double_sha256, hash_to_hex_str
 from .headers import SimpleHeader
-from .misc import prefixed_logger
+from .misc import prefixed_logger, chunks
 from .net import NetAddress
 from .packing import (
     pack_byte, pack_le_int32, pack_le_uint32, pack_le_int64, pack_le_uint64, pack_varint,
@@ -564,11 +564,12 @@ class Inv:
     def __init__(self, items):
         self.items = items
 
-    def to_payload(self):
+    def payloads(self, limit):
         def pack_item(item):
             return pack_le_uint32(item.kind) + item.hash
 
-        return pack_list(self.items, pack_item)
+        for chunk in chunks(self.items, limit):
+            yield pack_list(chunk, pack_item)
 
     @classmethod
     def read(cls, read):
@@ -1569,18 +1570,20 @@ class Association:
     #
 
     async def send_inv(self, inv):
-        await self.send_message(MessageHeader.INV, inv.to_payload())
+        for payload in inv.payloads(self.protoconf.max_inv_elements()):
+            await self.send_message(MessageHeader.INV, payload)
 
     async def on_inv(self, payload):
         inv = self.unpack_payload(payload, Inv.read)
-        await self.inv_queue.push(inv)
+        await self.inv_queue.put(inv)
 
     async def send_getdata(self, inv):
-        await self.send_message(MessageHeader.GETDATA, inv.to_payload())
+        for payload in inv.payloads(self.protoconf.max_inv_elements()):
+            await self.send_message(MessageHeader.GETDATA, payload)
 
     async def on_getdata(self, payload):
         inv = self.unpack_payload(payload, Inv.read)
-        await self.getdata_queue.push(inv)
+        await self.getdata_queue.put(inv)
 
     #
     # sendcmpct

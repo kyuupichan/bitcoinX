@@ -42,6 +42,7 @@ def int_to_le_bytes(value, size=None):
 
 def chunks(items, size):
     '''Break up items, an iterable, into chunks of length size.'''
+    assert size > 0
     for i in range(0, len(items), size):
         yield items[i: i + size]
 
