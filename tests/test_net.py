@@ -1223,16 +1223,22 @@ class TestExtendedMessages:
 
     @pytest.mark.asyncio
     async def test_send_ext_message(self, client_node, listening_node):
+        class CAssociation(Association):
+            async def send_protoconf(self):
+                await event.wait()
+                payload = protoconf.payload()
+                await assoc.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
+
+        protoconf = Protoconf(2_000_000, ['foo', 'bar'])
+        event = asyncio.Event()
         async with listening_node.listen():
             async with client_node.connect(listening_node.service,
-                                           send_protoconf=False) as assoc:
+                                           assoc_cls=CAssociation) as assoc:
                 listener_assoc = await listening_assoc(listening_node)
                 assert listener_assoc.their_protoconf is None
-                assoc.our_protoconf = Protoconf(2_000_000, ['foo', 'bar'])
-                payload = assoc.our_protoconf.payload()
-                await assoc.send_message(MessageHeader.PROTOCONF, payload, force_extended=True)
+                event.set()
                 await pause()
-                assert listener_assoc.their_protoconf == assoc.our_protoconf
+                assert listener_assoc.their_protoconf == protoconf
                 await assoc.close()
 
     @pytest.mark.asyncio
@@ -1240,18 +1246,16 @@ class TestExtendedMessages:
         with caplog.at_level(logging.ERROR):
             listening_node.service.protocol_version = 70_015
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
+                async with client_node.connect(listening_node.service) as assoc:
                     await assoc.verack_sent.wait()
-                    payload = Protoconf.default().payload()
                     assert not assoc.can_send_ext_messages
                     # We should not accept sending a large message
                     with pytest.raises(RuntimeError):
-                        await assoc.send_message(MessageHeader.PROTOCONF, payload,
+                        await assoc.send_message(MessageHeader.PING, b'01234567',
                                                  force_extended=True)
                     # Override the check
                     assoc.can_send_ext_messages = True
-                    await assoc.send_message(MessageHeader.PROTOCONF, payload,
+                    await assoc.send_message(MessageHeader.PING, b'01234567',
                                              force_extended=True)
                     pass
 
@@ -1333,16 +1337,22 @@ class TestProtoconf:
 
     @pytest.mark.asyncio
     async def test_protoconf_understood(self, client_node, listening_node):
+        class CAssociation(Association):
+            async def send_protoconf(self):
+                await event.wait()
+                self.protoconf.max_payload_length = 1024 * 1024 * 2
+                assert self.protoconf.max_inv_elements() == 58254
+                self.protoconf.max_payload_length = 1024 * 1024
+                assert self.protoconf.max_inv_elements() == 29127
+                await super().send_protoconf()
+
+        event = asyncio.Event()
         async with listening_node.listen():
             async with client_node.connect(listening_node.service,
-                                           send_protoconf=False) as assoc:
+                                           assoc_cls=CAssociation) as assoc:
                 listener_assoc = await listening_assoc(listening_node)
                 assert listener_assoc.their_protoconf is None
-                assoc.protoconf.max_payload_length = 1024 * 1024 * 2
-                assert assoc.protoconf.max_inv_elements() == 58254
-                assoc.protoconf.max_payload_length = 1024 * 1024
-                assert assoc.protoconf.max_inv_elements() == 29127
-                await assoc.send_protoconf()
+                event.set()
                 await pause()
                 assert listener_assoc.their_protoconf == assoc.protoconf
                 await assoc.close()
@@ -1351,9 +1361,9 @@ class TestProtoconf:
     async def test_duplicate(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
-                    await assoc.send_protoconf()
+                async with client_node.connect(listening_node.service) as assoc:
+                    await pause()
+                    assert assoc.protoconf_sent == True
                     with caplog.at_level(logging.WARNING):
                         await assoc.send_protoconf()
                     await pause()
@@ -1373,10 +1383,8 @@ class TestProtoconf:
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service,
                                                assoc_cls=ExcessClientAssociation,
-                                               send_protoconf=False,
                                                excess_command=MessageHeader.PROTOCONF,
                                                ) as assoc:
-                    await assoc.send_protoconf()
                     await pause()
                     await assoc.close()
 
@@ -1388,10 +1396,8 @@ class TestProtoconf:
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service,
                                                assoc_cls=CorruptClientAssociation,
-                                               send_protoconf=False,
                                                corrupt_command=MessageHeader.PROTOCONF,
                                                ) as assoc:
-                    await assoc.send_protoconf()
                     await pause()
                     await assoc.close()
 
@@ -1399,25 +1405,31 @@ class TestProtoconf:
 
     @pytest.mark.asyncio
     async def test_no_fields(self, client_node, listening_node, caplog):
+        class CAssociation(Association):
+            async def send_protoconf(self):
+                await self.send_message(MessageHeader.PROTOCONF, b'\0')
+                await pause()
+                await self.close()
+
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
-                    await assoc.send_message(MessageHeader.PROTOCONF, b'\0')
-                    await pause()
-                    await assoc.close()
+                async with client_node.connect(listening_node.service, assoc_cls=CAssociation):
+                    pass
 
         assert in_caplog(caplog, 'fatal protocol error: protoconf message must have '
                          'at least one field')
 
     @pytest.mark.asyncio
     async def test_one_field(self, client_node, listening_node):
+        class CAssociation(Association):
+            async def send_protoconf(self):
+                payload = pack_varint(1) + pack_le_uint32(protoconf.max_payload_length)
+                await self.send_message(MessageHeader.PROTOCONF, payload)
+
+        protoconf = Protoconf(1024 * 1024, ['Default'])
         async with listening_node.listen():
             async with client_node.connect(listening_node.service,
-                                           send_protoconf=False) as assoc:
-                protoconf = Protoconf(1024 * 1024, ['Default'])
-                payload = pack_varint(1) + pack_le_uint32(protoconf.max_payload_length)
-                await assoc.send_message(MessageHeader.PROTOCONF, payload)
+                                           assoc_cls=CAssociation) as assoc:
                 await pause()
                 listener_assoc = await listening_assoc(listening_node)
                 assert listener_assoc.their_protoconf == protoconf
@@ -1425,12 +1437,15 @@ class TestProtoconf:
 
     @pytest.mark.asyncio
     async def test_too_many_fields(self, client_node, listening_node, caplog):
+        class CAssociation(Association):
+            async def send_protoconf(self):
+                payload = pack_varint(3) + self.protoconf.payload()[1:] + b'0'
+                await self.send_message(MessageHeader.PROTOCONF, payload)
+
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
-                    payload = pack_varint(3) + assoc.protoconf.payload()[1:] + b'0'
-                    await assoc.send_message(MessageHeader.PROTOCONF, payload)
+                                               assoc_cls=CAssociation) as assoc:
                     await pause()
                     listener = await listening_assoc(listening_node)
                     # Assert still processed
@@ -1443,10 +1458,8 @@ class TestProtoconf:
     async def test_bad_max_payload_length(self, client_node, listening_node, caplog):
         with caplog.at_level(logging.WARNING):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
+                async with client_node.connect(listening_node.service) as assoc:
                     assoc.protoconf.max_payload_length = 1024 * 1024 - 1
-                    await assoc.send_protoconf()
                     await pause()
                     await assoc.close()
 
@@ -1457,11 +1470,9 @@ class TestProtoconf:
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
                 MAX = 1024 * 1024 - 10
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
+                async with client_node.connect(listening_node.service) as assoc:
                     assoc.protoconf.stream_policies = ['0' * MAX]
                     assert len(assoc.protoconf.payload()) == 1024 * 1024
-                    await assoc.send_protoconf()
                     await pause()
                     await assoc.close()
 
@@ -1469,10 +1480,8 @@ class TestProtoconf:
                 await pause()  # Wait for the listener to close the connection
                 caplog.clear()
 
-                async with client_node.connect(listening_node.service,
-                                               send_protoconf=False) as assoc:
+                async with client_node.connect(listening_node.service) as assoc:
                     assoc.protoconf.stream_policies = ['0' * (MAX + 1)]
-                    await assoc.send_protoconf()
                     await pause()
 
                 assert in_caplog(caplog, 'fatal protocol error: oversized protoconf message')

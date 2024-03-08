@@ -481,7 +481,7 @@ class BlockLocator:
         def read_one(read):
             return read(32)
 
-        version = read_le_uint32(read)
+        version = read_le_int32(read)
         locator = read_list(read, read_one)
         hash_stop = read_exactly(read, 32)
         return cls(version, locator, hash_stop)
@@ -842,7 +842,7 @@ class Association:
     # After this amount of time, a getheaders request is assumed abandoned.
     GETHEADERS_TIMEOUT = 30
 
-    def __init__(self, node, remote_service, is_outgoing, send_protoconf=True,
+    def __init__(self, node, remote_service, is_outgoing,
                  we_prefer_headers=True, we_prefer_cmpctblock=False, protoconf=None):
         self.node = node
         self.remote_service = remote_service
@@ -886,7 +886,6 @@ class Association:
 
         # Setup
         self.protoconf = protoconf or Protoconf.default()
-        self._send_protoconf = send_protoconf
         # If True, a sendheaders message is sent
         self.we_prefer_headers = we_prefer_headers
         # If True, we request cmpctblock announcements
@@ -985,12 +984,11 @@ class Association:
             # important on incoming connections - this might be a stream which we close
             # after sending a streamack.
             await self.verack_sent.wait()
-            self.group.create_task(self.ping_loop())
-            self.group.create_task(self.check_pongs_loop())
-            if self._send_protoconf:
-                self.group.create_task(self.send_protoconf())
+            self.group.create_task(self.send_protoconf())
             self.group.create_task(self.send_sendheaders())
             self.group.create_task(self.send_sendcmpct())
+            self.group.create_task(self.ping_loop())
+            self.group.create_task(self.check_pongs_loop())
 
         self.add_stream(stream)
         # The message processing loops make the stream "live"
