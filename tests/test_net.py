@@ -1004,47 +1004,56 @@ class TestHandshake:
 
     @pytest.mark.asyncio
     async def test_duplicate_version(self, client_node, listening_node, caplog):
+        class CAssociation(Association):
+            async def perform_handshake(self):
+                await self.send_version()
+                with caplog.at_level(logging.WARNING):
+                    await self.send_version()
+                assert in_caplog(caplog, 'version message already sent')
+                await pause()
+                assert not in_caplog(caplog, 'duplicate version message')
+
+                self.version_sent = False
+                await self.send_version()
+                await pause()
+                await self.close()
+
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               perform_handshake=False) as assoc:
-                    await assoc.send_version()
-                    with caplog.at_level(logging.WARNING):
-                        await assoc.send_version()
-                    assert in_caplog(caplog, 'version message already sent')
-                    await pause()
-                    assert not in_caplog(caplog, 'duplicate version message')
-
-                    assoc.version_sent = False
-                    await assoc.send_version()
-                    await pause()
-                    await assoc.close()
+                async with client_node.connect(listening_node.service, assoc_cls=CAssociation):
+                    pass
 
         assert in_caplog(caplog, 'protocol error: duplicate version message')
 
     @pytest.mark.asyncio
     async def test_send_verack_first(self, client_node, listening_node, caplog):
+        class CAssociation(Association):
+            async def perform_handshake(self):
+                await self.send_verack()
+                await pause()
+                await self.close()
+
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               perform_handshake=False) as assoc:
-                    await assoc.send_verack()
-                    await pause()
-                    await assoc.close()
+                async with client_node.connect(listening_node.service, assoc_cls=CAssociation):
+                    pass
 
         assert in_caplog(caplog, 'protocol error: verack message received before version')
 
     @pytest.mark.asyncio
     async def test_send_verack_without_version(self, client_node, listening_node, caplog):
+        class CAssociation(Association):
+            async def perform_handshake(self):
+                await self.send_version()
+                # Don't wait for an incoming version message....
+                await self.send_verack()
+                await pause()
+                await self.close()
+
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               perform_handshake=False) as assoc:
-                    await assoc.send_version()
-                    # Don't wait for an incoming version message....
-                    await assoc.send_verack()
-                    await pause()
-                    await assoc.close()
+                async with client_node.connect(listening_node.service, assoc_cls=CAssociation):
+                    pass
 
         assert in_caplog(caplog, 'fatal protocol error: verack message received before '
                          'version message sent')
@@ -1054,30 +1063,33 @@ class TestHandshake:
     @pytest.mark.parametrize('first', (False, True))
     async def test_other_message_before_handshake_complete(self, client_node, listening_node,
                                                            caplog, extended, first):
+        class CAssociation(Association):
+            async def perform_handshake(self):
+                async def sendheaders():
+                    # Don't use send_message to force the first message
+                    command = MessageHeader.SENDHEADERS
+                    payload = b''
+                    if extended:
+                        header = MessageHeader.ext_bytes(self.node.network.magic,
+                                                         command, len(payload))
+                    else:
+                        header = MessageHeader.std_bytes(self.node.network.magic,
+                                                         command, payload)
+                    stream = self.stream_for_message(command)
+                    await stream.outgoing_messages.put((header, payload))
+
+                if first:
+                    await sendheaders()
+                else:
+                    await self.send_version()
+                    await sendheaders()
+                await pause()
+                await self.close()
+
         with caplog.at_level(logging.ERROR):
             async with listening_node.listen():
-                async with client_node.connect(listening_node.service,
-                                               perform_handshake=False) as assoc:
-                    async def sendheaders():
-                        # Don't use send_message to force the first message
-                        command = MessageHeader.SENDHEADERS
-                        payload = b''
-                        if extended:
-                            header = MessageHeader.ext_bytes(assoc.node.network.magic,
-                                                             command, len(payload))
-                        else:
-                            header = MessageHeader.std_bytes(assoc.node.network.magic,
-                                                             command, payload)
-                        stream = assoc.stream_for_message(command)
-                        await stream.outgoing_messages.put((header, payload))
-
-                    if first:
-                        await sendheaders()
-                    else:
-                        await assoc.send_version()
-                        await sendheaders()
-                    await pause()
-                    await assoc.close()
+                async with client_node.connect(listening_node.service, assoc_cls=CAssociation):
+                    pass
 
         print_caplog(caplog)
         assert in_caplog(caplog, 'sendheaders message received before')
@@ -1760,7 +1772,7 @@ class TestInv:
             async def on_inv(self, payload):
                 await super().on_inv(payload)
                 our_inv = await self.inv_queue.get()
-                assert len(our_inv.items) <= max_inv_elements
+                assert len(our_inv) <= max_inv_elements
                 recd_inv.extend(our_inv.items)
 
         max_inv_elements = 4
@@ -1832,7 +1844,7 @@ class TestGetdata:
             async def on_getdata(self, payload):
                 await super().on_getdata(payload)
                 our_inv = await self.getdata_queue.get()
-                assert len(our_inv.items) <= max_inv_elements
+                assert len(our_inv) <= max_inv_elements
                 recd_inv.extend(our_inv.items)
 
         max_inv_elements = 4

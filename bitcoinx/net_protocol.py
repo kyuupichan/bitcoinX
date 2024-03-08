@@ -11,6 +11,7 @@ import os
 import socket
 import time
 from asyncio import Event, Queue, open_connection
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 from functools import partial
@@ -564,6 +565,9 @@ class Inv:
     def __init__(self, items):
         self.items = items
 
+    def __len__(self):
+        return len(self.items)
+
     def payloads(self, limit):
         def pack_item(item):
             return pack_le_uint32(item.kind) + item.hash
@@ -839,9 +843,8 @@ class Association:
     # After this amount of time, a getheaders request is assumed abandoned.
     GETHEADERS_TIMEOUT = 30
 
-    def __init__(self, node, remote_service, is_outgoing, perform_handshake=True,
-                 send_protoconf=True, we_prefer_headers=True, we_prefer_cmpctblock=False,
-                 protoconf=None):
+    def __init__(self, node, remote_service, is_outgoing, send_protoconf=True,
+                 we_prefer_headers=True, we_prefer_cmpctblock=False, protoconf=None):
         self.node = node
         self.remote_service = remote_service
         self.is_outgoing = is_outgoing
@@ -885,7 +888,6 @@ class Association:
         # Setup
         self.protoconf = protoconf or Protoconf.default()
         self._send_protoconf = send_protoconf
-        self._perform_handshake = perform_handshake
         # If True, a sendheaders message is sent
         self.we_prefer_headers = we_prefer_headers
         # If True, we request cmpctblock announcements
@@ -997,9 +999,7 @@ class Association:
         self.group.create_task(self.send_messages_loop(stream))
         if stream.kind == StreamKind.GENERAL:
             stream.is_active = True
-            # Setup the handshake unless customised
-            if self._perform_handshake:
-                self.group.create_task(self.perform_handshake())
+            self.group.create_task(self.perform_handshake())
             self.group.create_task(deferred_general_tasks())
         else:
             self.group.create_task(self.perform_stream_handshake(stream))
@@ -1566,7 +1566,7 @@ class Association:
         stream.event.set()
 
     #
-    # inv, getdata
+    # inv, getdata, notfound
     #
 
     async def send_inv(self, inv):
@@ -1584,6 +1584,14 @@ class Association:
     async def on_getdata(self, payload):
         inv = self.unpack_payload(payload, Inv.read)
         await self.getdata_queue.put(inv)
+
+    async def send_notfound(self, inv):
+        for payload in inv.payloads(self.protoconf.max_inv_elements()):
+            await self.send_message(MessageHeader.NOTFOUND, payload)
+
+    async def on_notfound(self, payload):
+        inv = self.unpack_payload(payload, Inv.read)
+        self.logger.info(f'received notfound with {len(inv):,d} items')
 
     #
     # sendcmpct
