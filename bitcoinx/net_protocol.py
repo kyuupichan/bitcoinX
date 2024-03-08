@@ -1574,6 +1574,7 @@ class Association:
 
     async def on_inv(self, payload):
         inv = self.unpack_payload(payload, Inv.read)
+        self.logger.info(f'received inv with {len(inv)} items:')
         await self.inv_queue.put(inv)
 
     async def send_getdata(self, inv):

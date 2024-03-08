@@ -1890,6 +1890,80 @@ class TestGetdata:
         assert in_caplog(caplog, 'corrupt getdata message')
 
 
+class TestNotfound:
+
+    @pytest.mark.asyncio
+    async def test_sent_and_received(self, client_node, listening_node, caplog):
+        class ListenerAssociation(Association):
+            async def on_notfound(self, payload):
+                await super().on_notfound(payload)
+                our_inv = self.unpack_payload(payload, Inv.read)
+                assert our_inv == inv
+
+        inv = random_inv(True)
+        with caplog.at_level(logging.INFO):
+            async with listening_node.listen(assoc_cls=ListenerAssociation):
+                async with client_node.connect(listening_node.service) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_notfound(inv)
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'received notfound with 3 items')
+
+    @pytest.mark.asyncio
+    async def test_count_limit(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def on_notfound(self, payload):
+                our_inv = self.unpack_payload(payload, Inv.read)
+                assert len(our_inv) <= max_inv_elements
+                recd_inv.extend(our_inv.items)
+
+        max_inv_elements = 4
+        recd_inv = []
+        inv = random_inv(tx_count=20)
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service) as assoc:
+                assoc.protoconf.max_payload_length = 160
+                assert assoc.protoconf.max_inv_elements() == max_inv_elements
+                await assoc.verack_received.wait()
+                await assoc.send_notfound(inv)
+                await pause()
+                await assoc.close()
+        assert recd_inv == inv.items
+
+    @pytest.mark.asyncio
+    async def test_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ExcessClientAssociation,
+                                               excess_command=MessageHeader.NOTFOUND,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_notfound(random_inv())
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of notfound payload')
+
+    @pytest.mark.asyncio
+    async def test_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.NOTFOUND,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_notfound(random_inv())
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'corrupt notfound message')
+
+
+
 class TestGetHeaders:
 
     @pytest.mark.asyncio
