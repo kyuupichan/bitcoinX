@@ -1601,12 +1601,12 @@ class TestSendHeaders:
 
     @pytest.mark.asyncio
     async def test_sent_only_if_understood(self, client_node, listening_node):
-        received = False
         class ListenerAssociation(Association):
             async def on_sendheaders(self, payload):
                 nonlocal received
                 received = True
 
+        received = False
         async with listening_node.listen(assoc_cls=ListenerAssociation):
             listening_node.service.protocol_version = 70_011
             async with client_node.connect(listening_node.service) as assoc:
@@ -1659,12 +1659,12 @@ class TestSendCmpct:
 
     @pytest.mark.asyncio
     async def test_sent_only_if_understood(self, client_node, listening_node):
-        received = False
         class ListenerAssociation(Association):
             async def on_sendcmpct(self, payload):
                 nonlocal received
                 received = True
 
+        received = False
         async with listening_node.listen(assoc_cls=ListenerAssociation):
             listening_node.service.protocol_version = 70_013
             async with client_node.connect(listening_node.service) as assoc:
@@ -1830,7 +1830,6 @@ class TestGetdata:
                 assert our_inv == inv
 
         inv = random_inv(True)
-        queue = asyncio.Queue()
         async with listening_node.listen(assoc_cls=ListenerAssociation):
             async with client_node.connect(listening_node.service) as assoc:
                 await assoc.verack_received.wait()
@@ -2497,3 +2496,61 @@ class TestStreams:
                     assert in_caplog(caplog, 'fatal protocol error: unexpected streamack '
                                      'for stream kind <StreamKind.DATA1: 2>')
                     assert in_caplog(caplog, 'connection closed remotely')
+
+    @pytest.mark.asyncio
+    async def test_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ExcessClientAssociation,
+                                               excess_command=MessageHeader.CREATESTRM,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of createstrm payload')
+
+    @pytest.mark.asyncio
+    async def test_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.CREATESTRM,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'corrupt createstrm message')
+
+    @pytest.mark.asyncio
+    async def test_ack_excess(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.WARNING):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=ExcessClientAssociation,
+                                               excess_command=MessageHeader.STREAMACK,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_streamack(StreamKind.DATA1)
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'extra bytes at end of streamack payload')
+
+    @pytest.mark.asyncio
+    async def test_ack_corrupt(self, client_node, listening_node, caplog):
+        with caplog.at_level(logging.ERROR):
+            async with listening_node.listen():
+                async with client_node.connect(listening_node.service,
+                                               assoc_cls=CorruptClientAssociation,
+                                               corrupt_command=MessageHeader.STREAMACK,
+                                               ) as assoc:
+                    await assoc.verack_received.wait()
+                    await assoc.send_streamack(StreamKind.DATA1)
+                    await pause()
+                    await assoc.close()
+
+        assert in_caplog(caplog, 'corrupt streamack message')

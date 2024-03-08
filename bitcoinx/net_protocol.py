@@ -11,7 +11,6 @@ import os
 import socket
 import time
 from asyncio import Event, Queue, open_connection
-from collections import defaultdict
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 from functools import partial
