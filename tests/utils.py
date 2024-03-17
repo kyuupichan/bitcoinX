@@ -53,7 +53,7 @@ def random_output():
     return TxOutput(random_value(), random_script())
 
 
-def random_tx(is_single):
+def random_tx(is_single=False):
     version = random.randrange(- (1 << 31), 1 << 31)
     locktime = 0 if random_bool() else random.randrange(0, 1 << 32)
     n_inputs = random.randrange(1, 5)

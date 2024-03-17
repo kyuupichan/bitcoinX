@@ -558,6 +558,9 @@ class InvItem:
     kind: InvKind
     hash: bytes
 
+    def __hash__(self):
+        return hash((self.kind, self.hash[:4]))
+
 
 class Inv:
 
@@ -881,8 +884,6 @@ class Association:
 
         # Incoming "inv" inventory objects are pushed on this queue
         self.inv_queue = asyncio.Queue()
-        # Incoming "getdata" request object are pushed on this queue
-        self.getdata_queue = asyncio.Queue()
 
         # Setup
         self.protoconf = protoconf or Protoconf.default()
@@ -1186,10 +1187,8 @@ class Association:
         return [self.node.service]
 
     # Call to request various things from the peer
-
-    async def get_data(self, items):
-
-        '''Request various items from the peer.'''
+    async def lookup_tx(self, tx_hash):
+        return None
 
     async def get_block(self, block_hash):
         '''Call to request the block with the given hash.'''
@@ -1581,7 +1580,20 @@ class Association:
 
     async def on_getdata(self, payload):
         inv = self.unpack_payload(payload, Inv.read)
-        await self.getdata_queue.put(inv)
+        not_found = [item for item in inv.items
+                     if not await self.get_inv_item(item)]
+        if not_found:
+            await self.send_notfound(Inv(not_found))
+
+    async def get_inv_item(self, item):
+        if item.kind == InvKind.TX:
+            tx_raw = await self.lookup_tx(item.hash)
+            if tx_raw:
+                await self.send_message(MessageHeader.TX, tx_raw)
+                return True
+
+        # FIXME: handle BLOCK and CMPCT_BLOCK
+        return False
 
     async def send_notfound(self, inv):
         for payload in inv.payloads(self.protoconf.max_inv_elements()):

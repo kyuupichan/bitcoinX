@@ -28,7 +28,7 @@ from bitcoinx.aiolib import timeout_after, ignore_after, TaskGroup
 
 from .utils import (
     run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers, in_caplog,
-    print_caplog,
+    print_caplog, random_tx
 )
 
 
@@ -1834,8 +1834,7 @@ class TestGetdata:
     async def test_sent_and_received(self, client_node, listening_node):
         class ListenerAssociation(Association):
             async def on_getdata(self, payload):
-                await super().on_getdata(payload)
-                our_inv = await self.getdata_queue.get()
+                our_inv = self.unpack_payload(payload, Inv.read)
                 assert our_inv == inv
 
         inv = random_inv(True)
@@ -1850,8 +1849,7 @@ class TestGetdata:
     async def test_count_limit(self, client_node, listening_node):
         class ListenerAssociation(Association):
             async def on_getdata(self, payload):
-                await super().on_getdata(payload)
-                our_inv = await self.getdata_queue.get()
+                our_inv = self.unpack_payload(payload, Inv.read)
                 assert len(our_inv) <= max_inv_elements
                 recd_inv.extend(our_inv.items)
 
@@ -1867,6 +1865,43 @@ class TestGetdata:
                 await pause()
                 await assoc.close()
         assert recd_inv == inv.items
+
+    @pytest.mark.asyncio
+    async def test_sent_got_tx_and_notfound(self, client_node, listening_node):
+        class ListenerAssociation(Association):
+            async def lookup_tx(self, tx_hash):
+                return raw_tx_by_hash.get(tx_hash)
+
+        class ClientAssociation(Association):
+            async def on_tx(self, payload):
+                payload = payload.payload
+                recd_txs[double_sha256(payload)] = payload
+
+            async def on_notfound(self, payload):
+                nonlocal notfound
+                notfound = self.unpack_payload(payload, Inv.read)
+
+        tx = random_tx()
+        raw_tx_by_hash = {tx.hash(): tx.to_bytes()}
+        inv = Inv([
+            InvItem(InvKind.TX, tx.hash()),
+            InvItem(InvKind.TX, urandom(32)),
+            InvItem(InvKind.BLOCK, urandom(32)),
+        ])
+        recd_txs = {}
+        notfound = None
+
+        async with listening_node.listen(assoc_cls=ListenerAssociation):
+            async with client_node.connect(listening_node.service,
+                                           assoc_cls=ClientAssociation) as assoc:
+                await assoc.verack_received.wait()
+                await assoc.send_getdata(inv)
+                await pause()
+                await assoc.close()
+
+        assert recd_txs == raw_tx_by_hash
+        assert notfound
+        assert set(notfound.items) == set(inv.items[1:])
 
     @pytest.mark.asyncio
     async def test_excess(self, client_node, listening_node, caplog):
@@ -2578,7 +2613,7 @@ class TestStreams:
                     await pause()
                     assert in_caplog(caplog, 'fatal protocol error: unexpected streamack '
                                      'for stream kind <StreamKind.DATA1: 2>')
-                    assert in_caplog(caplog, 'connection closed remotely')
+                    assert in_caplog(caplog, 'connection closed remotely', None)
 
     @pytest.mark.asyncio
     async def test_excess(self, client_node, listening_node, caplog):
