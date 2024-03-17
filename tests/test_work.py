@@ -11,7 +11,7 @@ import pytest
 
 
 from bitcoinx import (
-    Bitcoin, BitcoinTestnet, Headers, BitcoinScalingTestnet, BitcoinRegtest,
+    Bitcoin, BitcoinTestnet, NetworkDB, BitcoinScalingTestnet, BitcoinRegtest,
     unpack_le_uint16, unpack_le_uint32, pack_le_uint32, merkle_root,
     Header, header_hash, SimpleHeader, grind_header,
     bits_to_target, target_to_bits, bits_to_difficulty, bits_to_work, int_to_le_bytes,
@@ -276,9 +276,9 @@ def test_regtest():
 def run_test_with_headers(test_func, network):
     async def run():
         async with asqlite3.connect(':memory:') as conn:
-            headers = Headers(conn, network)
-            await headers.initialize()
-            await test_func(headers)
+            db = NetworkDB(conn, network)
+            await db.initialize()
+            await test_func(db)
 
     asyncio.run(run())
 

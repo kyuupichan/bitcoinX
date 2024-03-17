@@ -13,8 +13,8 @@ import pytest_asyncio
 
 from bitcoinx import (
     Bitcoin, BitcoinTestnet, pack_varint, _version_str, double_sha256, pack_le_int32, pack_list,
-    Headers, all_networks, ProtocolError, PackingError, pack_le_uint32, pack_byte, pack_le_uint64,
-    NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
+    all_networks, ProtocolError, PackingError, pack_le_uint32, pack_byte, pack_le_uint64,
+    NetworkDB, NetAddress, BitcoinService, ServiceFlags, Protoconf, MessageHeader,
     Service, is_valid_hostname, validate_port, validate_protocol, classify_host,
     ServicePart, Node, Association, SimpleHeader
 )
@@ -27,7 +27,7 @@ from bitcoinx.net_protocol import (
 from bitcoinx.aiolib import timeout_after, ignore_after, TaskGroup
 
 from .utils import (
-    run_test_with_headers, create_random_branch, insert_tree, first_mainnet_headers, in_caplog,
+    run_test_with_db, create_random_branch, insert_tree, first_mainnet_headers, in_caplog,
     print_caplog, random_tx
 )
 
@@ -739,50 +739,50 @@ class TestBlockLocator:
     # FIXME: add more tests
 
     def test_from_headers(self):
-        async def test(headers):
+        async def test(db):
             count = 100
-            branch = create_random_branch(headers.genesis_header, count)
-            await insert_tree(headers, [(None, branch)])
-            locator = await BlockLocator.from_block_hash(0, headers)
+            branch = create_random_branch(db.genesis_header, count)
+            await insert_tree(db, [(None, branch)])
+            locator = await BlockLocator.from_block_hash(0, db)
             assert len(locator) == 8
             assert locator.block_hashes[:-1] == [
                 branch[-(1 << loc_pos)].hash for loc_pos in range(7)]
-            assert locator.block_hashes[-1] == headers.genesis_header.hash
+            assert locator.block_hashes[-1] == db.genesis_header.hash
 
-        run_test_with_headers(test)
+        run_test_with_db(test)
 
     @pytest.mark.parametrize('network', all_networks)
     def test_block_locator_empty_headers(self, network):
-        async def test(headers):
-            locator = await BlockLocator.from_block_hash(0, headers)
-            assert locator.block_hashes == [headers.genesis_header.hash]
+        async def test(db):
+            locator = await BlockLocator.from_block_hash(0, db)
+            assert locator.block_hashes == [db.genesis_header.hash]
 
-        run_test_with_headers(test, network)
+        run_test_with_db(test, network)
 
 
 listen_host = IPv4Address('127.0.0.1')
 
 
 @pytest_asyncio.fixture
-async def listening_headers():
+async def listening_db():
     async with asqlite3.connect(':memory:') as conn:
-        headers = Headers(conn, Bitcoin)
-        await headers.initialize()
-        yield headers
+        db = NetworkDB(conn, Bitcoin)
+        await db.initialize()
+        yield db
 
 
 @pytest.fixture
-def listening_node(listening_headers):
+def listening_node(listening_db):
     service = BitcoinService(address=NetAddress(listen_host, 5656))
-    node = Node(service, listening_headers)
+    node = Node(service, listening_db)
     yield node
     # assert not node.assocs
 
 
 @pytest.fixture
-def listening_node2(listening_headers):
+def listening_node2(listening_db):
     service = BitcoinService(address=NetAddress(listen_host, 5657))
-    node = Node(service, listening_headers)
+    node = Node(service, listening_db)
     yield node
 
 
@@ -795,16 +795,16 @@ async def listening_assoc(listening_node):
 
 
 @pytest_asyncio.fixture
-async def client_headers():
+async def client_db():
     async with asqlite3.connect(':memory:') as conn:
-        headers = Headers(conn, Bitcoin)
-        await headers.initialize()
-        yield headers
+        db = NetworkDB(conn, Bitcoin)
+        await db.initialize()
+        yield db
 
 
 @pytest.fixture
-def client_node(client_headers):
-    node = Node(BitcoinService(), client_headers)
+def client_node(client_db):
+    node = Node(BitcoinService(), client_db)
     yield node
     assert not node.assocs
 
@@ -1363,7 +1363,7 @@ class TestProtoconf:
             async with listening_node.listen():
                 async with client_node.connect(listening_node.service) as assoc:
                     await pause()
-                    assert assoc.protoconf_sent == True
+                    assert assoc.protoconf_sent is True
                     with caplog.at_level(logging.WARNING):
                         await assoc.send_protoconf()
                     await pause()
@@ -2005,7 +2005,6 @@ class TestNotfound:
                     await assoc.close()
 
         assert in_caplog(caplog, 'corrupt notfound message')
-
 
 
 class TestGetHeaders:

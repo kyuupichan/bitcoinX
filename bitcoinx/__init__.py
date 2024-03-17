@@ -12,6 +12,7 @@ from .merkle import *
 from .misc import *
 from .mnemonic import *
 from .net import *
+from .net_db import *
 from .net_protocol import *
 from .networks import *
 from .packing import *
@@ -38,6 +39,7 @@ __all__ = sum((
     misc.__all__,
     mnemonic.__all__,
     net.__all__,
+    net_db.__all__,
     net_protocol.__all__,
     networks.__all__,
     packing.__all__,

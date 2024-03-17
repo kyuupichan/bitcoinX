@@ -86,3 +86,10 @@ def test_lookup_xver_bytes():
 def test_P2SH_verbyte():
     assert Bitcoin.P2SH_verbyte == 0x05
     assert BitcoinTestnet.P2SH_verbyte == BitcoinScalingTestnet.P2SH_verbyte == 0xc4
+
+
+class TestNetwork:
+
+    @pytest.mark.parametrize('network', all_networks)
+    def test_str(self, network):
+        assert str(network) == network.name

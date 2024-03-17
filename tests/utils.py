@@ -8,7 +8,7 @@ import asqlite3
 from bitcoinx import (
     Tx, TxInput, TxOutput, Script, TxInputContext, SEQUENCE_FINAL,
     OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR,
-    Bitcoin, Headers, pack_header, SimpleHeader
+    Bitcoin, NetworkDB, pack_header, SimpleHeader
 )
 from bitcoinx.misc import chunks
 
@@ -131,14 +131,14 @@ class Replace_os_urandom:
         os.urandom = self.os_urandom
 
 
-def run_test_with_headers(test_func, network=Bitcoin):
+def run_test_with_db(test_func, network=Bitcoin):
     async def run():
         async with asqlite3.connect(':memory:') as conn:
             # Create two copies of the tables with different schemas, to ensure the code
             # always queries with the appropriate schema
-            headers = Headers(conn, network)
-            await headers.initialize()
-            await test_func(headers)
+            db = NetworkDB(conn, network)
+            await db.initialize()
+            await test_func(db)
 
     asyncio.run(run())
 
