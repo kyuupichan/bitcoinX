@@ -3,7 +3,8 @@ import random
 import pytest
 
 from bitcoinx import (
-    int_to_be_bytes, Script, SigHash, double_sha256, TxOutput, pack_le_uint32, OP_CODESEPARATOR,
+    int_to_be_bytes, Script, SigHash, double_sha256, Tx, TxInput, TxOutput, pack_le_uint32,
+    OP_CODESEPARATOR,
 )
 
 from .utils import random_tx, random_script
@@ -71,3 +72,37 @@ def test_sighash(_execution_count):
     ref_hash = ref_sighash(script_code, tx, input_index, hash_type)
 
     assert live_hash == ref_hash
+
+
+# Expected digests from SV Node v1.2.3 test/functional/test_framework/script.py.
+@pytest.mark.parametrize('index, hash_type, expected', (
+    (1, 0x01, 'e079382249842b8705ef0c757e279a7cbf61f0d6c2ff9c95ce683adef604e0ea'),
+    (1, 0x41, '08fa08fffd9b2bacb56d136bfa23bf37ab88be3fd7834ff93e50304da3c35f3d'),
+    (1, 0x61, '6e892301ead5bafb76d000741ddf0894e233444bec914412df25ad7a7cf895af'),
+    (1, 0x62, '43f1122cf0e8ef01cfd02d391234981d641446a3f4d2f66951dd3ba44a47d2a5'),
+    (1, 0x63, '1f8f2b10b7215f3c181e61e3494dd51558938fe74afdd3617ffa509324d0d92f'),
+    (1, 0xe1, '827e89f332f48ab3d600ffed2073676137a145fb437d2c5605273196671aa9a9'),
+    (1, 0xe2, 'd9b96caeb870cee08a8f22030e72e0377524caff3339409554fe6fa39141fbfd'),
+    (1, 0xe3, '0754a11f4634f82beb1302f9fd407875d8464cbcde52246b8ea2a010e1684990'),
+    (2, 0x43, '6bb65a975c5cb8c5a4065d16a99d7668137c5800387c22b7b7096c5f87d66ef4'),
+    (2, 0x63, '01' + '00' * 31),
+    (2, 0xe3, '01' + '00' * 31),
+))
+def test_chronicle_signature_hash(index, hash_type, expected):
+    inputs = [
+        TxInput(bytes([n]) * 32, n, Script(b'\x51'), 0xfffffffd - n)
+        for n in range(1, 4)
+    ]
+    outputs = [TxOutput(1500, Script(b'\x51')), TxOutput(2500, Script(b'\x52'))]
+    tx = Tx(2, inputs, outputs, 37)
+    # Starts with a push of 0xab, followed by two actual OP_CODESEPARATOR opcodes.
+    script_code = bytes.fromhex('01abab51ab52')
+    sighash = SigHash(hash_type)
+    digest = tx.signature_hash(index, 4100, script_code, sighash, chronicle=True)
+    assert digest.hex() == expected
+
+    if not sighash & SigHash.CHRONICLE:
+        assert tx.signature_hash(index, 4100, script_code, sighash) == digest
+    else:
+        assert tx.signature_hash(index, 5100, script_code, sighash, chronicle=True) == digest
+        assert tx.signature_hash(index, 4100, script_code, sighash) != digest

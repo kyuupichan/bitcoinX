@@ -185,13 +185,16 @@ class Tx:
 
         return double_sha256(preimage)
 
-    def _original_signature_hash(self, input_index, script_code, sighash):
+    def _original_signature_hash(self, input_index, script_code, sighash, *, chronicle=False):
         '''Return the pre-fork preimage that needs to be signed for the given input, script, and
         sighash type.
         '''
         assert input_index < len(self.inputs)
 
         if sighash.base == SigHash.SINGLE and input_index >= len(self.outputs):
+            if chronicle:
+                # SV Node returns uint256(1) in its internal (little-endian) byte order.
+                return b'\x01' + bytes(31)
             return ONE
 
         def serialize_input(n):
@@ -241,14 +244,14 @@ class Tx:
 
         return double_sha256(preimage)
 
-    def signature_hash(self, input_index, value, script_code, sighash):
+    def signature_hash(self, input_index, value, script_code, sighash, *, chronicle=False):
         '''Return the hash that needs to be signed for the given input, script, and sighash type.
-        Value is the value of the output being spent, which is committed to as part of the
-        signature post-fork.
+        Value is the value of the output being spent, which the BIP143 digest commits to.
 
-        scrpipt is a subset of the output's script_pubkey that is being signed; it can be
-        raw bytes or a Script object.  This starts at its beginning, or from the byte
-        beyond the most recent OP_CODESEPARATOR, and ends at the end of the output script.
+        script_code is the caller-supplied script code as bytes or a Script object.
+        With chronicle=True, a sighash with the CHRONICLE bit uses the original digest
+        algorithm, including when FORKID is set. This selects the digest algorithm only.
+        The caller is responsible for checking activation and script rules.
         '''
         if not 0 <= input_index < len(self.inputs):
             raise IndexError(f'invalid input index: {input_index}')
@@ -257,10 +260,13 @@ class Tx:
         if not isinstance(sighash, SigHash):
             raise TypeError('sighash must be a SigHash instance')
 
-        if sighash.has_forkid():
+        use_chronicle = chronicle and bool(sighash & SigHash.CHRONICLE)
+        if sighash.has_forkid() and not use_chronicle:
             return self._forkid_signature_hash(input_index, value, script_code, sighash)
 
-        return self._original_signature_hash(input_index, script_code, sighash)
+        return self._original_signature_hash(
+            input_index, script_code, sighash, chronicle=use_chronicle,
+        )
 
     def are_inputs_final(self):
         '''Return True if all inputs are final.'''
