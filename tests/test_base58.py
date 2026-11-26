@@ -21,7 +21,7 @@ def test_base58_encoding(value, answer):
     assert base58_decode(answer) == value
 
 
-@pytest.mark.parametrize("value,c", enumerate(b58_chars))
+@pytest.mark.parametrize("value,c", list(enumerate(b58_chars)))
 def test_char_value(value, c):
     assert base58_decode(c) == bytes([value])
 

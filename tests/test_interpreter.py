@@ -173,8 +173,8 @@ class TestMinerPolicy:
 class TestInterpreterLimits:
 
     @pytest.mark.parametrize('is_genesis_enabled, is_consensus, base_flags',
-                             product((False, True), (False, True),
-                                     ('standard', 'consensus', 0)))
+                             list(product((False, True), (False, True),
+                                          ('standard', 'consensus', 0))))
     def test_constructor(self, policy, is_genesis_enabled, is_consensus, base_flags):
         limits = InterpreterLimits(policy, is_genesis_enabled, is_consensus, base_flags)
 
@@ -1307,7 +1307,7 @@ class TestControlOperations(TestEvaluateScriptBase):
         script = Script() << OP_0 << OP_IF << op << OP_ENDIF << OP_ENDIF
         state.evaluate_script(script)
 
-    @pytest.mark.parametrize('op,truth', product((OP_IF, OP_NOTIF), (False, True)))
+    @pytest.mark.parametrize('op,truth', list(product((OP_IF, OP_NOTIF), (False, True))))
     def test_IF_data(self, state, op, truth):
         values = [b'foo', b'bar']
         script = Script() << truth << op << values[0] << OP_ELSE << values[1] << OP_ENDIF

@@ -46,7 +46,7 @@ largest = int_to_be_bytes(CURVE_ORDER)
 der_zeroes = bytes.fromhex('3006020100020100')
 
 
-@pytest.mark.parametrize("raises, value", (
+@pytest.mark.parametrize("raises, value", list(
     (raises, value) for raises in (True, False) for value in (
         largest + bytes(32), bytes(32) + largest, largest * 2
     )

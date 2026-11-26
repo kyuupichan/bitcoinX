@@ -121,7 +121,7 @@ class TestElectrumMnemonic:
     # This mnemonic is a valid BIP39 and new Electrum mnemonic
     VALID_BIP39_NEW = 'balance ethics sign doctor text cattle damp force short sting coast tonight'
 
-    @pytest.mark.parametrize("bits, prefix, _execution_count", (
+    @pytest.mark.parametrize("bits, prefix, _execution_count", list(
         (bits, prefix, n)
         for bits in (132, 264)
         for prefix in ('01', '02')
@@ -227,7 +227,7 @@ class TestElectrumMnemonic:
             ElectrumMnemonic.generate_new(['bar'] * 2000)
         assert 'too short' in str(e.value)
 
-    @pytest.mark.parametrize("word_count, _execution_count", (
+    @pytest.mark.parametrize("word_count, _execution_count", list(
         (word_count, n)
         for word_count in (12, 24)
         for n in range(10))

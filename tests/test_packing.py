@@ -103,7 +103,7 @@ def unpack_cases():
             yield unfunc[0], result, case
 
 
-@pytest.mark.parametrize("unpack_func,case,result", unpack_cases())
+@pytest.mark.parametrize("unpack_func,case,result", list(unpack_cases()))
 def test_unpack(unpack_func, case, result):
     value, = unpack_func(case)
     assert value == result
@@ -116,7 +116,7 @@ def unpack_from_cases():
             yield unfunc[1], result, case
 
 
-@pytest.mark.parametrize("unpack_from_func,case,result", unpack_from_cases())
+@pytest.mark.parametrize("unpack_from_func,case,result", list(unpack_from_cases()))
 def test_unpack_from(unpack_from_func, case, result):
     value, = unpack_from_func(case, 0)
     assert value == result
@@ -129,7 +129,7 @@ def read_tests():
             yield read_func[2], result, value
 
 
-@pytest.mark.parametrize("read_func,data,value", read_tests())
+@pytest.mark.parametrize("read_func,data,value", list(read_tests()))
 def test_read(read_func, data, value):
     io = BytesIO(data)
     assert read_func(io.read) == value
@@ -143,7 +143,7 @@ def test_read_varbytes(varbyte_len):
     assert read_varbytes(io.read) == value
 
 
-@pytest.mark.parametrize("read_func,data,_value", read_tests())
+@pytest.mark.parametrize("read_func,data,_value", list(read_tests()))
 def test_read_short(read_func, data, _value):
     io = BytesIO(data[:-1])
     with pytest.raises(PackingError):
