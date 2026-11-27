@@ -362,5 +362,6 @@ class Signature:
 SigHash.ALL = SigHash(0x01)
 SigHash.NONE = SigHash(0x02)
 SigHash.SINGLE = SigHash(0x03)
+SigHash.CHRONICLE = SigHash(0x20)
 SigHash.FORKID = SigHash(0x40)
 SigHash.ANYONE_CAN_PAY = SigHash(0x80)
