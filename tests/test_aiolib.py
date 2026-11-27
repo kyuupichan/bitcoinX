@@ -249,7 +249,7 @@ class TestTimeout:
         assert not timeout.expired
 
         # Windows event loops seem to have coarse time measures
-        await sleep(0.001)
+        await sleep(0.005)
 
         async with timeout:
             assert timeout._deadline > deadline
@@ -257,7 +257,7 @@ class TestTimeout:
         assert not timeout.expired
 
         # Windows event loops seem to have coarse time measures
-        await sleep(0.001)
+        await sleep(0.005)
 
         with pytest.raises(TimeoutError):
             async with timeout:
@@ -407,7 +407,7 @@ class TestIgnore:
         assert not timeout.expired
 
         # Windows event loops seem to have coarse time measures
-        await sleep(0.001)
+        await sleep(0.005)
 
         async with timeout:
             assert timeout._deadline > deadline
@@ -415,7 +415,7 @@ class TestIgnore:
         assert not timeout.expired
 
         # Windows event loops seem to have coarse time measures
-        await sleep(0.001)
+        await sleep(0.005)
 
         async with timeout:
             assert timeout._deadline > deadline
